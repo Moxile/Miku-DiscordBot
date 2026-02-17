@@ -52,8 +52,8 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         value=(
             f"`{p}setcooldown <hours>` — Set work cooldown\n"
             f"`{p}setworkpay <min> <max>` — Set work earnings range\n"
-            f"`{p}add <@user> <amount>` — Give cash to a user\n"
-            f"`{p}take <@user> <amount>` — Take cash from a user"
+            f"`{p}add <@user> <amount>` — Give flowers to a user\n"
+            f"`{p}take <@user> <amount>` — Take flowers from a user"
         ),
         inline=False,
     )
@@ -137,10 +137,10 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         name="Economy",
         value=(
             f"`{p}balance` / `{p}bal` — Check your balance\n"
-            f"`{p}work` — Earn cash (cooldown applies)\n"
-            f"`{p}deposit <amount|all>` / `{p}dep` — Deposit cash to bank\n"
+            f"`{p}work` — Earn flowers (cooldown applies)\n"
+            f"`{p}deposit <amount|all>` / `{p}dep` — Deposit flowers to bank\n"
             f"`{p}withdraw <amount|all>` / `{p}with` — Withdraw from bank\n"
-            f"`{p}give <@user> <amount>` / `{p}pay` — Send cash to someone"
+            f"`{p}give <@user> <amount>` / `{p}pay` — Send flowers to someone"
         ),
         inline=False,
     )
@@ -148,7 +148,7 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         name="Shop",
         value=(
             f"`{p}shop` — Browse the server shop\n"
-            f"`{p}buy <item_id>` — Buy an item\n"
+            f"`{p}buy \"Name\"` — Buy an item\n"
             f"`{p}inventory` / `{p}inv` — View your inventory"
         ),
         inline=False,
@@ -157,7 +157,7 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         name="Gambling",
         value=(
             f"`{p}coinflip` / `{p}cf` — Flip a coin or bet on it\n"
-            f"  `{p}cf` — flip for fun · `{p}cf h 100` — bet $100 on heads\n"
+            f"  `{p}cf` — flip for fun · `{p}cf h 100` — bet 100 🌸 on heads\n"
             f"`{p}blackjack <bet>` / `{p}bj` — Start a blackjack game\n"
             f"  `{p}hit` · `{p}stand` · `{p}double` · `{p}split`\n"
             f"`{p}russianroulette <bet>` / `{p}rr` — Start Russian Roulette\n"
@@ -189,7 +189,7 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         value=(
             f"`{p}missions` — View active missions\n"
             f"`{p}completedmissions` — View completed missions\n"
-            f"`{p}fund <mission_id> <amount|all>` — Contribute to a mission"
+            f"`{p}fund \"Title\" <amount|all>` — Contribute to a mission"
         ),
         inline=False,
     )
@@ -317,9 +317,12 @@ async def unrestrict(ctx: commands.Context, command_name: str):
     """Allow a command everywhere, bypassing category restrictions.
     Usage: {prefix}unrestrict rr"""
     command_name = command_name.lower().lstrip(PREFIX)
-    if not bot.get_command(command_name):
+    cmd = bot.get_command(command_name)
+    if not cmd:
         await ctx.send(f"Unknown command `{ctx.prefix}{command_name}`.")
         return
+    # Always store the primary command name so it matches ctx.command.name in cog checks
+    command_name = cmd.name
     await bot._settings_db.execute(
         "INSERT OR IGNORE INTO unrestricted_commands (guild_id, command) VALUES (?, ?)",
         (ctx.guild.id, command_name),
@@ -334,6 +337,9 @@ async def rerestrict(ctx: commands.Context, command_name: str):
     """Re-restrict a command to its category channels.
     Usage: {prefix}rerestrict rr"""
     command_name = command_name.lower().lstrip(PREFIX)
+    cmd = bot.get_command(command_name)
+    if cmd:
+        command_name = cmd.name
     await bot._settings_db.execute(
         "DELETE FROM unrestricted_commands WHERE guild_id = ? AND command = ?",
         (ctx.guild.id, command_name),

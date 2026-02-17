@@ -715,8 +715,8 @@ class Market(commands.Cog):
                 title=f"Weekly Report — {company['name']}",
                 color=discord.Color.gold(),
             )
-            embed.add_field(name="Revenue", value=f"${actual_revenue:,.0f}")
-            embed.add_field(name="Dividends Paid", value=f"${dividends_total:,.0f}")
+            embed.add_field(name="Revenue", value=f"{actual_revenue:,.0f} \U0001f338")
+            embed.add_field(name="Dividends Paid", value=f"{dividends_total:,.0f} \U0001f338")
             embed.add_field(name="Shareholders", value=str(len(holders)))
             try:
                 await channel.send(embed=embed)
@@ -799,9 +799,9 @@ class Market(commands.Cog):
             description=f"**#{channel.name}** is now listed on the market!",
             color=discord.Color.green(),
         )
-        embed.add_field(name="IPO Price", value=f"${price:,.2f}")
+        embed.add_field(name="IPO Price", value=f"{price:,.2f} \U0001f338")
         embed.add_field(name="Total Shares", value=f"{IPO_TOTAL_SHARES:,}")
-        embed.add_field(name="Market Cap", value=f"${price * IPO_TOTAL_SHARES:,.0f}")
+        embed.add_field(name="Market Cap", value=f"{price * IPO_TOTAL_SHARES:,.0f} \U0001f338")
         embed.set_footer(text=f"Use {ctx.prefix}orderbook to see the order book · {ctx.prefix}mbuy to purchase shares")
         await ctx.send(embed=embed)
 
@@ -823,7 +823,7 @@ class Market(commands.Cog):
         cost = int(price * shares)
         cash = await self.get_cash(ctx.author.id)
         if cash < cost:
-            await ctx.send(f"You need **${cost:,}** but only have **${cash:,}**.")
+            await ctx.send(f"You need **{cost:,}** \U0001f338 but only have **{cash:,}** \U0001f338.")
             return
 
         # Reserve cash
@@ -849,14 +849,14 @@ class Market(commands.Cog):
 
         embed = discord.Embed(
             title="Limit Buy Order",
-            description=f"**#{channel.name}** — {shares} shares @ ${price:,.2f}",
+            description=f"**#{channel.name}** — {shares} shares @ {price:,.2f} \U0001f338",
             color=discord.Color.green(),
         )
         if fills:
-            fill_lines = [f"{f['quantity']} @ ${f['price']:,.2f}" for f in fills]
+            fill_lines = [f"{f['quantity']} @ {f['price']:,.2f} \U0001f338" for f in fills]
             embed.add_field(name="Filled", value="\n".join(fill_lines), inline=False)
         if remaining > 0:
-            embed.add_field(name="Resting", value=f"{remaining} shares @ ${price:,.2f}")
+            embed.add_field(name="Resting", value=f"{remaining} shares @ {price:,.2f} \U0001f338")
             embed.set_footer(text=f"Order ID: {order_id} · Use {ctx.prefix}cancel {order_id} to cancel")
         else:
             embed.set_footer(text="Fully filled!")
@@ -898,14 +898,14 @@ class Market(commands.Cog):
 
         embed = discord.Embed(
             title="Limit Sell Order",
-            description=f"**#{channel.name}** — {shares} shares @ ${price:,.2f}",
+            description=f"**#{channel.name}** — {shares} shares @ {price:,.2f} \U0001f338",
             color=discord.Color.red(),
         )
         if fills:
-            fill_lines = [f"{f['quantity']} @ ${f['price']:,.2f}" for f in fills]
+            fill_lines = [f"{f['quantity']} @ {f['price']:,.2f} \U0001f338" for f in fills]
             embed.add_field(name="Filled", value="\n".join(fill_lines), inline=False)
         if remaining > 0:
-            embed.add_field(name="Resting", value=f"{remaining} shares @ ${price:,.2f}")
+            embed.add_field(name="Resting", value=f"{remaining} shares @ {price:,.2f} \U0001f338")
             embed.set_footer(text=f"Order ID: {order_id} · Use {ctx.prefix}cancel {order_id} to cancel")
         else:
             embed.set_footer(text="Fully filled!")
@@ -948,7 +948,7 @@ class Market(commands.Cog):
 
         cash = await self.get_cash(ctx.author.id)
         if cash < worst_cost:
-            await ctx.send(f"You may need up to **${worst_cost:,}** but only have **${cash:,}**.")
+            await ctx.send(f"You may need up to **{worst_cost:,}** \U0001f338 but only have **{cash:,}** \U0001f338.")
             return
 
         # Reserve worst-case cash
@@ -987,8 +987,8 @@ class Market(commands.Cog):
             description=f"Bought **{filled_qty}** shares of **#{channel.name}**",
             color=discord.Color.green(),
         )
-        embed.add_field(name="Avg Price", value=f"${avg_price:,.2f}")
-        embed.add_field(name="Total Cost", value=f"${actual_cost:,.0f}")
+        embed.add_field(name="Avg Price", value=f"{avg_price:,.2f} \U0001f338")
+        embed.add_field(name="Total Cost", value=f"{actual_cost:,.0f} \U0001f338")
         await ctx.send(embed=embed)
 
     @commands.command(name="msell")
@@ -1054,8 +1054,8 @@ class Market(commands.Cog):
             description=f"Sold **{filled_qty}** shares of **#{channel.name}**",
             color=discord.Color.red(),
         )
-        embed.add_field(name="Avg Price", value=f"${avg_price:,.2f}")
-        embed.add_field(name="Total Proceeds", value=f"${total_proceeds:,.0f}")
+        embed.add_field(name="Avg Price", value=f"{avg_price:,.2f} \U0001f338")
+        embed.add_field(name="Total Proceeds", value=f"{total_proceeds:,.0f} \U0001f338")
         await ctx.send(embed=embed)
 
     @commands.command()
@@ -1095,7 +1095,7 @@ class Market(commands.Cog):
             color=discord.Color.light_grey(),
         )
         if side == "buy":
-            embed.add_field(name="Refunded", value=f"${int(price * remaining):,}")
+            embed.add_field(name="Refunded", value=f"{int(price * remaining):,} \U0001f338")
         else:
             embed.add_field(name="Shares Returned", value=str(remaining))
         await ctx.send(embed=embed)
@@ -1135,7 +1135,7 @@ class Market(commands.Cog):
         ask_lines = []
         for price, qty, is_mm in reversed(asks):
             tag = " [MM]" if is_mm else ""
-            ask_lines.append(f"${price:,.2f} x {qty}{tag}")
+            ask_lines.append(f"{price:,.2f} \U0001f338 x {qty}{tag}")
         embed.add_field(
             name="Asks (Sell)",
             value="\n".join(ask_lines) if ask_lines else "Empty",
@@ -1145,7 +1145,7 @@ class Market(commands.Cog):
         bid_lines = []
         for price, qty, is_mm in bids:
             tag = " [MM]" if is_mm else ""
-            bid_lines.append(f"${price:,.2f} x {qty}{tag}")
+            bid_lines.append(f"{price:,.2f} \U0001f338 x {qty}{tag}")
         embed.add_field(
             name="Bids (Buy)",
             value="\n".join(bid_lines) if bid_lines else "Empty",
@@ -1159,10 +1159,10 @@ class Market(commands.Cog):
             spread = best_ask - best_bid
             mid = (best_ask + best_bid) / 2
             embed.set_footer(
-                text=f"Spread: ${spread:,.2f} ({spread/mid*100:.1f}%) · Mid: ${mid:,.2f} · Fair: ${company['fair_price']:,.2f}"
+                text=f"Spread: {spread:,.2f} \U0001f338 ({spread/mid*100:.1f}%) · Mid: {mid:,.2f} \U0001f338 · Fair: {company['fair_price']:,.2f} \U0001f338"
             )
         else:
-            embed.set_footer(text=f"Fair Price: ${company['fair_price']:,.2f}")
+            embed.set_footer(text=f"Fair Price: {company['fair_price']:,.2f} \U0001f338")
 
         await ctx.send(embed=embed)
 
@@ -1201,9 +1201,9 @@ class Market(commands.Cog):
             embed.add_field(
                 name=f"#{name}",
                 value=(
-                    f"**{qty}** shares @ ${avg_cost:,.2f}\n"
-                    f"Current: ${fair_price:,.2f}\n"
-                    f"P&L: {sign}${pnl:,.0f} ({sign}{pnl_pct:.1f}%)"
+                    f"**{qty}** shares @ {avg_cost:,.2f} \U0001f338\n"
+                    f"Current: {fair_price:,.2f} \U0001f338\n"
+                    f"P&L: {sign}{pnl:,.0f} \U0001f338 ({sign}{pnl_pct:.1f}%)"
                 ),
                 inline=True,
             )
@@ -1211,7 +1211,7 @@ class Market(commands.Cog):
         total_pnl = total_value - total_cost
         sign = "+" if total_pnl >= 0 else ""
         embed.set_footer(
-            text=f"Total Value: ${total_value:,.0f} · Total P&L: {sign}${total_pnl:,.0f}"
+            text=f"Total Value: {total_value:,.0f} \U0001f338 · Total P&L: {sign}{total_pnl:,.0f} \U0001f338"
         )
         await ctx.send(embed=embed)
 
@@ -1249,11 +1249,11 @@ class Market(commands.Cog):
             title=f"#{channel.name}",
             color=discord.Color.blurple(),
         )
-        embed.add_field(name="Price", value=f"${company['fair_price']:,.2f}")
-        embed.add_field(name="IPO Price", value=f"${company['ipo_price']:,.2f}")
-        embed.add_field(name="Market Cap", value=f"${market_cap:,.0f}")
+        embed.add_field(name="Price", value=f"{company['fair_price']:,.2f} \U0001f338")
+        embed.add_field(name="IPO Price", value=f"{company['ipo_price']:,.2f} \U0001f338")
+        embed.add_field(name="Market Cap", value=f"{market_cap:,.0f} \U0001f338")
         embed.add_field(name="Today's Volume", value=f"{daily_vol:,} shares")
-        embed.add_field(name="Last Revenue", value=f"${company['last_revenue']:,.0f}")
+        embed.add_field(name="Last Revenue", value=f"{company['last_revenue']:,.0f} \U0001f338")
         embed.add_field(name="Dividend", value=f"{company['dividend_pct']*100:.0f}%")
 
         file = None
@@ -1265,7 +1265,7 @@ class Market(commands.Cog):
             ax.plot(timestamps, prices, color="#5865F2", linewidth=1.5)
             ax.fill_between(timestamps, prices, alpha=0.1, color="#5865F2")
             ax.set_title(f"#{channel.name} — {timeframe}", fontsize=14)
-            ax.set_ylabel("Price ($)")
+            ax.set_ylabel("Price (\U0001f338)")
             ax.grid(alpha=0.3)
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
             fig.autofmt_xdate()
@@ -1313,7 +1313,7 @@ class Market(commands.Cog):
             side_label = "BUY" if side == "buy" else "SELL"
             embed.add_field(
                 name=f"#{order_id} — {side_label}",
-                value=f"**#{name}** · {remaining} shares @ ${price:,.2f}",
+                value=f"**#{name}** · {remaining} shares @ {price:,.2f} \U0001f338",
                 inline=False,
             )
         embed.set_footer(text=f"Use {ctx.prefix}cancel <id> to cancel an order")
@@ -1425,11 +1425,11 @@ class Market(commands.Cog):
         embed.add_field(
             name="Financials",
             value=(
-                f"Fair Price: **${company['fair_price']:,.2f}**\n"
-                f"IPO Price: ${company['ipo_price']:,.2f}\n"
-                f"Last Revenue: ${company['last_revenue']:,.0f}\n"
-                f"This Week Revenue: ${accumulated:,.0f}\n"
-                f"Est. Weekly: ${estimated_weekly:,.0f}\n"
+                f"Fair Price: **{company['fair_price']:,.2f}** \U0001f338\n"
+                f"IPO Price: {company['ipo_price']:,.2f} \U0001f338\n"
+                f"Last Revenue: {company['last_revenue']:,.0f} \U0001f338\n"
+                f"This Week Revenue: {accumulated:,.0f} \U0001f338\n"
+                f"Est. Weekly: {estimated_weekly:,.0f} \U0001f338\n"
                 f"Dividend: {company['dividend_pct']*100:.0f}%"
             ),
             inline=True,
@@ -1440,7 +1440,7 @@ class Market(commands.Cog):
             embed.add_field(
                 name="Market Maker",
                 value=(
-                    f"Cash: ${mm['cash']:,.2f}\n"
+                    f"Cash: {mm['cash']:,.2f} \U0001f338\n"
                     f"Inventory: {mm['inventory']:,} shares\n"
                     f"Volatility: {mm['volatility']:.4f}\n"
                     f"Last Quote: {mm['last_quote_time'][:16]}"
@@ -1523,8 +1523,8 @@ class Market(commands.Cog):
             embed.add_field(
                 name=f"#{name}",
                 value=(
-                    f"Price: **${fair_price:,.2f}** ({sign}{change:.1f}%)\n"
-                    f"Cap: ${market_cap:,.0f} · Vol: {daily_vol:,}"
+                    f"Price: **{fair_price:,.2f}** \U0001f338 ({sign}{change:.1f}%)\n"
+                    f"Cap: {market_cap:,.0f} \U0001f338 · Vol: {daily_vol:,}"
                 ),
                 inline=True,
             )

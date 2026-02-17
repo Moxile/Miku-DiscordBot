@@ -257,15 +257,15 @@ class Gambling(commands.Cog):
         settings = await self.get_settings(ctx.guild.id)
 
         if bet < settings["min_bet"]:
-            await ctx.send(f"Minimum bet is **${settings['min_bet']:,}**.")
+            await ctx.send(f"Minimum bet is **{settings['min_bet']:,}** \U0001f338.")
             return False
         if bet > settings["max_bet"]:
-            await ctx.send(f"Maximum bet is **${settings['max_bet']:,}**.")
+            await ctx.send(f"Maximum bet is **{settings['max_bet']:,}** \U0001f338.")
             return False
 
         cash = await self.get_cash(ctx.author.id)
         if bet > cash:
-            await ctx.send(f"You only have **${cash:,}** in cash.")
+            await ctx.send(f"You only have **{cash:,}** \U0001f338.")
             return False
 
         return True
@@ -276,8 +276,8 @@ class Gambling(commands.Cog):
     async def coinflip(self, ctx: commands.Context, *args):
         """Flip a coin.
         !cf 10       — flip 10 coins (no bet)
-        !cf h 10     — bet $10 on heads
-        !cf t 10 5   — 5 flips, $10 each on tails
+        !cf h 10     — bet 10 flowers on heads
+        !cf t 10 5   — 5 flips, 10 flowers each on tails
         """
         side, bet, times = self._parse_coinflip_args(args)
 
@@ -321,14 +321,14 @@ class Gambling(commands.Cog):
                 await self.update_cash(ctx.author.id, profit)
                 embed = discord.Embed(
                     title=f"Coin Flip — {result_name}!",
-                    description=f"You bet on **{side_name}** and won **${winnings:,}**! (Profit: ${profit:,})",
+                    description=f"You bet on **{side_name}** and won **{winnings:,}** \U0001f338! (Profit: {profit:,} \U0001f338)",
                     color=discord.Color.green(),
                 )
             else:
                 await self.update_cash(ctx.author.id, -bet)
                 embed = discord.Embed(
                     title=f"Coin Flip — {result_name}!",
-                    description=f"You bet on **{side_name}** and lost **${bet:,}**.",
+                    description=f"You bet on **{side_name}** and lost **{bet:,}** \U0001f338.",
                     color=discord.Color.red(),
                 )
 
@@ -341,17 +341,17 @@ class Gambling(commands.Cog):
         cash = await self.get_cash(ctx.author.id)
         if total_bet > cash:
             await ctx.send(
-                f"You need **${total_bet:,}** for {times} flips at ${bet:,} each, "
-                f"but only have **${cash:,}**."
+                f"You need **{total_bet:,}** \U0001f338 for {times} flips at {bet:,} \U0001f338 each, "
+                f"but only have **{cash:,}** \U0001f338."
             )
             return
 
         settings = await self.get_settings(ctx.guild.id)
         if bet < settings["min_bet"]:
-            await ctx.send(f"Minimum bet is **${settings['min_bet']:,}**.")
+            await ctx.send(f"Minimum bet is **{settings['min_bet']:,}** \U0001f338.")
             return
         if bet > settings["max_bet"]:
-            await ctx.send(f"Maximum bet is **${settings['max_bet']:,}**.")
+            await ctx.send(f"Maximum bet is **{settings['max_bet']:,}** \U0001f338.")
             return
 
         results = [random.choice(["H", "T"]) for _ in range(times)]
@@ -373,7 +373,7 @@ class Gambling(commands.Cog):
         )
         embed.add_field(name="Wins", value=str(wins))
         embed.add_field(name="Losses", value=str(losses))
-        embed.add_field(name="Net", value=f"{sign}${abs(net):,}")
+        embed.add_field(name="Net", value=f"{sign}{abs(net):,} \U0001f338")
         await ctx.send(embed=embed)
 
     @staticmethod
@@ -415,7 +415,7 @@ class Gambling(commands.Cog):
     @commands.command(aliases=["rr"])
     async def russianroulette(self, ctx: commands.Context, action: str = None):
         """Multiplayer Russian Roulette.
-        {prefix}rr 500    — start a game with $500 buy-in
+        {prefix}rr 500    — start a game with 500 flower buy-in
         {prefix}rr join   — join an active game
         """
         if action is None:
@@ -456,7 +456,7 @@ class Gambling(commands.Cog):
             title="Russian Roulette",
             description=(
                 f"{ctx.author.mention} started a game!\n"
-                f"**Buy-in:** ${bet:,}\n\n"
+                f"**Buy-in:** {bet:,} \U0001f338\n\n"
                 f"Type `{ctx.prefix}rr join` to enter. Game starts in **{DEFAULT_RR_JOIN_TIME}s**."
             ),
             color=discord.Color.dark_red(),
@@ -501,7 +501,7 @@ class Gambling(commands.Cog):
         # Check cash
         cash = await self.get_cash(ctx.author.id)
         if cash < bet:
-            await ctx.send(f"You need **${bet:,}** to join but only have **${cash:,}**.")
+            await ctx.send(f"You need **{bet:,}** \U0001f338 to join but only have **{cash:,}** \U0001f338.")
             return
 
         # Deduct buy-in
@@ -568,12 +568,12 @@ class Gambling(commands.Cog):
 
         embed = discord.Embed(
             title="Russian Roulette — Game Over!",
-            description=f"{winner.mention} survived and wins **${pot:,}**!",
+            description=f"{winner.mention} survived and wins **{pot:,}** \U0001f338!",
             color=discord.Color.green(),
         )
         embed.add_field(name="Eliminated", value=elim_list or "None", inline=False)
-        embed.add_field(name="Pot", value=f"${pot:,}")
-        embed.add_field(name="Profit", value=f"${pot - bet:,}")
+        embed.add_field(name="Pot", value=f"{pot:,} \U0001f338")
+        embed.add_field(name="Profit", value=f"{pot - bet:,} \U0001f338")
         await ctx.send(embed=embed)
 
         del self.rr_games[channel_id]
@@ -613,7 +613,7 @@ class Gambling(commands.Cog):
             r1, r2 = hands[0][0][0], hands[0][1][0]
             if card_rank_value(r1) == card_rank_value(r2):
                 actions += f" \u00b7 {PREFIX}split"
-        embed.set_footer(text=f"Bet: ${total_bet:,} | {actions}")
+        embed.set_footer(text=f"Bet: {total_bet:,} \U0001f338 | {actions}")
         return embed
 
     @commands.command(aliases=["bj"])
@@ -716,7 +716,7 @@ class Gambling(commands.Cog):
         bet = game["bets"][idx]
         cash = await self.get_cash(ctx.author.id)
         if cash < bet:
-            await ctx.send(f"You need **${bet:,}** more to double down but only have **${cash:,}**.")
+            await ctx.send(f"You need **{bet:,}** \U0001f338 more to double down but only have **{cash:,}** \U0001f338.")
             return
 
         await self.update_cash(ctx.author.id, -bet)
@@ -755,7 +755,7 @@ class Gambling(commands.Cog):
         bet = game["bets"][idx]
         cash = await self.get_cash(ctx.author.id)
         if cash < bet:
-            await ctx.send(f"You need **${bet:,}** more to split but only have **${cash:,}**.")
+            await ctx.send(f"You need **{bet:,}** \U0001f338 more to split but only have **{cash:,}** \U0001f338.")
             return
 
         await self.update_cash(ctx.author.id, -bet)
@@ -855,7 +855,7 @@ class Gambling(commands.Cog):
         for i, (hand, bet, payout, result, val) in enumerate(results):
             label = f"Hand {i+1}" if multi else "Your Hand"
             result_tag = {"blackjack": "BJ!", "win": "Win", "push": "Push", "bust": "Bust", "lose": "Lose"}[result]
-            suffix = f" \u2014 **{result_tag}** (${payout:,})" if multi else ""
+            suffix = f" \u2014 **{result_tag}** ({payout:,} \U0001f338)" if multi else ""
             embed.add_field(
                 name=f"{label} ({val}){suffix}",
                 value=format_hand(hand),
@@ -867,9 +867,9 @@ class Gambling(commands.Cog):
             value=format_hand(dealer_hand),
             inline=False,
         )
-        embed.add_field(name="Total Bet", value=f"${total_bet:,}")
-        embed.add_field(name="Payout", value=f"${total_payout:,}")
-        embed.add_field(name="Net", value=f"{sign}${net:,}")
+        embed.add_field(name="Total Bet", value=f"{total_bet:,} \U0001f338")
+        embed.add_field(name="Payout", value=f"{total_payout:,} \U0001f338")
+        embed.add_field(name="Net", value=f"{sign}{net:,} \U0001f338")
         await ctx.send(embed=embed)
 
         del self.bj_games[ctx.author.id]
@@ -912,10 +912,10 @@ class Gambling(commands.Cog):
 
         settings = await self.get_settings(ctx.guild.id)
         if amount < settings["min_bet"]:
-            await ctx.send(f"Minimum bet is **${settings['min_bet']:,}**.")
+            await ctx.send(f"Minimum bet is **{settings['min_bet']:,}** \U0001f338.")
             return
         if amount > settings["max_bet"]:
-            await ctx.send(f"Maximum bet is **${settings['max_bet']:,}**.")
+            await ctx.send(f"Maximum bet is **{settings['max_bet']:,}** \U0001f338.")
             return
 
         # Check player can afford this bet on top of existing bets at this table
@@ -930,8 +930,8 @@ class Gambling(commands.Cog):
         cash = await self.get_cash(ctx.author.id)
         if existing_user_total + amount > cash:
             await ctx.send(
-                f"Your total bets would be **${existing_user_total + amount:,}** "
-                f"but you only have **${cash:,}**."
+                f"Your total bets would be **{existing_user_total + amount:,}** \U0001f338 "
+                f"but you only have **{cash:,}** \U0001f338."
             )
             return
 
@@ -957,11 +957,11 @@ class Gambling(commands.Cog):
 
         embed = discord.Embed(
             title="Roulette — Bet Placed",
-            description=f"{ctx.author.mention}: **${amount:,}** on **{bet_desc}**",
+            description=f"{ctx.author.mention}: **{amount:,}** \U0001f338 on **{bet_desc}**",
             color=discord.Color.dark_gold(),
         )
         embed.set_footer(
-            text=f"Table: ${total_table:,} from {player_count} player(s) | "
+            text=f"Table: {total_table:,} \U0001f338 from {player_count} player(s) | "
                  f"Spinning in {self.DEFAULT_RL_TIMER}s — !rbet to add more · !rclear to cancel"
         )
         await ctx.send(embed=embed)
@@ -1035,10 +1035,10 @@ class Gambling(commands.Cog):
             lines = []
             for bet_desc, amount, payout, won in results:
                 if won:
-                    lines.append(f"\u2705 **{bet_desc}** ${amount:,} \u2192 **${payout:,}**")
+                    lines.append(f"\u2705 **{bet_desc}** {amount:,} \U0001f338 \u2192 **{payout:,}** \U0001f338")
                 else:
-                    lines.append(f"\u274c **{bet_desc}** ${amount:,} \u2192 $0")
-            lines.append(f"**Net: {sign}${user_net:,}**")
+                    lines.append(f"\u274c **{bet_desc}** {amount:,} \U0001f338 \u2192 0 \U0001f338")
+            lines.append(f"**Net: {sign}{user_net:,} \U0001f338**")
 
             embed.add_field(
                 name=name,
@@ -1070,9 +1070,9 @@ class Gambling(commands.Cog):
         # If table is now empty, clean it up
         if not table["bets"]:
             del self.rl_tables[channel_id]
-            await ctx.send(f"Refunded **${refund:,}**. Table is now empty.")
+            await ctx.send(f"Refunded **{refund:,}** \U0001f338. Table is now empty.")
         else:
-            await ctx.send(f"Refunded **${refund:,}**. Your bets have been removed.")
+            await ctx.send(f"Refunded **{refund:,}** \U0001f338. Your bets have been removed.")
 
     @staticmethod
     def _format_bet(category: str, detail) -> str:
@@ -1102,7 +1102,7 @@ class Gambling(commands.Cog):
     async def setminbet(self, ctx: commands.Context, amount: int):
         """Set the minimum bet. Server owner only."""
         if amount < 1:
-            await ctx.send("Minimum bet must be at least $1.")
+            await ctx.send("Minimum bet must be at least 1 \U0001f338.")
             return
 
         await self.db.execute(
@@ -1114,7 +1114,7 @@ class Gambling(commands.Cog):
 
         embed = discord.Embed(
             title="Setting Updated",
-            description=f"Minimum bet set to **${amount:,}**.",
+            description=f"Minimum bet set to **{amount:,}** \U0001f338.",
             color=discord.Color.blurple(),
         )
         await ctx.send(embed=embed)
@@ -1124,7 +1124,7 @@ class Gambling(commands.Cog):
     async def setmaxbet(self, ctx: commands.Context, amount: int):
         """Set the maximum bet. Server owner only."""
         if amount < 1:
-            await ctx.send("Maximum bet must be at least $1.")
+            await ctx.send("Maximum bet must be at least 1 \U0001f338.")
             return
 
         await self.db.execute(
@@ -1136,7 +1136,7 @@ class Gambling(commands.Cog):
 
         embed = discord.Embed(
             title="Setting Updated",
-            description=f"Maximum bet set to **${amount:,}**.",
+            description=f"Maximum bet set to **{amount:,}** \U0001f338.",
             color=discord.Color.blurple(),
         )
         await ctx.send(embed=embed)

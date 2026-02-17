@@ -71,20 +71,18 @@ class Shop(commands.Cog):
             await ctx.send(f"An item called **{name}** already exists.")
             return
 
-        async with self.db.execute(
+        await self.db.execute(
             """INSERT INTO shop_items (guild_id, name, description, price, type, role_id, rebuyable)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (ctx.guild.id, name, "No description.", price, "inventory", None, 1),
-        ) as cursor:
-            item_id = cursor.lastrowid
+        )
         await self.db.commit()
 
         embed = discord.Embed(
             title="Item Created",
-            description=f"**{name}** has been added to the shop for **${price:,}**.",
+            description=f"**{name}** has been added to the shop for **{price:,}** \U0001f338.",
             color=discord.Color.green(),
         )
-        embed.add_field(name="ID", value=str(item_id))
         embed.set_footer(text=f"Use {ctx.prefix}edititem to set description, type, role, rebuyable")
         await ctx.send(embed=embed)
 
@@ -220,14 +218,14 @@ class Shop(commands.Cog):
             color=discord.Color.gold(),
         )
 
-        for item_id, name, description, price, item_type, role_id, rebuyable in items:
-            details = f"{description}\n**Price:** ${price:,} | **Type:** {item_type}"
+        for _, name, description, price, item_type, role_id, rebuyable in items:
+            details = f"{description}\n**Price:** {price:,} \U0001f338 | **Type:** {item_type}"
             if item_type == "role" and role_id:
                 details += f" | **Role:** <@&{role_id}>"
             if not rebuyable:
                 details += " | *One-time purchase*"
             embed.add_field(
-                name=f"#{item_id} — {name}",
+                name=name,
                 value=details,
                 inline=False,
             )
@@ -237,20 +235,21 @@ class Shop(commands.Cog):
     # --- Buy ---
 
     @commands.command()
-    async def buy(self, ctx: commands.Context, item_id: int):
-        """Buy an item from the shop."""
+    async def buy(self, ctx: commands.Context, *, name: str):
+        """Buy an item from the shop. Usage: {prefix}buy "Item Name"."""
         # Fetch item
         async with self.db.execute(
-            "SELECT name, price, type, role_id, rebuyable FROM shop_items WHERE id = ? AND guild_id = ?",
-            (item_id, ctx.guild.id),
+            "SELECT id, name, price, type, role_id, rebuyable FROM shop_items "
+            "WHERE guild_id = ? AND LOWER(name) = LOWER(?)",
+            (ctx.guild.id, name),
         ) as cursor:
             item = await cursor.fetchone()
 
         if not item:
-            await ctx.send("Item not found.")
+            await ctx.send(f"No item called **{name}** found.")
             return
 
-        name, price, item_type, role_id, rebuyable = item
+        item_id, name, price, item_type, role_id, rebuyable = item
 
         # Check rebuyable
         if not rebuyable:
@@ -277,7 +276,7 @@ class Shop(commands.Cog):
 
         cash = row[0] if row else 0
         if cash < price:
-            await ctx.send(f"You don't have enough cash. You need **${price:,}** but only have **${cash:,}**.")
+            await ctx.send(f"You don't have enough flowers. You need **{price:,}** \U0001f338 but only have **{cash:,}** \U0001f338.")
             return
 
         # Deduct cash
@@ -319,7 +318,7 @@ class Shop(commands.Cog):
 
         embed = discord.Embed(
             title="Purchase Successful",
-            description=f"You bought **{name}** for **${price:,}**!",
+            description=f"You bought **{name}** for **{price:,}** \U0001f338!",
             color=discord.Color.green(),
         )
         await ctx.send(embed=embed)

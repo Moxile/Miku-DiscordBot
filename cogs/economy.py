@@ -95,16 +95,16 @@ class Economy(commands.Cog):
             title=f"{member.display_name}'s Balance",
             color=discord.Color.gold(),
         )
-        embed.add_field(name="Cash", value=f"${cash:,}")
-        embed.add_field(name="Bank", value=f"${bank:,}")
-        embed.add_field(name="Total", value=f"${cash + bank:,}")
+        embed.add_field(name="Cash", value=f"{cash:,} \U0001f338")
+        embed.add_field(name="Bank", value=f"{bank:,} \U0001f338")
+        embed.add_field(name="Total", value=f"{cash + bank:,} \U0001f338")
         await ctx.send(embed=embed)
 
     # --- Deposit ---
 
     @commands.command(aliases=["dep"])
     async def deposit(self, ctx: commands.Context, amount: str):
-        """Deposit cash into your bank. Use 'all' to deposit everything."""
+        """Deposit flowers into your bank. Use 'all' to deposit everything."""
         cash, bank = await self.get_account(ctx.author.id)
 
         if amount.lower() == "all":
@@ -120,7 +120,7 @@ class Economy(commands.Cog):
             await ctx.send("You must deposit a positive amount.")
             return
         if amount > cash:
-            await ctx.send(f"You only have **${cash:,}** in cash.")
+            await ctx.send(f"You only have **{cash:,}** \U0001f338 on hand.")
             return
 
         await self.db.execute(
@@ -131,7 +131,7 @@ class Economy(commands.Cog):
 
         embed = discord.Embed(
             title="Deposit Successful",
-            description=f"Deposited **${amount:,}** into your bank.",
+            description=f"Deposited **{amount:,}** \U0001f338 into your bank.",
             color=discord.Color.green(),
         )
         await ctx.send(embed=embed)
@@ -140,7 +140,7 @@ class Economy(commands.Cog):
 
     @commands.command(aliases=["with"])
     async def withdraw(self, ctx: commands.Context, amount: str):
-        """Withdraw money from your bank. Use 'all' to withdraw everything."""
+        """Withdraw flowers from your bank. Use 'all' to withdraw everything."""
         cash, bank = await self.get_account(ctx.author.id)
 
         if amount.lower() == "all":
@@ -156,7 +156,7 @@ class Economy(commands.Cog):
             await ctx.send("You must withdraw a positive amount.")
             return
         if amount > bank:
-            await ctx.send(f"You only have **${bank:,}** in your bank.")
+            await ctx.send(f"You only have **{bank:,}** \U0001f338 in your bank.")
             return
 
         await self.db.execute(
@@ -167,7 +167,7 @@ class Economy(commands.Cog):
 
         embed = discord.Embed(
             title="Withdrawal Successful",
-            description=f"Withdrew **${amount:,}** from your bank.",
+            description=f"Withdrew **{amount:,}** \U0001f338 from your bank.",
             color=discord.Color.green(),
         )
         await ctx.send(embed=embed)
@@ -176,7 +176,7 @@ class Economy(commands.Cog):
 
     @commands.command()
     async def work(self, ctx: commands.Context):
-        """Work to earn some cash."""
+        """Work to earn some flowers."""
         cooldown = await self.get_work_cooldown(ctx.guild.id)
         key = (ctx.guild.id, ctx.author.id)
         last_used = self.work_cooldowns.get(key, 0)
@@ -208,7 +208,7 @@ class Economy(commands.Cog):
 
         embed = discord.Embed(
             title="Work Complete!",
-            description=f"You earned **${earnings:,}**!",
+            description=f"You earned **{earnings:,}** \U0001f338!",
             color=discord.Color.green(),
         )
         await ctx.send(embed=embed)
@@ -260,7 +260,7 @@ class Economy(commands.Cog):
 
         embed = discord.Embed(
             title="Work Pay Updated",
-            description=f"Work earnings set to **${minimum:,}** - **${maximum:,}**.",
+            description=f"Work earnings set to **{minimum:,}** - **{maximum:,}** \U0001f338.",
             color=discord.Color.blurple(),
         )
         await ctx.send(embed=embed)
@@ -269,12 +269,12 @@ class Economy(commands.Cog):
 
     @commands.command(aliases=["pay"])
     async def give(self, ctx: commands.Context, member: discord.Member, amount: int):
-        """Give cash to another user."""
+        """Give flowers to another user."""
         if member == ctx.author:
-            await ctx.send("You cannot give money to yourself.")
+            await ctx.send("You cannot give flowers to yourself.")
             return
         if member.bot:
-            await ctx.send("You cannot give money to a bot.")
+            await ctx.send("You cannot give flowers to a bot.")
             return
         if amount <= 0:
             await ctx.send("You must give a positive amount.")
@@ -282,7 +282,7 @@ class Economy(commands.Cog):
 
         cash, _ = await self.get_account(ctx.author.id)
         if amount > cash:
-            await ctx.send(f"You only have **${cash:,}** in cash.")
+            await ctx.send(f"You only have **{cash:,}** \U0001f338 on hand.")
             return
 
         await self.get_account(member.id)
@@ -299,7 +299,7 @@ class Economy(commands.Cog):
 
         embed = discord.Embed(
             title="Transfer Successful",
-            description=f"{ctx.author.mention} gave **${amount:,}** to {member.mention}.",
+            description=f"{ctx.author.mention} gave **{amount:,}** \U0001f338 to {member.mention}.",
             color=discord.Color.green(),
         )
         await ctx.send(embed=embed)
@@ -309,7 +309,7 @@ class Economy(commands.Cog):
     @commands.command()
     @is_guild_owner()
     async def add(self, ctx: commands.Context, member: discord.Member, amount: int):
-        """Add cash to a user's balance. Server owner only."""
+        """Add flowers to a user's balance. Server owner only."""
         if amount <= 0:
             await ctx.send("Amount must be positive.")
             return
@@ -322,8 +322,8 @@ class Economy(commands.Cog):
         await self.db.commit()
 
         embed = discord.Embed(
-            title="Cash Added",
-            description=f"Added **${amount:,}** to {member.mention}'s cash.",
+            title="Flowers Added",
+            description=f"Added **{amount:,}** \U0001f338 to {member.mention}.",
             color=discord.Color.green(),
         )
         embed.set_footer(text=f"By {ctx.author}")
@@ -334,14 +334,14 @@ class Economy(commands.Cog):
     @commands.command()
     @is_guild_owner()
     async def take(self, ctx: commands.Context, member: discord.Member, amount: int):
-        """Take cash from a user's balance. Server owner only."""
+        """Take flowers from a user's balance. Server owner only."""
         if amount <= 0:
             await ctx.send("Amount must be positive.")
             return
 
         cash, _ = await self.get_account(member.id)
         if amount > cash:
-            await ctx.send(f"{member.display_name} only has **${cash:,}** in cash.")
+            await ctx.send(f"{member.display_name} only has **{cash:,}** \U0001f338.")
             return
 
         await self.db.execute(
@@ -351,8 +351,8 @@ class Economy(commands.Cog):
         await self.db.commit()
 
         embed = discord.Embed(
-            title="Cash Taken",
-            description=f"Took **${amount:,}** from {member.mention}'s cash.",
+            title="Flowers Taken",
+            description=f"Took **{amount:,}** \U0001f338 from {member.mention}.",
             color=discord.Color.red(),
         )
         embed.set_footer(text=f"By {ctx.author}")

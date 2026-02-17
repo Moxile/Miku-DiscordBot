@@ -69,21 +69,19 @@ class Missions(commands.Cog):
             await ctx.send(f"An active mission called **{title}** already exists.")
             return
 
-        async with self.db.execute(
+        await self.db.execute(
             """INSERT INTO missions (guild_id, title, description, cost)
                VALUES (?, ?, ?, ?)""",
             (ctx.guild.id, title, "No description.", cost),
-        ) as cursor:
-            mission_id = cursor.lastrowid
+        )
         await self.db.commit()
 
         embed = discord.Embed(
             title="Mission Created",
-            description=f"**{title}** — Goal: **${cost:,}**",
+            description=f"**{title}** — Goal: **{cost:,}** \U0001f338",
             color=discord.Color.green(),
         )
-        embed.add_field(name="ID", value=str(mission_id))
-        embed.set_footer(text=f"Use {ctx.prefix}editmission description \"Title\" <text> to add a description")
+        embed.set_footer(text=f"Use {ctx.prefix}editmission description \"{title}\" <text> to add a description")
         await ctx.send(embed=embed)
 
     # --- Delete Mission (Owner only) ---
@@ -182,17 +180,17 @@ class Missions(commands.Cog):
             color=discord.Color.gold(),
         )
 
-        for mission_id, title, description, cost, funded in rows:
+        for _, title, description, cost, funded in rows:
             pct = funded / cost if cost > 0 else 0
             filled = round(pct * 10)
             bar = "\u2588" * filled + "\u2591" * (10 - filled)
             details = (
                 f"{description}\n"
-                f"**Goal:** ${cost:,} | **Funded:** ${funded:,} ({pct:.0%})\n"
+                f"**Goal:** {cost:,} \U0001f338 | **Funded:** {funded:,} \U0001f338 ({pct:.0%})\n"
                 f"`[{bar}]`"
             )
             embed.add_field(
-                name=f"#{mission_id} — {title}",
+                name=title,
                 value=details,
                 inline=False,
             )
@@ -219,10 +217,10 @@ class Missions(commands.Cog):
             color=discord.Color.green(),
         )
 
-        for mission_id, title, description, cost in rows:
+        for _, title, description, cost in rows:
             embed.add_field(
-                name=f"#{mission_id} — {title}",
-                value=f"{description}\n**Goal:** ${cost:,} — **Completed!**",
+                name=title,
+                value=f"{description}\n**Goal:** {cost:,} \U0001f338 — **Completed!**",
                 inline=False,
             )
 
@@ -231,20 +229,21 @@ class Missions(commands.Cog):
     # --- Fund a Mission ---
 
     @commands.command()
-    async def fund(self, ctx: commands.Context, mission_id: int, amount: str):
-        """Contribute cash to a mission. Usage: {prefix}fund <mission_id> <amount|all>."""
+    async def fund(self, ctx: commands.Context, title: str, amount: str):
+        """Contribute flowers to a mission. Usage: {prefix}fund "Mission Title" <amount|all>."""
         # Fetch mission
         async with self.db.execute(
-            "SELECT title, cost, funded FROM missions WHERE id = ? AND guild_id = ? AND completed = 0",
-            (mission_id, ctx.guild.id),
+            "SELECT id, title, cost, funded FROM missions "
+            "WHERE guild_id = ? AND LOWER(title) = LOWER(?) AND completed = 0",
+            (ctx.guild.id, title),
         ) as cursor:
             mission = await cursor.fetchone()
 
         if not mission:
-            await ctx.send("Mission not found or already completed.")
+            await ctx.send(f"No active mission called **{title}** found.")
             return
 
-        title, cost, funded = mission
+        mission_id, title, cost, funded = mission
         remaining = cost - funded
 
         # Fetch user cash
@@ -272,7 +271,7 @@ class Missions(commands.Cog):
         amount = min(amount, remaining)
 
         if cash < amount:
-            await ctx.send(f"You don't have enough cash. You have **${cash:,}** but tried to fund **${amount:,}**.")
+            await ctx.send(f"You don't have enough flowers. You have **{cash:,}** \U0001f338 but tried to fund **{amount:,}** \U0001f338.")
             return
 
         # Deduct cash
@@ -303,7 +302,7 @@ class Missions(commands.Cog):
         if completed:
             embed = discord.Embed(
                 title="Mission Complete!",
-                description=f"**{title}** has been fully funded! Goal of **${cost:,}** reached!",
+                description=f"**{title}** has been fully funded! Goal of **{cost:,}** \U0001f338 reached!",
                 color=discord.Color.green(),
             )
             embed.set_footer(text=f"Final contribution by {ctx.author.display_name}")
@@ -314,8 +313,8 @@ class Missions(commands.Cog):
             embed = discord.Embed(
                 title="Mission Funded",
                 description=(
-                    f"You contributed **${amount:,}** to **{title}**!\n"
-                    f"**Progress:** ${new_funded:,} / ${cost:,} ({pct:.0%})\n"
+                    f"You contributed **{amount:,}** \U0001f338 to **{title}**!\n"
+                    f"**Progress:** {new_funded:,} / {cost:,} \U0001f338 ({pct:.0%})\n"
                     f"`[{bar}]`"
                 ),
                 color=discord.Color.blue(),
