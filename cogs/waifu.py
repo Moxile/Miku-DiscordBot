@@ -819,11 +819,22 @@ class Waifu(commands.Cog):
             f"ON CONFLICT(guild_id) DO UPDATE SET {setting} = ?",
             (ctx.guild.id, parsed, parsed),
         )
+
+        # When base_value changes, update all profiles below the new minimum
+        extra = ""
+        if setting == "base_value":
+            cursor = await self.db.execute(
+                "UPDATE waifu_profiles SET value = ? WHERE guild_id = ? AND value < ?",
+                (parsed, ctx.guild.id, parsed),
+            )
+            if cursor.rowcount > 0:
+                extra = f"\nUpdated **{cursor.rowcount}** profile(s) below the new minimum."
+
         await self.db.commit()
 
         embed = discord.Embed(
             title="Waifu Setting Updated",
-            description=f"**{setting}** set to **{parsed}**.",
+            description=f"**{setting}** set to **{parsed}**.{extra}",
             color=discord.Color.blurple(),
         )
         await ctx.send(embed=embed)
