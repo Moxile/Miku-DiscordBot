@@ -96,6 +96,16 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         inline=False,
     )
     owner_embed.add_field(
+        name="Waifu Settings",
+        value=(
+            f"`{p}waifuset <setting> <value>` — Configure waifu system\n"
+            "  Settings: base_value, claim_increase_pct, daily_decay_pct,\n"
+            "  marriage_fee_multiplier, gift_threshold_pct, affinity_discount,\n"
+            "  steal_married_multiplier"
+        ),
+        inline=False,
+    )
+    owner_embed.add_field(
         name="Channel Restrictions",
         value=(
             f"`{p}setchannel <category> #channel` — Restrict commands to a channel\n"
@@ -103,7 +113,7 @@ async def help(ctx: commands.Context, *, command_name: str = None):
             f"`{p}channels` — View all channel restrictions\n"
             f"`{p}unrestrict <command>` — Allow a command everywhere\n"
             f"`{p}rerestrict <command>` — Re-apply channel restrictions\n"
-            f"  Categories: economy, gambling, shop, market, missions"
+            f"  Categories: economy, gambling, shop, market, missions, waifu"
         ),
         inline=False,
     )
@@ -194,6 +204,21 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         inline=False,
     )
     user_embed.add_field(
+        name="Waifu",
+        value=(
+            f"`{p}waifu [@user]` — View waifu profile\n"
+            f"`{p}claim @user` — Claim someone as your waifu\n"
+            f"`{p}affinity @user` — Set affinity (50% discount for them)\n"
+            f"`{p}gift @user <amount>` — Gift flowers (bond if married)\n"
+            f"`{p}propose @user [fee]` — Propose marriage (engaged 7d+)\n"
+            f"`{p}accept` — Accept a marriage proposal\n"
+            f"`{p}divorce` — End your marriage\n"
+            f"`{p}waifulb` / `{p}wlb` — Waifu value leaderboard\n"
+            f"`{p}marriages` — View server marriages"
+        ),
+        inline=False,
+    )
+    user_embed.add_field(
         name="Other",
         value=f"`{p}ping` — Pong!\n`{p}help [command]` — Show this menu or details for a command",
         inline=False,
@@ -230,6 +255,7 @@ async def setup_hook():
     await bot.load_extension("cogs.gambling")
     await bot.load_extension("cogs.market")
     await bot.load_extension("cogs.missions")
+    await bot.load_extension("cogs.waifu")
 
 
 @bot.event

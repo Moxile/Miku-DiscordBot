@@ -1,7 +1,7 @@
 from discord.ext import commands
 
 PREFIX = "."
-VALID_CATEGORIES = {"economy", "gambling", "shop", "market", "missions"}
+VALID_CATEGORIES = {"economy", "gambling", "shop", "market", "missions", "waifu"}
 
 
 def is_guild_owner():
