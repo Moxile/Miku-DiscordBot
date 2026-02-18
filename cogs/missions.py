@@ -183,7 +183,7 @@ class Missions(commands.Cog):
         for _, title, description, cost, funded in rows:
             pct = funded / cost if cost > 0 else 0
             filled = round(pct * 10)
-            bar = "\u2588" * filled + "\u2591" * (10 - filled)
+            bar = "\u2588" * filled + "\u2500" * (10 - filled)
             details = (
                 f"{description}\n"
                 f"**Goal:** {cost:,} \U0001f338 | **Funded:** {funded:,} \U0001f338 ({pct:.0%})\n"
@@ -309,7 +309,7 @@ class Missions(commands.Cog):
         else:
             pct = new_funded / cost
             filled = round(pct * 10)
-            bar = "\u2588" * filled + "\u2591" * (10 - filled)
+            bar = "\u2588" * filled + "\u2500" * (10 - filled)
             embed = discord.Embed(
                 title="Mission Funded",
                 description=(
