@@ -60,7 +60,7 @@ def compute_weighted_chars(total_chars: int) -> float:
 
 
 class Market(commands.Cog):
-    _owner_commands = {"ipo", "setdividend", "companyinfo", "delist"}
+    _owner_commands = {"ipo", "setdividend", "companyinfo", "delist", "charstats"}
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -1131,9 +1131,9 @@ class Market(commands.Cog):
             color=discord.Color.blurple(),
         )
 
-        # Asks (show in reverse so lowest is at bottom, closest to spread)
+        # Asks: lowest price first (best ask at top)
         ask_lines = []
-        for price, qty, is_mm in reversed(asks):
+        for price, qty, is_mm in asks:
             tag = " [MM]" if is_mm else ""
             ask_lines.append(f"{price:,.2f} \U0001f338 x {qty}{tag}")
         embed.add_field(
@@ -1142,6 +1142,7 @@ class Market(commands.Cog):
             inline=True,
         )
 
+        # Bids: highest price first (best bid at top)
         bid_lines = []
         for price, qty, is_mm in bids:
             tag = " [MM]" if is_mm else ""
@@ -1530,6 +1531,73 @@ class Market(commands.Cog):
             )
 
         embed.set_footer(text=f"Use {ctx.prefix}stockinfo #channel for details · {ctx.prefix}mbuy #channel <shares> to buy")
+        await ctx.send(embed=embed)
+
+    @commands.command()
+    @is_guild_owner()
+    async def charstats(self, ctx: commands.Context, channel: discord.TextChannel,
+                        period: str = "week"):
+        """View character counts per user in a channel. Owner only.
+        Usage: {prefix}charstats #channel [week|all]"""
+        company = await self.get_company(channel.id)
+        if not company:
+            await ctx.send("This channel is not a registered company.")
+            return
+
+        if period not in ("week", "all"):
+            await ctx.send("Invalid period. Use `week` or `all`.")
+            return
+
+        if period == "week":
+            week_start = self._week_start().isoformat()
+            async with self.db.execute(
+                "SELECT user_id, SUM(char_count) FROM user_daily_chars "
+                "WHERE channel_id = ? AND date >= ? "
+                "GROUP BY user_id ORDER BY SUM(char_count) DESC",
+                (channel.id, week_start),
+            ) as cur:
+                rows = await cur.fetchall()
+            period_label = f"This week (since {week_start})"
+        else:
+            async with self.db.execute(
+                "SELECT user_id, SUM(char_count) FROM user_daily_chars "
+                "WHERE channel_id = ? "
+                "GROUP BY user_id ORDER BY SUM(char_count) DESC",
+                (channel.id,),
+            ) as cur:
+                rows = await cur.fetchall()
+            period_label = "All time"
+
+        if not rows:
+            await ctx.send(f"No character data recorded for #{channel.name} yet.")
+            return
+
+        total_chars = sum(r[1] for r in rows)
+        lines = []
+        for uid, chars in rows:
+            member = ctx.guild.get_member(uid)
+            name = member.display_name if member else f"User {uid}"
+            pct = chars / total_chars * 100 if total_chars > 0 else 0
+            weighted = compute_weighted_chars(chars)
+            lines.append(f"**{name}**: {chars:,} chars ({pct:.1f}%) → {weighted:,.1f} weighted")
+
+        # Discord embed field max is 1024 chars — paginate if needed
+        embed = discord.Embed(
+            title=f"Character Stats — #{channel.name}",
+            description=f"**Period:** {period_label}\n**Total raw chars:** {total_chars:,}",
+            color=discord.Color.blurple(),
+        )
+        chunk = ""
+        page = 1
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 1000:
+                embed.add_field(name=f"Users (page {page})", value=chunk, inline=False)
+                chunk = ""
+                page += 1
+            chunk += line + "\n"
+        if chunk:
+            embed.add_field(name=f"Users (page {page})", value=chunk, inline=False)
+
         await ctx.send(embed=embed)
 
     @commands.command()

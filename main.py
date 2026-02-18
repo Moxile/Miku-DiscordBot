@@ -81,7 +81,8 @@ async def help(ctx: commands.Context, *, command_name: str = None):
             f"`{p}ipo #channel <price>` — Register a channel as a company\n"
             f"`{p}delist #channel` — Remove a company from the market\n"
             f"`{p}setdividend <percent>` — Set dividend payout %\n"
-            f"`{p}companyinfo #channel` — View company diagnostics"
+            f"`{p}companyinfo #channel` — View company diagnostics\n"
+            f"`{p}charstats #channel [week|all]` — View char counts per user"
         ),
         inline=False,
     )
