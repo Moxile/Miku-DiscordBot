@@ -1438,30 +1438,41 @@ class Market(commands.Cog):
 
         await ctx.send(embed=embed)
 
-    @commands.command()
-    async def portfolio(self, ctx: commands.Context):
-        """View your stock portfolio and P&L."""
+    @commands.command(aliases=["port"])
+    async def portfolio(self, ctx: commands.Context, member: discord.Member = None):
+        """View your (or another user's) stock portfolio and P&L."""
+        target = member or ctx.author
         async with self.db.execute(
             "SELECT h.channel_id, h.quantity, h.avg_cost, c.name, c.fair_price "
             "FROM holdings h JOIN companies c ON h.channel_id = c.channel_id "
             "WHERE h.user_id = ? AND h.quantity > 0",
-            (ctx.author.id,),
+            (target.id,),
         ) as cur:
             rows = await cur.fetchall()
 
         if not rows:
-            await ctx.send("You don't own any stocks.")
+            who = "You don't" if target == ctx.author else f"{target.display_name} doesn't"
+            await ctx.send(f"{who} own any stocks.")
             return
 
         embed = discord.Embed(
-            title=f"{ctx.author.display_name}'s Portfolio",
+            title=f"{target.display_name}'s Portfolio",
             color=discord.Color.blue(),
         )
 
         total_value = 0
         total_cost = 0
         for channel_id, qty, avg_cost, name, fair_price in rows:
-            current_value = qty * fair_price
+            # Use best bid (actual sell price) for P&L, fall back to fair price
+            async with self.db.execute(
+                "SELECT MAX(price) FROM orders "
+                "WHERE channel_id = ? AND side = 'buy' AND remaining > 0",
+                (channel_id,),
+            ) as cur2:
+                bid_row = await cur2.fetchone()
+            sell_price = bid_row[0] if bid_row and bid_row[0] is not None else fair_price
+
+            current_value = qty * sell_price
             cost_basis = qty * avg_cost
             pnl = current_value - cost_basis
             pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
@@ -1474,7 +1485,7 @@ class Market(commands.Cog):
                 name=f"#{name}",
                 value=(
                     f"**{qty}** shares @ {avg_cost:,.2f} \U0001f338\n"
-                    f"Current: {fair_price:,.2f} \U0001f338\n"
+                    f"Bid: {sell_price:,.2f} \U0001f338 (fair: {fair_price:,.2f})\n"
                     f"P&L: {sign}{pnl:,.0f} \U0001f338 ({sign}{pnl_pct:.1f}%)"
                 ),
                 inline=True,
