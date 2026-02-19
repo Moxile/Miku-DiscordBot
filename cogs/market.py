@@ -209,7 +209,7 @@ class Market(commands.Cog):
         # Any company with treasury = 0 gets backfilled to ipo_price * total_shares so the
         # upkeep baseline and book-value floor work correctly going forward.
         await self.db.execute(
-            "UPDATE companies SET treasury = ipo_price * total_shares "
+            f"UPDATE companies SET treasury = ipo_price * {MM_STARTING_SHARES} "
             "WHERE COALESCE(treasury, 0) = 0"
         )
         await self.db.commit()
@@ -661,9 +661,8 @@ class Market(commands.Cog):
                 (nudged, channel_id),
             )
 
-        # Absorb all unissued shares into MM inventory after every trade.
-        # Unissued = total float minus every share currently held by a player.
-        # This keeps mm_state.inventory meaningful for spread/skew and bid sizing.
+        # Sync MM inventory to exactly (total_shares - player_held) after every trade.
+        # This is the correct definition: the MM owns everything not held by players.
         company = await self.get_company(channel_id)
         if company:
             async with self.db.execute(
@@ -672,22 +671,18 @@ class Market(commands.Cog):
                 (channel_id, MM_USER_ID),
             ) as cur:
                 player_held = (await cur.fetchone())[0]
-            unissued = max(0, company["total_shares"] - player_held)
-            # Re-read current mm inventory (may have just changed above)
-            mm_now = await self.get_mm_state(channel_id)
-            if mm_now is not None:
-                new_inv = mm_now["inventory"] + unissued
-                await self.db.execute(
-                    "UPDATE mm_state SET inventory = ? WHERE channel_id = ?",
-                    (new_inv, channel_id),
-                )
-                # Keep MM holdings row in sync
-                await self.db.execute(
-                    """INSERT INTO holdings (user_id, channel_id, quantity, avg_cost)
-                       VALUES (?, ?, ?, 0)
-                       ON CONFLICT(user_id, channel_id) DO UPDATE SET quantity = ?""",
-                    (MM_USER_ID, channel_id, new_inv, new_inv),
-                )
+            new_inv = max(0, company["total_shares"] - player_held)
+            await self.db.execute(
+                "UPDATE mm_state SET inventory = ? WHERE channel_id = ?",
+                (new_inv, channel_id),
+            )
+            # Keep MM holdings row in sync
+            await self.db.execute(
+                """INSERT INTO holdings (user_id, channel_id, quantity, avg_cost)
+                   VALUES (?, ?, ?, 0)
+                   ON CONFLICT(user_id, channel_id) DO UPDATE SET quantity = ?""",
+                (MM_USER_ID, channel_id, new_inv, new_inv),
+            )
 
     async def match_orders(self, channel_id: int, new_order_id: int) -> list[dict]:
         """Match a newly placed order against the book. Returns list of fills."""
@@ -1029,7 +1024,7 @@ class Market(commands.Cog):
 
         now = datetime.datetime.utcnow().isoformat()
 
-        ipo_treasury = float(IPO_TOTAL_SHARES * price)  # proceeds of the initial float
+        ipo_treasury = float(MM_STARTING_SHARES * price)  # only the shares the MM actually starts with
         await self.db.execute(
             "INSERT INTO companies (channel_id, guild_id, name, ipo_price, fair_price, "
             "last_revenue, total_shares, dividend_pct, created_at, treasury) "
