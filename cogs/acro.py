@@ -215,19 +215,10 @@ class Acro(commands.Cog):
 
             words = message.content.strip().split()
             if len(words) != len(letters):
-                # Wrong word count — delete silently and ignore
-                try:
-                    await message.delete()
-                except discord.HTTPException:
-                    pass
                 return
 
             # Check each word starts with the right letter
             if not all(w[0].upper() == l for w, l in zip(words, letters)):
-                try:
-                    await message.delete()
-                except discord.HTTPException:
-                    pass
                 return
 
             # Valid submission
