@@ -20,18 +20,43 @@ DB_PATH = "data/economy.db"
 MM_USER_ID = 0
 
 # MM tuning constants
-MM_ALPHA = 0.3
 MM_BASE_SPREAD = 0.8
 MM_A = 1.5
 MM_B = 1.0
 MM_C = 1.0
 MM_K = 0.05
 MM_TARGET_INVENTORY_PCT = 0.35
-MM_MAX_WEEKLY_MOVE = 0.08        # Cap weekly fair-price change at +/-8%
-MM_TRADE_IMPACT = 0.02           # Each trade nudges fair price 2% toward trade price
-MM_STARTING_CASH = 30_000.0
-MM_STARTING_SHARES = 1000
-IPO_TOTAL_SHARES = 1000
+
+# Volume-adaptive tuning — each parameter interpolates LOW (new stock) → HIGH (mature stock)
+MM_ALPHA_LOW          = 0.5    # Revenue sensitivity when new
+MM_ALPHA_HIGH         = 0.15   # Revenue sensitivity when mature
+MM_MAX_MOVE_LOW       = 0.25   # ±25% weekly cap for new stocks
+MM_MAX_MOVE_HIGH      = 0.05   # ±5%  weekly cap for mature stocks
+MM_TRADE_IMPACT_LOW   = 0.06   # Per-trade nudge when new
+MM_TRADE_IMPACT_HIGH  = 0.005  # Per-trade nudge when mature
+MM_SPREAD_MULT_LOW    = 2.0    # Base spread multiplier when new
+MM_SPREAD_MULT_HIGH   = 0.5    # Base spread multiplier when mature
+MM_STABILITY_MATURITY = 500    # Trade count at which stability = 1.0
+MM_STARTING_CASH = 10_000.0
+MM_STARTING_SHARES = 10         # MM starts with only 10% of float — prevents early dump
+IPO_TOTAL_SHARES = 100           # Smaller float so real cap is reached faster
+MM_RAMP_MIN_QTY = 2             # Quote size at launch (very thin on small float)
+MM_RAMP_MAX_QTY = 20            # Full quote size once market is mature
+MM_RAMP_TRADES = 50             # Number of trades to reach full quote size
+MM_TREASURY_GROWTH_RATE = 0.05  # 5% of treasury-to-market-cap ratio added to fair price per week
+MM_TREASURY_UPKEEP_RATE = 0.05  # 5% of treasury burned as upkeep each week (dead channels decay)
+
+# Fair-price confidence blend constants
+MM_CONFIDENCE_WEEKS = 4         # Weeks of history to reach full revenue-signal confidence
+MM_TRADE_FAIR_WEIGHT = 0.4      # Weight on recent trade avg when confidence is low
+MM_BOOK_VALUE_WEIGHT = 0.6      # Weight on treasury book value when confidence is low
+
+# Low-info spread multiplier: spread is widened this many × when trade count is below threshold
+MM_LOW_INFO_SPREAD_MULT = 3.0
+MM_LOW_INFO_TRADE_THRESH = 20   # Below this trade count, spread is widened
+
+# Revenue cost model
+MM_COST_PER_AVG_CHAR = 0.15     # Cost per unit of average message length per week
 
 MARKET_BUY_SENTINEL = 999_999.99
 MARKET_SELL_SENTINEL = 0.01
@@ -149,10 +174,11 @@ class Market(commands.Cog):
         )
         await self.db.execute(
             """CREATE TABLE IF NOT EXISTS user_daily_chars (
-                user_id    INTEGER NOT NULL,
-                channel_id INTEGER NOT NULL,
-                date       TEXT NOT NULL,
-                char_count INTEGER DEFAULT 0,
+                user_id       INTEGER NOT NULL,
+                channel_id    INTEGER NOT NULL,
+                date          TEXT NOT NULL,
+                char_count    INTEGER DEFAULT 0,
+                message_count INTEGER DEFAULT 0,
                 PRIMARY KEY (user_id, channel_id, date)
             )"""
         )
@@ -170,6 +196,33 @@ class Market(commands.Cog):
                 price      REAL NOT NULL
             )"""
         )
+        # Migrate: add treasury column if it doesn't exist yet (safe on existing DBs)
+        try:
+            await self.db.execute(
+                "ALTER TABLE companies ADD COLUMN treasury REAL DEFAULT 0"
+            )
+            await self.db.commit()
+        except Exception:
+            pass  # Column already exists
+
+        # Migrate: seed treasury for existing companies that pre-date the IPO-proceeds change.
+        # Any company with treasury = 0 gets backfilled to ipo_price * total_shares so the
+        # upkeep baseline and book-value floor work correctly going forward.
+        await self.db.execute(
+            "UPDATE companies SET treasury = ipo_price * total_shares "
+            "WHERE COALESCE(treasury, 0) = 0"
+        )
+        await self.db.commit()
+
+        # Migrate: add message_count column to user_daily_chars (safe on existing DBs)
+        try:
+            await self.db.execute(
+                "ALTER TABLE user_daily_chars ADD COLUMN message_count INTEGER DEFAULT 0"
+            )
+            await self.db.commit()
+        except Exception:
+            pass  # Column already exists
+
         await self.db.commit()
 
         # Load company channel cache
@@ -210,7 +263,7 @@ class Market(commands.Cog):
     async def get_company(self, channel_id: int) -> dict | None:
         async with self.db.execute(
             "SELECT channel_id, guild_id, name, ipo_price, fair_price, last_revenue, "
-            "total_shares, dividend_pct, created_at FROM companies WHERE channel_id = ?",
+            "total_shares, dividend_pct, created_at, COALESCE(treasury, 0) FROM companies WHERE channel_id = ?",
             (channel_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -220,6 +273,7 @@ class Market(commands.Cog):
             "channel_id": row[0], "guild_id": row[1], "name": row[2],
             "ipo_price": row[3], "fair_price": row[4], "last_revenue": row[5],
             "total_shares": row[6], "dividend_pct": row[7], "created_at": row[8],
+            "treasury": row[9],
         }
 
     async def get_holdings(self, user_id: int, channel_id: int) -> tuple[int, float]:
@@ -335,30 +389,108 @@ class Market(commands.Cog):
         return max(math.sqrt(variance), 0.001)
 
     @staticmethod
+    def _volume_stability(trade_count: int) -> float:
+        """Linear-with-cap scalar: 0.0 (new stock) → 1.0 (mature at MM_STABILITY_MATURITY trades)."""
+        return min(trade_count / max(MM_STABILITY_MATURITY, 1), 1.0)
+
+    @staticmethod
     def compute_fair_price(old_fair: float, estimated_revenue: float,
-                           last_revenue: float) -> float:
+                           last_revenue: float, ipo_price: float = None,
+                           weeks_of_history: int = 0,
+                           recent_trade_prices: list[float] = None,
+                           treasury: float = 0.0,
+                           total_shares: int = IPO_TOTAL_SHARES,
+                           trade_count: int = 0) -> float:
+        """Confidence-weighted fair price blend.
+
+        At low history (weeks_of_history < MM_CONFIDENCE_WEEKS) we lean heavily on
+        two anchors that are always available:
+          • book_value  = treasury / total_shares   (hard floor — real stored value)
+          • trade_fair  = avg(recent trades)         (what the market actually thinks)
+
+        As data accumulates the revenue signal (ratio-based) takes over.
+        The result is clamped to ±max_move (volume-adaptive) so no single update
+        can spike or crater the price.
+        """
+        # Volume-adaptive parameters: new stocks are reactive, mature stocks are stable
+        stability = Market._volume_stability(trade_count)
+        alpha     = MM_ALPHA_LOW    - stability * (MM_ALPHA_LOW    - MM_ALPHA_HIGH)
+        max_move  = MM_MAX_MOVE_LOW - stability * (MM_MAX_MOVE_LOW - MM_MAX_MOVE_HIGH)
+
+        # Book value floor — treasury per share is always a real lower bound
+        book_value = (treasury / total_shares) if total_shares > 0 else 0.0
+        book_value = max(book_value, 0.01)
+
+        # Trade-flow anchor: average of last N real trade prices
+        if recent_trade_prices and len(recent_trade_prices) >= 2:
+            trade_fair = sum(recent_trade_prices) / len(recent_trade_prices)
+        else:
+            trade_fair = old_fair  # no trades yet → fall back to current price
+
+        # Revenue-based signal (classic ratio approach)
         if last_revenue <= 0:
-            return old_fair
-        ratio = estimated_revenue / last_revenue
-        new_fair = old_fair * (1 + MM_ALPHA * (ratio - 1))
-        # Clamp so a single update can't move price more than MM_MAX_WEEKLY_MOVE
-        lower = old_fair * (1 - MM_MAX_WEEKLY_MOVE)
-        upper = old_fair * (1 + MM_MAX_WEEKLY_MOVE)
-        return max(lower, min(upper, new_fair))
+            if estimated_revenue <= 0:
+                revenue_fair = old_fair
+            else:
+                # No prior baseline — use treasury upkeep as the break-even reference.
+                # Earning more than upkeep → positive signal; less → negative.
+                # This prevents any revenue from spiking the price on week 1.
+                upkeep_baseline = max(treasury * MM_TREASURY_UPKEEP_RATE, 1.0)
+                ratio = estimated_revenue / upkeep_baseline
+                revenue_fair = old_fair * (1 + alpha * (ratio - 1))
+                revenue_fair = max(revenue_fair, old_fair * (1 - max_move))
+                revenue_fair = min(revenue_fair, old_fair * (1 + max_move))
+        else:
+            ratio = estimated_revenue / last_revenue
+            revenue_fair = old_fair * (1 + alpha * (ratio - 1))
+
+        # Confidence: rises linearly from 0 → 1 over MM_CONFIDENCE_WEEKS
+        confidence = min(weeks_of_history / max(MM_CONFIDENCE_WEEKS, 1), 1.0)
+
+        # Blend: low confidence → lean on book value + trade fair
+        #        high confidence → lean on revenue signal
+        blended = (
+            confidence * revenue_fair
+            + (1 - confidence) * (
+                MM_TRADE_FAIR_WEIGHT * trade_fair
+                + MM_BOOK_VALUE_WEIGHT * book_value
+            )
+        )
+
+        # Never below book value (hard floor)
+        blended = max(blended, book_value)
+
+        # Clamp to ±max_move from old_fair
+        lower = old_fair * (1 - max_move)
+        upper = old_fair * (1 + max_move)
+        return max(lower, min(upper, blended))
 
     @staticmethod
     def compute_spread_and_skew(fair_price: float, volatility: float,
                                 inventory: int, daily_volume: int,
-                                total_shares: int = 1000) -> tuple[float, float]:
+                                total_shares: int = IPO_TOTAL_SHARES,
+                                trade_count: int = 0) -> tuple[float, float]:
+        stability   = Market._volume_stability(trade_count)
+        spread_mult = MM_SPREAD_MULT_LOW - stability * (MM_SPREAD_MULT_LOW - MM_SPREAD_MULT_HIGH)
+
         volume_target = MM_TARGET_INVENTORY_PCT * max(daily_volume, 100)
         supply_target = MM_TARGET_INVENTORY_PCT * total_shares
         target_inv = max(volume_target, supply_target)
         inv_dev = (inventory - target_inv) / max(target_inv, 1)
 
         a = max(1.0, min(2.0, MM_A * (350 / max(daily_volume, 1))))
-        spread = MM_BASE_SPREAD * (a * volatility + MM_B * abs(inv_dev)) + MM_C * inv_dev ** 2
+        spread = (MM_BASE_SPREAD * spread_mult) * (a * volatility + MM_B * abs(inv_dev)) + MM_C * inv_dev ** 2
         # Spread as a fraction of fair price, minimum 0.5% of fair price
         spread = max(spread, fair_price * 0.005)
+
+        # Low-information multiplier: widen spread when there are few trades.
+        # This protects the MM from being picked off before price discovery.
+        if trade_count < MM_LOW_INFO_TRADE_THRESH:
+            info_pct = trade_count / MM_LOW_INFO_TRADE_THRESH  # 0 → 1
+            # Linearly interpolate: at 0 trades → MM_LOW_INFO_SPREAD_MULT ×; at thresh → 1×
+            low_info_mult = MM_LOW_INFO_SPREAD_MULT - info_pct * (MM_LOW_INFO_SPREAD_MULT - 1.0)
+            spread *= low_info_mult
+
         skew = -MM_K * inv_dev * fair_price
         return spread, skew
 
@@ -387,19 +519,52 @@ class Market(commands.Cog):
         days_elapsed = max((today - self._week_start()).days, 1)
         estimated_revenue = (accumulated / days_elapsed) * 7
 
-        # Update fair price
-        fair_price = self.compute_fair_price(
-            mm["fair_price"], estimated_revenue, company["last_revenue"]
+        # Count weeks of history for confidence blend
+        async with self.db.execute(
+            "SELECT COUNT(DISTINCT week_start) FROM channel_revenue WHERE channel_id = ?",
+            (channel_id,),
+        ) as cur:
+            weeks_row = await cur.fetchone()
+        weeks_of_history = weeks_row[0] if weeks_row else 0
+
+        # Recent trade prices for trade-flow anchor
+        recent_trades = await self.get_recent_trade_prices(channel_id, 20)
+
+        # Trade count drives both quote sizing (ramp) and volume-adaptive parameters
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM trades WHERE channel_id = ?", (channel_id,)
+        ) as cur:
+            trade_count = (await cur.fetchone())[0]
+
+        # Preview fair price for spread/skew computation — does NOT permanently update it.
+        # Only trade nudges (execute_trade) and weekly settlement move fair_price permanently.
+        preview_fair = self.compute_fair_price(
+            mm["fair_price"], estimated_revenue, company["last_revenue"], company["ipo_price"],
+            weeks_of_history=weeks_of_history,
+            recent_trade_prices=recent_trades,
+            treasury=company["treasury"],
+            total_shares=company["total_shares"],
+            trade_count=trade_count,
         )
-        fair_price = max(fair_price, 0.01)
+        preview_fair = max(preview_fair, 0.01)
 
         daily_volume = await self.get_daily_volume(channel_id)
         spread, skew = self.compute_spread_and_skew(
-            fair_price, volatility, mm["inventory"], daily_volume, company["total_shares"]
+            preview_fair, volatility, mm["inventory"], daily_volume,
+            company["total_shares"], trade_count=trade_count,
         )
 
-        bid = max(fair_price - spread / 2 + skew, 0.01)
-        ask = max(fair_price + spread / 2 + skew, bid + 0.01)
+        half = spread / 2
+        mid  = preview_fair + skew
+        # Bid must never exceed fair price; ask must never go below fair price.
+        # Skew shifts the mid-point but cannot push the whole quote above/below fair.
+        bid = max(min(mid - half, preview_fair), 0.01)
+        ask = max(max(mid + half, preview_fair), bid + 0.01)
+        bid = round(bid, 2)
+        ask = round(ask, 2)
+
+        ramp_pct = min(trade_count / MM_RAMP_TRADES, 1.0)
+        max_quote_qty = int(MM_RAMP_MIN_QTY + ramp_pct * (MM_RAMP_MAX_QTY - MM_RAMP_MIN_QTY))
 
         # Cancel old MM orders
         await self.cancel_mm_orders(channel_id)
@@ -407,7 +572,7 @@ class Market(commands.Cog):
         now = datetime.datetime.utcnow().isoformat()
 
         # MM buy order — only if MM has cash
-        bid_qty = min(100, int(mm["cash"] / bid)) if bid > 0 else 0
+        bid_qty = min(max_quote_qty, int(mm["cash"] / bid)) if bid > 0 else 0
         if bid_qty > 0:
             await self.db.execute(
                 "INSERT INTO orders (guild_id, channel_id, user_id, side, price, quantity, remaining, is_mm, created_at) "
@@ -416,8 +581,15 @@ class Market(commands.Cog):
                  round(bid, 2), bid_qty, bid_qty, now),
             )
 
-        # MM sell order — only if MM has shares
-        ask_qty = min(100, mm["inventory"])
+        # MM sell order — from MM inventory + unissued reserve (up to total_shares float)
+        # Unissued shares = total float minus every share already held by anyone
+        async with self.db.execute(
+            "SELECT COALESCE(SUM(quantity), 0) FROM holdings WHERE channel_id = ?",
+            (channel_id,),
+        ) as cur:
+            total_held = (await cur.fetchone())[0]
+        unissued = max(0, company["total_shares"] - total_held)
+        ask_qty = min(max_quote_qty, mm["inventory"] + unissued)
         if ask_qty > 0:
             await self.db.execute(
                 "INSERT INTO orders (guild_id, channel_id, user_id, side, price, quantity, remaining, is_mm, created_at) "
@@ -426,15 +598,12 @@ class Market(commands.Cog):
                  round(ask, 2), ask_qty, ask_qty, now),
             )
 
-        # Update state
+        # Update volatility and quote timestamp only — fair_price is NOT touched here.
+        # It moves only via trade nudges and weekly settlement.
         await self.db.execute(
-            "UPDATE mm_state SET fair_price = ?, volatility = ?, last_quote_time = ? "
+            "UPDATE mm_state SET volatility = ?, last_quote_time = ? "
             "WHERE channel_id = ?",
-            (fair_price, volatility, now, channel_id),
-        )
-        await self.db.execute(
-            "UPDATE companies SET fair_price = ? WHERE channel_id = ?",
-            (fair_price, channel_id),
+            (volatility, now, channel_id),
         )
         await self.db.commit()
 
@@ -459,8 +628,10 @@ class Market(commands.Cog):
 
         # Seller receives cash
         if seller_id == MM_USER_ID:
+            # Inventory may dip below zero when selling from the unissued reserve;
+            # clamp at 0 — negative inventory has no meaning (reserve shares aren't "owed").
             await self.db.execute(
-                "UPDATE mm_state SET cash = cash + ?, inventory = inventory - ? "
+                "UPDATE mm_state SET cash = cash + ?, inventory = MAX(0, inventory - ?) "
                 "WHERE channel_id = ?", (cost, quantity, channel_id),
             )
         else:
@@ -473,7 +644,14 @@ class Market(commands.Cog):
         # Nudge fair price toward trade price for organic movement
         mm = await self.get_mm_state(channel_id)
         if mm:
-            nudged = mm["fair_price"] + MM_TRADE_IMPACT * (price - mm["fair_price"])
+            # COUNT fires after record_trade so the new trade is already included
+            async with self.db.execute(
+                "SELECT COUNT(*) FROM trades WHERE channel_id = ?", (channel_id,)
+            ) as cur:
+                trade_count = (await cur.fetchone())[0]
+            stability    = self._volume_stability(trade_count)
+            trade_impact = MM_TRADE_IMPACT_LOW - stability * (MM_TRADE_IMPACT_LOW - MM_TRADE_IMPACT_HIGH)
+            nudged = mm["fair_price"] + trade_impact * (price - mm["fair_price"])
             await self.db.execute(
                 "UPDATE mm_state SET fair_price = ? WHERE channel_id = ?",
                 (nudged, channel_id),
@@ -482,6 +660,34 @@ class Market(commands.Cog):
                 "UPDATE companies SET fair_price = ? WHERE channel_id = ?",
                 (nudged, channel_id),
             )
+
+        # Absorb all unissued shares into MM inventory after every trade.
+        # Unissued = total float minus every share currently held by a player.
+        # This keeps mm_state.inventory meaningful for spread/skew and bid sizing.
+        company = await self.get_company(channel_id)
+        if company:
+            async with self.db.execute(
+                "SELECT COALESCE(SUM(quantity), 0) FROM holdings "
+                "WHERE channel_id = ? AND user_id != ?",
+                (channel_id, MM_USER_ID),
+            ) as cur:
+                player_held = (await cur.fetchone())[0]
+            unissued = max(0, company["total_shares"] - player_held)
+            # Re-read current mm inventory (may have just changed above)
+            mm_now = await self.get_mm_state(channel_id)
+            if mm_now is not None:
+                new_inv = mm_now["inventory"] + unissued
+                await self.db.execute(
+                    "UPDATE mm_state SET inventory = ? WHERE channel_id = ?",
+                    (new_inv, channel_id),
+                )
+                # Keep MM holdings row in sync
+                await self.db.execute(
+                    """INSERT INTO holdings (user_id, channel_id, quantity, avg_cost)
+                       VALUES (?, ?, ?, 0)
+                       ON CONFLICT(user_id, channel_id) DO UPDATE SET quantity = ?""",
+                    (MM_USER_ID, channel_id, new_inv, new_inv),
+                )
 
     async def match_orders(self, channel_id: int, new_order_id: int) -> list[dict]:
         """Match a newly placed order against the book. Returns list of fills."""
@@ -497,12 +703,14 @@ class Market(commands.Cog):
         fills = []
 
         if side == "buy":
-            # Match against sells: lowest price first, then oldest
+            # Match against sells: lowest price first, then oldest.
+            # Exclude self-trades (same user_id on both sides).
             async with self.db.execute(
                 "SELECT id, user_id, price, remaining FROM orders "
                 "WHERE channel_id = ? AND side = 'sell' AND price <= ? AND id != ? "
+                "AND user_id != ? "
                 "ORDER BY price ASC, created_at ASC",
-                (channel_id, price, order_id),
+                (channel_id, price, order_id, user_id),
             ) as cur:
                 asks = await cur.fetchall()
 
@@ -528,12 +736,14 @@ class Market(commands.Cog):
                 fills.append({"price": fill_price, "quantity": fill_qty, "counterparty": seller_id})
 
         else:  # sell
-            # Match against buys: highest price first, then oldest
+            # Match against buys: highest price first, then oldest.
+            # Exclude self-trades (same user_id on both sides).
             async with self.db.execute(
                 "SELECT id, user_id, price, remaining FROM orders "
                 "WHERE channel_id = ? AND side = 'buy' AND price >= ? AND id != ? "
+                "AND user_id != ? "
                 "ORDER BY price DESC, created_at ASC",
-                (channel_id, price, order_id),
+                (channel_id, price, order_id, user_id),
             ) as cur:
                 bids = await cur.fetchall()
 
@@ -620,11 +830,12 @@ class Market(commands.Cog):
         # Compute incremental weighted contribution
         delta = compute_weighted_chars(new_total) - compute_weighted_chars(old_chars)
 
-        # Update char count
+        # Update char count and message count
         await self.db.execute(
-            """INSERT INTO user_daily_chars (user_id, channel_id, date, char_count)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(user_id, channel_id, date) DO UPDATE SET char_count = char_count + ?""",
+            """INSERT INTO user_daily_chars (user_id, channel_id, date, char_count, message_count)
+               VALUES (?, ?, ?, ?, 1)
+               ON CONFLICT(user_id, channel_id, date) DO UPDATE
+               SET char_count = char_count + ?, message_count = message_count + 1""",
             (user_id, channel_id, today, char_count, char_count),
         )
 
@@ -653,12 +864,27 @@ class Market(commands.Cog):
             row = await cur.fetchone()
         accumulated = row[0] if row else 0.0
 
-        # Apply small random factor
-        actual_revenue = accumulated * random.uniform(0.95, 1.05)
+        # Compute weekly costs: average message length × message count × cost factor.
+        # This represents operational overhead — channels with longer, quality messages
+        # have higher costs but also higher revenue (net keeps growth realistic).
+        async with self.db.execute(
+            "SELECT COALESCE(SUM(char_count), 0), COALESCE(SUM(message_count), 0) "
+            "FROM user_daily_chars WHERE channel_id = ? AND date >= ?",
+            (channel_id, week_start),
+        ) as cur:
+            stats_row = await cur.fetchone()
+        total_chars_week = stats_row[0] if stats_row else 0
+        total_msgs_week = stats_row[1] if stats_row else 0
 
-        # Compute dividends
+        avg_msg_len = (total_chars_week / total_msgs_week) if total_msgs_week > 0 else 0
+        weekly_costs = avg_msg_len * total_msgs_week * MM_COST_PER_AVG_CHAR
+        gross_revenue = accumulated * random.uniform(0.95, 1.05)
+        actual_revenue = max(0.0, gross_revenue - weekly_costs)
+
+        # Split revenue into dividends and retained earnings
         dividend_pct = await self.get_dividend_pct(company["guild_id"])
         dividends_total = actual_revenue * dividend_pct
+        retained = actual_revenue * (1 - dividend_pct)
 
         # Get all holders (excluding MM)
         async with self.db.execute(
@@ -668,20 +894,25 @@ class Market(commands.Cog):
         ) as cur:
             holders = await cur.fetchall()
 
-        # Total shares held by players
+        # Fix: divide by total_player_shares so no dividend money is destroyed
         total_player_shares = sum(h[1] for h in holders)
         if total_player_shares > 0 and dividends_total > 0:
             for holder_id, qty in holders:
-                share_pct = qty / company["total_shares"]
+                share_pct = qty / total_player_shares
                 payout = int(dividends_total * share_pct)
                 if payout > 0:
                     await self.ensure_economy_row(holder_id)
                     await self.update_cash(holder_id, payout)
 
+        # Accumulate retained earnings into treasury, minus weekly upkeep.
+        # Upkeep drains the treasury even with zero activity so dead channels decay.
+        upkeep = company["treasury"] * MM_TREASURY_UPKEEP_RATE
+        new_treasury = max(0.0, company["treasury"] - upkeep + retained)
+
         # Update company state
         await self.db.execute(
-            "UPDATE companies SET last_revenue = ? WHERE channel_id = ?",
-            (actual_revenue, channel_id),
+            "UPDATE companies SET last_revenue = ?, treasury = ? WHERE channel_id = ?",
+            (actual_revenue, new_treasury, channel_id),
         )
         await self.db.execute(
             "UPDATE channel_revenue SET last_revenue = ? "
@@ -690,12 +921,37 @@ class Market(commands.Cog):
         )
         await self.db.commit()
 
-        # Update fair price based on actual revenue
+        # Update fair price: confidence-weighted blend + treasury growth boost
         mm = await self.get_mm_state(channel_id)
-        if mm and company["last_revenue"] > 0:
+        if mm:
+            async with self.db.execute(
+                "SELECT COUNT(DISTINCT week_start) FROM channel_revenue WHERE channel_id = ?",
+                (channel_id,),
+            ) as cur:
+                wh_row = await cur.fetchone()
+            weeks_of_history = wh_row[0] if wh_row else 0
+            recent_trades = await self.get_recent_trade_prices(channel_id, 20)
+            async with self.db.execute(
+                "SELECT COUNT(*) FROM trades WHERE channel_id = ?", (channel_id,)
+            ) as cur:
+                trade_count = (await cur.fetchone())[0]
+
             new_fair = self.compute_fair_price(
-                mm["fair_price"], actual_revenue, company["last_revenue"]
+                mm["fair_price"], actual_revenue, company["last_revenue"], company["ipo_price"],
+                weeks_of_history=weeks_of_history,
+                recent_trade_prices=recent_trades,
+                treasury=new_treasury,
+                total_shares=company["total_shares"],
+                trade_count=trade_count,
             )
+            # Treasury growth boost: only fires when treasury actually grew this week.
+            # A shrinking treasury means the channel isn't earning enough — no reward.
+            market_cap = new_fair * company["total_shares"]
+            treasury_grew = retained > upkeep
+            if market_cap > 0 and new_treasury > 0 and treasury_grew:
+                treasury_boost = (new_treasury / market_cap) * MM_TREASURY_GROWTH_RATE
+                new_fair = new_fair * (1 + treasury_boost)
+            new_fair = max(new_fair, 0.01)
             await self.db.execute(
                 "UPDATE mm_state SET fair_price = ? WHERE channel_id = ?",
                 (new_fair, channel_id),
@@ -708,15 +964,20 @@ class Market(commands.Cog):
 
         await self.refresh_mm_quotes(channel_id)
 
-        # Announce dividends if there's a channel we can post to
+        # Announce weekly report
         channel = self.bot.get_channel(channel_id)
-        if channel and dividends_total > 0:
+        if channel:
             embed = discord.Embed(
                 title=f"Weekly Report — {company['name']}",
                 color=discord.Color.gold(),
             )
-            embed.add_field(name="Revenue", value=f"{actual_revenue:,.0f} \U0001f338")
+            embed.add_field(name="Gross Revenue", value=f"{gross_revenue:,.0f} \U0001f338")
+            embed.add_field(name="Costs", value=f"{weekly_costs:,.0f} \U0001f338")
+            embed.add_field(name="Net Revenue", value=f"{actual_revenue:,.0f} \U0001f338")
             embed.add_field(name="Dividends Paid", value=f"{dividends_total:,.0f} \U0001f338")
+            embed.add_field(name="Retained", value=f"{retained:,.0f} \U0001f338")
+            embed.add_field(name="Upkeep", value=f"-{upkeep:,.0f} \U0001f338")
+            embed.add_field(name="Treasury", value=f"{new_treasury:,.0f} \U0001f338")
             embed.add_field(name="Shareholders", value=str(len(holders)))
             try:
                 await channel.send(embed=embed)
@@ -768,21 +1029,24 @@ class Market(commands.Cog):
 
         now = datetime.datetime.utcnow().isoformat()
 
+        ipo_treasury = float(IPO_TOTAL_SHARES * price)  # proceeds of the initial float
         await self.db.execute(
             "INSERT INTO companies (channel_id, guild_id, name, ipo_price, fair_price, "
-            "last_revenue, total_shares, dividend_pct, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 0, ?, 0.10, ?)",
+            "last_revenue, total_shares, dividend_pct, created_at, treasury) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?, 0.10, ?, ?)",
             (channel.id, ctx.guild.id, channel.name, price, price,
-             IPO_TOTAL_SHARES, now),
+             IPO_TOTAL_SHARES, now, ipo_treasury),
         )
+        # MM starts with the full float — unissued shares are absorbed immediately
+        # at IPO since no players hold anything yet.
         await self.db.execute(
             "INSERT INTO mm_state (channel_id, cash, inventory, fair_price, volatility, last_quote_time) "
             "VALUES (?, ?, ?, ?, 0.01, ?)",
-            (channel.id, MM_STARTING_CASH, MM_STARTING_SHARES, price, now),
+            (channel.id, MM_STARTING_CASH, IPO_TOTAL_SHARES, price, now),
         )
         await self.db.execute(
             "INSERT INTO holdings (user_id, channel_id, quantity, avg_cost) VALUES (?, ?, ?, ?)",
-            (MM_USER_ID, channel.id, MM_STARTING_SHARES, price),
+            (MM_USER_ID, channel.id, IPO_TOTAL_SHARES, price),
         )
 
         # Record initial price
@@ -802,6 +1066,7 @@ class Market(commands.Cog):
         embed.add_field(name="IPO Price", value=f"{price:,.2f} \U0001f338")
         embed.add_field(name="Total Shares", value=f"{IPO_TOTAL_SHARES:,}")
         embed.add_field(name="Market Cap", value=f"{price * IPO_TOTAL_SHARES:,.0f} \U0001f338")
+        embed.add_field(name="Starting Treasury", value=f"{ipo_treasury:,.0f} \U0001f338", inline=False)
         embed.set_footer(text=f"Use {ctx.prefix}orderbook to see the order book · {ctx.prefix}mbuy to purchase shares")
         await ctx.send(embed=embed)
 
@@ -937,21 +1202,30 @@ class Market(commands.Cog):
             )
             return
 
-        # Estimate worst-case cost (highest ask * shares)
+        # Walk the ask book cheapest-first to compute the true worst-case cost
         async with self.db.execute(
-            "SELECT MAX(price) FROM orders WHERE channel_id = ? AND side = 'sell'",
+            "SELECT price, remaining FROM orders "
+            "WHERE channel_id = ? AND side = 'sell' "
+            "ORDER BY price ASC, created_at ASC",
             (channel.id,),
         ) as cur:
-            row = await cur.fetchone()
-        worst_price = row[0] if row[0] else 0
-        worst_cost = int(worst_price * shares)
+            ask_levels = await cur.fetchall()
+
+        worst_cost = 0
+        needed = shares
+        for ask_price, ask_qty in ask_levels:
+            take = min(needed, ask_qty)
+            worst_cost += int(ask_price * take)
+            needed -= take
+            if needed <= 0:
+                break
 
         cash = await self.get_cash(ctx.author.id)
         if cash < worst_cost:
-            await ctx.send(f"You may need up to **{worst_cost:,}** \U0001f338 but only have **{cash:,}** \U0001f338.")
+            await ctx.send(f"You need **{worst_cost:,}** \U0001f338 but only have **{cash:,}** \U0001f338.")
             return
 
-        # Reserve worst-case cash
+        # Reserve true worst-case cash
         await self.ensure_economy_row(ctx.author.id)
         await self.update_cash(ctx.author.id, -worst_cost)
         await self.db.commit()
@@ -1431,6 +1705,7 @@ class Market(commands.Cog):
                 f"Last Revenue: {company['last_revenue']:,.0f} \U0001f338\n"
                 f"This Week Revenue: {accumulated:,.0f} \U0001f338\n"
                 f"Est. Weekly: {estimated_weekly:,.0f} \U0001f338\n"
+                f"Treasury: {company['treasury']:,.0f} \U0001f338\n"
                 f"Dividend: {company['dividend_pct']*100:.0f}%"
             ),
             inline=True,
