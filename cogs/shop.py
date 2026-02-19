@@ -1,7 +1,7 @@
 import discord
 import aiosqlite
 from discord.ext import commands
-from utils import is_guild_owner, check_channel_allowed
+from utils import is_guild_owner, check_channel_allowed, log_tx
 
 DB_PATH = "data/economy.db"
 
@@ -284,6 +284,7 @@ class Shop(commands.Cog):
             "UPDATE economy SET cash = cash - ? WHERE user_id = ?",
             (price, ctx.author.id),
         )
+        await log_tx(self.db, ctx.author.id, -price, "shop:buy")
 
         # Apply item
         if item_type == "role" and role_id:

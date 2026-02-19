@@ -220,8 +220,20 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         inline=False,
     )
     user_embed.add_field(
+        name="Acrophobia",
+        value=(
+            f"`{p}acro` — Start a free Acrophobia game\n"
+            f"`{p}acro <bet>` — Play with a bet (winner takes the pot)\n"
+            f"  Players invent a phrase for random letters (90s), then vote (30s)"
+        ),
+        inline=False,
+    )
+    user_embed.add_field(
         name="Other",
-        value=f"`{p}ping` — Pong!\n`{p}help [command]` — Show this menu or details for a command",
+        value=(
+            f"`{p}remind <time> [message]` — Set a reminder (e.g. `10m`, `2h30m`)\n"
+            f"`{p}ping` — Pong!\n`{p}help [command]` — Show this menu or details for a command"
+        ),
         inline=False,
     )
 
@@ -257,6 +269,7 @@ async def setup_hook():
     await bot.load_extension("cogs.market")
     await bot.load_extension("cogs.missions")
     await bot.load_extension("cogs.waifu")
+    await bot.load_extension("cogs.acro")
 
 
 @bot.event

@@ -5,7 +5,7 @@ import datetime
 import aiosqlite
 import discord
 from discord.ext import commands, tasks
-from utils import is_guild_owner, check_channel_allowed
+from utils import is_guild_owner, check_channel_allowed, log_tx
 
 try:
     import matplotlib
@@ -248,11 +248,13 @@ class Market(commands.Cog):
             row = await cur.fetchone()
         return row[0] if row else 0
 
-    async def update_cash(self, user_id: int, amount: int):
+    async def update_cash(self, user_id: int, amount: int, source: str = "market",
+                          counterpart_id: int = None):
         await self.db.execute(
             "UPDATE economy SET cash = cash + ? WHERE user_id = ?",
             (amount, user_id),
         )
+        await log_tx(self.db, user_id, amount, source, counterpart_id)
 
     async def ensure_economy_row(self, user_id: int):
         await self.db.execute(
@@ -636,7 +638,7 @@ class Market(commands.Cog):
             )
         else:
             # Seller's shares were already reserved on order placement — just give cash
-            await self.update_cash(seller_id, int(cost))
+            await self.update_cash(seller_id, int(cost), "market:sell", buyer_id)
 
         await self.record_trade(channel_id, buyer_id, seller_id, price, quantity)
         await self.record_price(channel_id, price)
@@ -897,7 +899,7 @@ class Market(commands.Cog):
                 payout = int(dividends_total * share_pct)
                 if payout > 0:
                     await self.ensure_economy_row(holder_id)
-                    await self.update_cash(holder_id, payout)
+                    await self.update_cash(holder_id, payout, "market:dividend")
 
         # Accumulate retained earnings into treasury, minus weekly upkeep.
         # Upkeep drains the treasury even with zero activity so dead channels decay.
@@ -1088,7 +1090,7 @@ class Market(commands.Cog):
 
         # Reserve cash
         await self.ensure_economy_row(ctx.author.id)
-        await self.update_cash(ctx.author.id, -cost)
+        await self.update_cash(ctx.author.id, -cost, "market:limitbuy")
         await self.db.commit()
 
         order_id, fills = await self.place_limit_order(
@@ -1104,7 +1106,7 @@ class Market(commands.Cog):
             reserved_for_filled = price * filled_qty
             savings = int(reserved_for_filled - total_cost_actual)
             if savings > 0:
-                await self.update_cash(ctx.author.id, savings)
+                await self.update_cash(ctx.author.id, savings, "market:limitbuy_refund")
                 await self.db.commit()
 
         embed = discord.Embed(
@@ -1222,7 +1224,7 @@ class Market(commands.Cog):
 
         # Reserve true worst-case cash
         await self.ensure_economy_row(ctx.author.id)
-        await self.update_cash(ctx.author.id, -worst_cost)
+        await self.update_cash(ctx.author.id, -worst_cost, "market:mbuy")
         await self.db.commit()
 
         order_id, fills = await self.place_limit_order(
@@ -1243,7 +1245,7 @@ class Market(commands.Cog):
         # Refund difference between reserved and actual cost
         refund = worst_cost - int(actual_cost)
         if refund > 0:
-            await self.update_cash(ctx.author.id, refund)
+            await self.update_cash(ctx.author.id, refund, "market:mbuy_refund")
             await self.db.commit()
 
         if not fills:
@@ -1347,7 +1349,7 @@ class Market(commands.Cog):
 
         if side == "buy":
             refund = int(price * remaining)
-            await self.update_cash(user_id, refund)
+            await self.update_cash(user_id, refund, "market:cancel_refund")
         else:
             # Return shares
             await self.update_holdings(user_id, channel_id, remaining)

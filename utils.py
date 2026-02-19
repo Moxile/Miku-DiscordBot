@@ -1,7 +1,22 @@
+import datetime
+import aiosqlite
 from discord.ext import commands
 
 PREFIX = "."
 VALID_CATEGORIES = {"economy", "gambling", "shop", "market", "missions", "waifu"}
+
+DB_PATH = "data/economy.db"
+
+
+async def log_tx(db: aiosqlite.Connection, user_id: int, amount: int, source: str,
+                 counterpart_id: int = None):
+    """Log a cash transaction. amount is signed (+ credit, - debit)."""
+    now = datetime.datetime.utcnow().isoformat()
+    await db.execute(
+        "INSERT INTO transactions (user_id, amount, source, counterpart_id, timestamp) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (user_id, amount, source, counterpart_id, now),
+    )
 
 
 def is_guild_owner():

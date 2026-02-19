@@ -1,7 +1,7 @@
 import discord
 import aiosqlite
 from discord.ext import commands
-from utils import is_guild_owner, check_channel_allowed
+from utils import is_guild_owner, check_channel_allowed, log_tx
 
 DB_PATH = "data/economy.db"
 
@@ -279,6 +279,7 @@ class Missions(commands.Cog):
             "UPDATE economy SET cash = cash - ? WHERE user_id = ?",
             (amount, ctx.author.id),
         )
+        await log_tx(self.db, ctx.author.id, -amount, "mission:fund")
 
         # Update mission funded amount
         new_funded = funded + amount

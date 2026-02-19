@@ -1,9 +1,11 @@
+import asyncio
 import random
+import re
 import time
 import discord
 import aiosqlite
 from discord.ext import commands
-from utils import is_guild_owner, check_channel_allowed
+from utils import is_guild_owner, check_channel_allowed, log_tx
 
 DB_PATH = "data/economy.db"
 DEFAULT_WORK_COOLDOWN = 3600
@@ -42,6 +44,16 @@ class Economy(commands.Cog):
                 work_cooldown INTEGER DEFAULT 3600,
                 work_min INTEGER DEFAULT 50,
                 work_max INTEGER DEFAULT 300
+            )"""
+        )
+        await self.db.execute(
+            """CREATE TABLE IF NOT EXISTS transactions (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id        INTEGER NOT NULL,
+                amount         INTEGER NOT NULL,
+                source         TEXT NOT NULL,
+                counterpart_id INTEGER,
+                timestamp      TEXT NOT NULL
             )"""
         )
         await self.db.commit()
@@ -127,6 +139,7 @@ class Economy(commands.Cog):
             "UPDATE economy SET cash = cash - ?, bank = bank + ? WHERE user_id = ?",
             (amount, amount, ctx.author.id),
         )
+        await log_tx(self.db, ctx.author.id, -amount, "deposit")
         await self.db.commit()
 
         embed = discord.Embed(
@@ -163,6 +176,7 @@ class Economy(commands.Cog):
             "UPDATE economy SET cash = cash + ?, bank = bank - ? WHERE user_id = ?",
             (amount, amount, ctx.author.id),
         )
+        await log_tx(self.db, ctx.author.id, amount, "withdraw")
         await self.db.commit()
 
         embed = discord.Embed(
@@ -203,6 +217,7 @@ class Economy(commands.Cog):
             "UPDATE economy SET cash = cash + ? WHERE user_id = ?",
             (earnings, ctx.author.id),
         )
+        await log_tx(self.db, ctx.author.id, earnings, "work")
         await self.db.commit()
         self.work_cooldowns[key] = time.time()
 
@@ -295,6 +310,8 @@ class Economy(commands.Cog):
             "UPDATE economy SET cash = cash + ? WHERE user_id = ?",
             (amount, member.id),
         )
+        await log_tx(self.db, ctx.author.id, -amount, "give", member.id)
+        await log_tx(self.db, member.id, amount, "give", ctx.author.id)
         await self.db.commit()
 
         embed = discord.Embed(
@@ -319,6 +336,7 @@ class Economy(commands.Cog):
             "UPDATE economy SET cash = cash + ? WHERE user_id = ?",
             (amount, member.id),
         )
+        await log_tx(self.db, member.id, amount, "admin:add")
         await self.db.commit()
 
         embed = discord.Embed(
@@ -348,6 +366,7 @@ class Economy(commands.Cog):
             "UPDATE economy SET cash = cash - ? WHERE user_id = ?",
             (amount, member.id),
         )
+        await log_tx(self.db, member.id, -amount, "admin:take")
         await self.db.commit()
 
         embed = discord.Embed(
@@ -357,6 +376,89 @@ class Economy(commands.Cog):
         )
         embed.set_footer(text=f"By {ctx.author}")
         await ctx.send(embed=embed)
+
+    # --- Currency Transactions ---
+
+    @commands.command(aliases=["curtrs"])
+    async def currencytransactions(self, ctx: commands.Context, member: discord.Member = None):
+        """View the last 10 cash transactions. Usage: .curtrs [@user]"""
+        target = member or ctx.author
+        async with self.db.execute(
+            "SELECT amount, source, counterpart_id, timestamp FROM transactions "
+            "WHERE user_id = ? ORDER BY id DESC LIMIT 10",
+            (target.id,),
+        ) as cur:
+            rows = await cur.fetchall()
+
+        if not rows:
+            who = "You have" if target == ctx.author else f"{target.display_name} has"
+            await ctx.send(f"{who} no recorded transactions yet.")
+            return
+
+        lines = []
+        for amount, source, counterpart_id, timestamp in rows:
+            sign = "+" if amount >= 0 else ""
+            ts = timestamp[:16].replace("T", " ")
+            counterpart = ""
+            if counterpart_id:
+                m = ctx.guild.get_member(counterpart_id)
+                counterpart = f" ↔ {m.display_name if m else f'User {counterpart_id}'}"
+            lines.append(f"`{ts}` **{sign}{amount:,}** \U0001f338 — {source}{counterpart}")
+
+        who = "Your" if target == ctx.author else f"{target.display_name}'s"
+        embed = discord.Embed(
+            title=f"{who} Last Transactions",
+            description="\n".join(lines),
+            color=discord.Color.blurple(),
+        )
+        await ctx.send(embed=embed)
+
+    # --- Remind ---
+
+    @commands.command()
+    async def remind(self, ctx: commands.Context, time_str: str, *, message: str = None):
+        """Set a reminder. Usage: .remind 10m, .remind 2h30m, .remind 1h30m45s [message]"""
+        total_seconds = 0
+        for value, unit in re.findall(r"(\d+)\s*([dhms])", time_str.lower()):
+            value = int(value)
+            if unit == "d":
+                total_seconds += value * 86400
+            elif unit == "h":
+                total_seconds += value * 3600
+            elif unit == "m":
+                total_seconds += value * 60
+            elif unit == "s":
+                total_seconds += value
+
+        if total_seconds <= 0:
+            await ctx.send("Invalid time format. Examples: `10m`, `2h`, `1h30m`, `90s`.")
+            return
+        if total_seconds > 7 * 86400:
+            await ctx.send("Reminders can be at most 7 days.")
+            return
+
+        # Format a human-readable duration
+        remaining = total_seconds
+        parts = []
+        for label, secs in (("d", 86400), ("h", 3600), ("m", 60), ("s", 1)):
+            if remaining >= secs:
+                parts.append(f"{remaining // secs}{label}")
+                remaining %= secs
+        duration = " ".join(parts)
+
+        await ctx.send(f"Got it! I'll remind you in **{duration}**{f': *{message}*' if message else ''}.")
+
+        await asyncio.sleep(total_seconds)
+
+        mention = ctx.author.mention
+        content = f"{mention} Reminder!" + (f" {message}" if message else "")
+        try:
+            await ctx.send(content)
+        except discord.HTTPException:
+            try:
+                await ctx.author.send(content)
+            except discord.Forbidden:
+                pass
 
     # --- Error Handler ---
 

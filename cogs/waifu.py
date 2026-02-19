@@ -2,7 +2,7 @@ import datetime
 import discord
 import aiosqlite
 from discord.ext import commands, tasks
-from utils import is_guild_owner, check_channel_allowed
+from utils import is_guild_owner, check_channel_allowed, log_tx
 
 DB_PATH = "data/economy.db"
 
@@ -164,21 +164,26 @@ class Waifu(commands.Cog):
             row = await cur.fetchone()
         return row[0] if row else 0
 
-    async def deduct_cash(self, user_id: int, amount: int) -> bool:
+    async def deduct_cash(self, user_id: int, amount: int, source: str = "waifu",
+                          counterpart_id: int = None) -> bool:
         """Atomically deduct cash. Returns True on success."""
         await self.ensure_economy_row(user_id)
         cursor = await self.db.execute(
             "UPDATE economy SET cash = cash - ? WHERE user_id = ? AND cash >= ?",
             (amount, user_id, amount),
         )
+        if cursor.rowcount > 0:
+            await log_tx(self.db, user_id, -amount, source, counterpart_id)
         return cursor.rowcount > 0
 
-    async def add_cash(self, user_id: int, amount: int):
+    async def add_cash(self, user_id: int, amount: int, source: str = "waifu",
+                       counterpart_id: int = None):
         await self.ensure_economy_row(user_id)
         await self.db.execute(
             "UPDATE economy SET cash = cash + ? WHERE user_id = ?",
             (amount, user_id),
         )
+        await log_tx(self.db, user_id, amount, source, counterpart_id)
 
     def calculate_claim_price(self, profile: dict, settings: dict, claimer_id: int) -> int:
         price = profile["value"]
@@ -316,7 +321,7 @@ class Waifu(commands.Cog):
         price = self.calculate_claim_price(target_profile, settings, ctx.author.id)
 
         # Deduct cash atomically
-        if not await self.deduct_cash(ctx.author.id, price):
+        if not await self.deduct_cash(ctx.author.id, price, "waifu:claim", member.id):
             cash = await self.get_cash(ctx.author.id)
             await ctx.send(
                 f"You need **{price:,}** \U0001f338 but only have **{cash:,}** \U0001f338."
@@ -469,13 +474,13 @@ class Waifu(commands.Cog):
             return
 
         # Deduct cash
-        if not await self.deduct_cash(ctx.author.id, amount):
+        if not await self.deduct_cash(ctx.author.id, amount, "waifu:gift", member.id):
             cash = await self.get_cash(ctx.author.id)
             await ctx.send(f"You only have **{cash:,}** \U0001f338 on hand.")
             return
 
         # Add cash to recipient
-        await self.add_cash(member.id, amount)
+        await self.add_cash(member.id, amount, "waifu:gift", ctx.author.id)
 
         guild_id = ctx.guild.id
         author_profile = await self.get_profile(guild_id, ctx.author.id)
@@ -585,14 +590,14 @@ class Waifu(commands.Cog):
         ) as cur:
             old = await cur.fetchone()
         if old:
-            await self.add_cash(ctx.author.id, old[0])
+            await self.add_cash(ctx.author.id, old[0], "waifu:propose_refund")
             await self.db.execute(
                 "DELETE FROM waifu_proposals WHERE guild_id = ? AND proposer_id = ?",
                 (guild_id, ctx.author.id),
             )
 
         # Deduct fee
-        if not await self.deduct_cash(ctx.author.id, fee):
+        if not await self.deduct_cash(ctx.author.id, fee, "waifu:propose"):
             cash = await self.get_cash(ctx.author.id)
             await ctx.send(
                 f"You need **{fee:,}** \U0001f338 but only have **{cash:,}** \U0001f338."
@@ -643,7 +648,7 @@ class Waifu(commands.Cog):
         # Check expiry
         if (now - proposed_dt).total_seconds() > 86400:
             # Refund proposer and delete
-            await self.add_cash(proposer_id, fee)
+            await self.add_cash(proposer_id, fee, "waifu:propose_refund")
             await self.db.execute(
                 "DELETE FROM waifu_proposals WHERE guild_id = ? AND target_id = ?",
                 (guild_id, ctx.author.id),
@@ -653,7 +658,7 @@ class Waifu(commands.Cog):
             return
 
         # Deduct fee from acceptor
-        if not await self.deduct_cash(ctx.author.id, fee):
+        if not await self.deduct_cash(ctx.author.id, fee, "waifu:accept"):
             cash = await self.get_cash(ctx.author.id)
             await ctx.send(
                 f"You need **{fee:,}** \U0001f338 to accept but only have **{cash:,}** \U0001f338."

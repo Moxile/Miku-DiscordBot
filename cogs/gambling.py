@@ -3,7 +3,7 @@ import asyncio
 import discord
 import aiosqlite
 from discord.ext import commands
-from utils import is_guild_owner, check_channel_allowed, PREFIX
+from utils import is_guild_owner, check_channel_allowed, PREFIX, log_tx
 
 DB_PATH = "data/economy.db"
 
@@ -244,12 +244,14 @@ class Gambling(commands.Cog):
             row = await cursor.fetchone()
         return row[0] if row else 0
 
-    async def update_cash(self, user_id: int, amount: int):
+    async def update_cash(self, user_id: int, amount: int, source: str = "gambling",
+                          counterpart_id: int = None):
         """Add (positive) or subtract (negative) cash from a user."""
         await self.db.execute(
             "UPDATE economy SET cash = cash + ? WHERE user_id = ?",
             (amount, user_id),
         )
+        await log_tx(self.db, user_id, amount, source, counterpart_id)
         await self.db.commit()
 
     async def validate_bet(self, ctx: commands.Context, bet: int) -> bool:
@@ -318,14 +320,14 @@ class Gambling(commands.Cog):
             if won:
                 winnings = int(bet * settings["coinflip_multiplier"])
                 profit = winnings - bet
-                await self.update_cash(ctx.author.id, profit)
+                await self.update_cash(ctx.author.id, profit, "coinflip:win")
                 embed = discord.Embed(
                     title=f"Coin Flip — {result_name}!",
                     description=f"You bet on **{side_name}** and won **{winnings:,}** \U0001f338! (Profit: {profit:,} \U0001f338)",
                     color=discord.Color.green(),
                 )
             else:
-                await self.update_cash(ctx.author.id, -bet)
+                await self.update_cash(ctx.author.id, -bet, "coinflip:loss")
                 embed = discord.Embed(
                     title=f"Coin Flip — {result_name}!",
                     description=f"You bet on **{side_name}** and lost **{bet:,}** \U0001f338.",
@@ -361,7 +363,7 @@ class Gambling(commands.Cog):
         total_won = int(wins * bet * settings["coinflip_multiplier"])
         net = total_won - total_bet
 
-        await self.update_cash(ctx.author.id, net)
+        await self.update_cash(ctx.author.id, net, "coinflip:net")
 
         color = discord.Color.green() if net >= 0 else discord.Color.red()
         sign = "+" if net >= 0 else "-"
@@ -444,7 +446,7 @@ class Gambling(commands.Cog):
             return
 
         # Deduct buy-in from starter
-        await self.update_cash(ctx.author.id, -bet)
+        await self.update_cash(ctx.author.id, -bet, "russianroulette:buyin")
 
         self.rr_games[channel_id] = {
             "bet": bet,
@@ -475,7 +477,7 @@ class Gambling(commands.Cog):
         players = game["players"]
         if len(players) < 2:
             # Refund the only player
-            await self.update_cash(players[0].id, bet)
+            await self.update_cash(players[0].id, bet, "russianroulette:refund")
             del self.rr_games[channel_id]
             await ctx.send("Not enough players joined. Game cancelled, buy-in refunded.")
             return
@@ -505,7 +507,7 @@ class Gambling(commands.Cog):
             return
 
         # Deduct buy-in
-        await self.update_cash(ctx.author.id, -bet)
+        await self.update_cash(ctx.author.id, -bet, "russianroulette:buyin")
         game["players"].append(ctx.author)
 
         player_list = "\n".join(
@@ -560,7 +562,7 @@ class Gambling(commands.Cog):
 
         # Winner
         winner = players[0]
-        await self.update_cash(winner.id, pot)
+        await self.update_cash(winner.id, pot, "russianroulette:win")
 
         elim_list = "\n".join(
             f"{i+1}. ~~{p.display_name}~~" for i, p in enumerate(eliminated)
@@ -626,7 +628,7 @@ class Gambling(commands.Cog):
         if not await self.validate_bet(ctx, bet):
             return
 
-        await self.update_cash(ctx.author.id, -bet)
+        await self.update_cash(ctx.author.id, -bet, "blackjack:bet")
 
         deck = new_deck()
         player_hand = [deck.pop(), deck.pop()]
@@ -719,7 +721,7 @@ class Gambling(commands.Cog):
             await ctx.send(f"You need **{bet:,}** \U0001f338 more to double down but only have **{cash:,}** \U0001f338.")
             return
 
-        await self.update_cash(ctx.author.id, -bet)
+        await self.update_cash(ctx.author.id, -bet, "blackjack:double")
         game["bets"][idx] = bet * 2
         game["hands"][idx].append(game["deck"].pop())
 
@@ -758,7 +760,7 @@ class Gambling(commands.Cog):
             await ctx.send(f"You need **{bet:,}** \U0001f338 more to split but only have **{cash:,}** \U0001f338.")
             return
 
-        await self.update_cash(ctx.author.id, -bet)
+        await self.update_cash(ctx.author.id, -bet, "blackjack:split")
 
         # Split into two hands, each gets one new card
         card1 = hand[0]
@@ -828,7 +830,7 @@ class Gambling(commands.Cog):
             results.append((hand, bet, payout, result, player_val))
 
         if total_payout > 0:
-            await self.update_cash(ctx.author.id, total_payout)
+            await self.update_cash(ctx.author.id, total_payout, "blackjack:payout")
 
         net = total_payout - total_bet
         sign = "+" if net >= 0 else ""
@@ -936,7 +938,7 @@ class Gambling(commands.Cog):
             return
 
         # Deduct cash immediately
-        await self.update_cash(ctx.author.id, -amount)
+        await self.update_cash(ctx.author.id, -amount, "roulette:bet")
 
         # Create table if needed, or reset timer
         first_bet = table is None
@@ -1017,7 +1019,7 @@ class Gambling(commands.Cog):
         for user_id, results in player_results.items():
             user_payout = sum(r[2] for r in results)
             if user_payout > 0:
-                await self.update_cash(user_id, user_payout)
+                await self.update_cash(user_id, user_payout, "roulette:payout")
 
         # Build embed
         embed = discord.Embed(
@@ -1065,7 +1067,7 @@ class Gambling(commands.Cog):
 
         refund = sum(b[3] for b in user_bets)
         table["bets"] = [b for b in table["bets"] if b[0] != ctx.author.id]
-        await self.update_cash(ctx.author.id, refund)
+        await self.update_cash(ctx.author.id, refund, "roulette:refund")
 
         # If table is now empty, clean it up
         if not table["bets"]:
