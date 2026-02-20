@@ -107,6 +107,16 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         inline=False,
     )
     owner_embed.add_field(
+        name="Bets",
+        value=(
+            f"`{p}setbetrole [@role]` — Set (or clear) the role that can create/close bets\n"
+            f"`{p}createbet \"Statement\" | Opt A | Opt B` — Open a new bet\n"
+            f"`{p}closebet <id> <winner#>` — Declare the winning option & pay out\n"
+            f"`{p}cancelbet <id>` — Cancel a bet and refund all entries"
+        ),
+        inline=False,
+    )
+    owner_embed.add_field(
         name="Channel Restrictions",
         value=(
             f"`{p}setchannel <category> #channel` — Restrict commands to a channel\n"
@@ -220,6 +230,15 @@ async def help(ctx: commands.Context, *, command_name: str = None):
         inline=False,
     )
     user_embed.add_field(
+        name="Bets",
+        value=(
+            f"`{p}openbets` — List all open bets\n"
+            f"`{p}viewbet <id>` — View a bet's current odds\n"
+            f"`{p}bet <id> <option#> <amount>` — Place a bet"
+        ),
+        inline=False,
+    )
+    user_embed.add_field(
         name="Acrophobia",
         value=(
             f"`{p}acro` — Start a free Acrophobia game\n"
@@ -270,6 +289,7 @@ async def setup_hook():
     await bot.load_extension("cogs.missions")
     await bot.load_extension("cogs.waifu")
     await bot.load_extension("cogs.acro")
+    await bot.load_extension("cogs.bets")
 
 
 @bot.event

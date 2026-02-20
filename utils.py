@@ -3,7 +3,7 @@ import aiosqlite
 from discord.ext import commands
 
 PREFIX = "."
-VALID_CATEGORIES = {"economy", "gambling", "shop", "market", "missions", "waifu"}
+VALID_CATEGORIES = {"economy", "gambling", "shop", "market", "missions", "waifu", "bets"}
 
 DB_PATH = "data/economy.db"
 
