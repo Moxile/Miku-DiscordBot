@@ -286,9 +286,13 @@ class Economy(commands.Cog):
             )
             embed.set_footer(text=f"Success chance was {chance*100:.1f}%")
         else:
-            # Failure — block next work shift
+            # Failure — block next work shift (add one full cooldown on top of whatever is left)
             work_key = (ctx.guild.id, ctx.author.id)
-            self.work_cooldowns[work_key] = time.time()
+            work_cooldown = await self.get_work_cooldown(ctx.guild.id)
+            current = self.work_cooldowns.get(work_key, 0)
+            # Remaining time on existing cooldown, or 0 if already expired
+            remaining_cd = max(0, work_cooldown - (time.time() - current))
+            self.work_cooldowns[work_key] = time.time() - remaining_cd
 
             fine = int(steal_amount * ROB_FINE_PCT)
             fine = min(fine, robber_cash)  # can't pay more than you have
