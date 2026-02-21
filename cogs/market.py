@@ -61,6 +61,13 @@ MM_COST_PER_AVG_CHAR = 0.15     # Cost per unit of average message length per we
 MARKET_BUY_SENTINEL = 999_999.99
 MARKET_SELL_SENTINEL = 0.01
 
+# Hourly drift tuning
+DRIFT_DAILY_NEW         = 0.05   # ±5%/day stddev for brand new stocks
+DRIFT_DAILY_OLD         = 0.005  # ±0.5%/day stddev for mature stocks (500+ trades)
+DRIFT_ACTIVITY_NEUTRAL  = 100.0  # accumulated_revenue units considered "neutral" activity
+DRIFT_ACTIVITY_MAX_MULT = 2.0    # high activity doubles the drift magnitude
+DRIFT_ACTIVITY_MIN_MULT = 0.2    # zero activity shrinks drift to 20%
+
 
 # --- Revenue helpers (module-level, pure functions) ---
 
@@ -981,6 +988,65 @@ class Market(commands.Cog):
             except discord.Forbidden:
                 pass
 
+    # ── Hourly Drift ─────────────────────────────────────────────────
+
+    async def apply_hourly_drift(self, channel_id: int):
+        """Apply one hourly random drift tick to a stock's fair price.
+
+        Magnitude decays with maturity (trade count) and scales with today's
+        channel activity. Drift is symmetric — no built-in upward or downward bias.
+        """
+        mm = await self.get_mm_state(channel_id)
+        if not mm:
+            return
+
+        # Trade count drives maturity (same threshold as the rest of the MM engine)
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM trades WHERE channel_id = ?", (channel_id,)
+        ) as cur:
+            trade_count = (await cur.fetchone())[0]
+
+        # Today's accumulated activity revenue as the activity signal
+        today = datetime.date.today().isoformat()
+        week_start = self._week_start().isoformat()
+        async with self.db.execute(
+            "SELECT accumulated_revenue FROM channel_revenue "
+            "WHERE channel_id = ? AND week_start = ?",
+            (channel_id, week_start),
+        ) as cur:
+            rev_row = await cur.fetchone()
+        accumulated = rev_row[0] if rev_row else 0.0
+
+        # Maturity scalar: 0.0 (new) → 1.0 (mature at MM_STABILITY_MATURITY trades)
+        stability = self._volume_stability(trade_count)
+
+        # Daily sigma decays linearly from new → old
+        daily_sigma = DRIFT_DAILY_NEW - stability * (DRIFT_DAILY_NEW - DRIFT_DAILY_OLD)
+
+        # Convert to per-hour sigma (24 independent ticks per day)
+        hourly_sigma = daily_sigma / math.sqrt(24)
+
+        # Activity multiplier: more activity → larger swings, clamped to [MIN, MAX]
+        raw_mult = DRIFT_ACTIVITY_MIN_MULT + (accumulated / DRIFT_ACTIVITY_NEUTRAL) * (
+            DRIFT_ACTIVITY_MAX_MULT - DRIFT_ACTIVITY_MIN_MULT
+        )
+        activity_mult = max(DRIFT_ACTIVITY_MIN_MULT, min(DRIFT_ACTIVITY_MAX_MULT, raw_mult))
+
+        # Sample symmetric drift and apply multiplicatively
+        drift = random.gauss(0, hourly_sigma * activity_mult)
+        new_fair = max(mm["fair_price"] * (1 + drift), 0.01)
+
+        await self.db.execute(
+            "UPDATE mm_state SET fair_price = ? WHERE channel_id = ?",
+            (new_fair, channel_id),
+        )
+        await self.db.execute(
+            "UPDATE companies SET fair_price = ? WHERE channel_id = ?",
+            (new_fair, channel_id),
+        )
+        await self.record_price(channel_id, new_fair)
+        await self.db.commit()
+
     # ── Task Loops ───────────────────────────────────────────────────
 
     @tasks.loop(time=datetime.time(hour=23, minute=55, tzinfo=datetime.timezone.utc))
@@ -1001,6 +1067,7 @@ class Market(commands.Cog):
         async with self.db.execute("SELECT channel_id FROM companies") as cur:
             rows = await cur.fetchall()
         for (channel_id,) in rows:
+            await self.apply_hourly_drift(channel_id)
             await self.refresh_mm_quotes(channel_id)
 
     @hourly_mm_refresh_loop.before_loop

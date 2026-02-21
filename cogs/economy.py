@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import random
 import re
 import time
@@ -11,6 +12,11 @@ DB_PATH = "data/economy.db"
 DEFAULT_WORK_COOLDOWN = 3600
 DEFAULT_WORK_MIN = 50
 DEFAULT_WORK_MAX = 300
+
+ROB_BASE_CHANCE = 0.20       # 20% base success rate
+ROB_MIN_STEAL_PCT = 0.20     # steal at least 20% of target's cash on success
+ROB_MAX_STEAL_PCT = 0.40     # steal at most 40% of target's cash on success
+ROB_FINE_PCT = 0.25          # fine = 25% of what you would have stolen, paid to victim
 
 
 class Economy(commands.Cog):
@@ -57,7 +63,8 @@ class Economy(commands.Cog):
             )"""
         )
         await self.db.commit()
-        self.work_cooldowns: dict[tuple[int, int], float] = {}  # (guild_id, user_id) -> last_work_time
+        self.work_cooldowns: dict[tuple[int, int], float] = {}   # (guild_id, user_id) -> last_work_time
+        self.rob_blocked_until: dict[int, datetime.datetime] = {}  # user_id -> blocked until
 
     async def cog_unload(self):
         if self.db:
@@ -226,6 +233,109 @@ class Economy(commands.Cog):
             description=f"You earned **{earnings:,}** \U0001f338!",
             color=discord.Color.green(),
         )
+        await ctx.send(embed=embed)
+
+    # --- Rob ---
+
+    @commands.command()
+    async def rob(self, ctx: commands.Context, member: discord.Member):
+        """Attempt to rob another user's wallet. Usage: .rob @someone"""
+        if member == ctx.author:
+            await ctx.send("You can't rob yourself.")
+            return
+        if member.bot:
+            await ctx.send("You can't rob a bot.")
+            return
+
+        # Check if robber is blocked from working (reuse same penalty block)
+        blocked_until = self.rob_blocked_until.get(ctx.author.id)
+        if blocked_until and datetime.datetime.utcnow() < blocked_until:
+            remaining = (blocked_until - datetime.datetime.utcnow()).seconds // 60
+            await ctx.send(
+                f"You're laying low after your last failed robbery. "
+                f"You can try again in **{remaining}m**."
+            )
+            return
+
+        robber_cash, _ = await self.get_account(ctx.author.id)
+        target_cash, _ = await self.get_account(member.id)
+
+        if target_cash <= 0:
+            await ctx.send(f"**{member.display_name}** has nothing in their wallet.")
+            return
+
+        # Success chance: base 20%, reduced as target gets richer relative to robber.
+        # ratio = target_cash / max(robber_cash, 1); chance halves every time target has 5× more cash.
+        ratio = target_cash / max(robber_cash, 1)
+        chance = ROB_BASE_CHANCE / (1 + ratio / 5)
+        chance = max(0.03, min(chance, ROB_BASE_CHANCE))  # clamp to [3%, 20%]
+
+        steal_amount = int(target_cash * random.uniform(ROB_MIN_STEAL_PCT, ROB_MAX_STEAL_PCT))
+        steal_amount = max(steal_amount, 1)
+
+        if random.random() < chance:
+            # Success
+            steal_amount = min(steal_amount, target_cash)
+            await self.db.execute(
+                "UPDATE economy SET cash = cash - ? WHERE user_id = ?",
+                (steal_amount, member.id),
+            )
+            await self.db.execute(
+                "UPDATE economy SET cash = cash + ? WHERE user_id = ?",
+                (steal_amount, ctx.author.id),
+            )
+            await log_tx(self.db, ctx.author.id, steal_amount, "rob:success", member.id)
+            await log_tx(self.db, member.id, -steal_amount, "rob:victim", ctx.author.id)
+            await self.db.commit()
+
+            embed = discord.Embed(
+                title="Robbery Successful!",
+                description=(
+                    f"You slipped into **{member.display_name}**'s pockets and got away with "
+                    f"**{steal_amount:,}** \U0001f338!"
+                ),
+                color=discord.Color.green(),
+            )
+            embed.set_footer(text=f"Success chance was {chance*100:.1f}%")
+        else:
+            # Failure — block work for the rest of the day and pay a fine
+            now = datetime.datetime.utcnow()
+            end_of_day = datetime.datetime(now.year, now.month, now.day, 23, 59, 59)
+            self.rob_blocked_until[ctx.author.id] = end_of_day
+
+            # Also put work on cooldown for the rest of the day
+            work_key = (ctx.guild.id, ctx.author.id)
+            seconds_left = (end_of_day - now).seconds
+            self.work_cooldowns[work_key] = time.time() - (
+                await self.get_work_cooldown(ctx.guild.id) - seconds_left
+            )
+
+            fine = int(steal_amount * ROB_FINE_PCT)
+            fine = min(fine, robber_cash)  # can't pay more than you have
+
+            if fine > 0:
+                await self.db.execute(
+                    "UPDATE economy SET cash = cash - ? WHERE user_id = ?",
+                    (fine, ctx.author.id),
+                )
+                await self.db.execute(
+                    "UPDATE economy SET cash = cash + ? WHERE user_id = ?",
+                    (fine, member.id),
+                )
+                await log_tx(self.db, ctx.author.id, -fine, "rob:fine", member.id)
+                await log_tx(self.db, member.id, fine, "rob:fine_received", ctx.author.id)
+                await self.db.commit()
+
+            embed = discord.Embed(
+                title="Caught Red-Handed!",
+                description=(
+                    f"You were caught trying to rob **{member.display_name}** and paid a fine of "
+                    f"**{fine:,}** \U0001f338. You can't work for the rest of the day."
+                ),
+                color=discord.Color.red(),
+            )
+            embed.set_footer(text=f"Success chance was {chance*100:.1f}%")
+
         await ctx.send(embed=embed)
 
     # --- Set Cooldown (Owner only) ---
