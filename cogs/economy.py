@@ -503,6 +503,79 @@ class Economy(commands.Cog):
         )
         await ctx.send(embed=embed)
 
+    # --- Leaderboard ---
+
+    @commands.command(aliases=["lb"])
+    async def leaderboard(self, ctx: commands.Context, mode: str = "total"):
+        """Show the richest users. Usage: .lb [total|cash|bank|market]"""
+        mode = mode.lower()
+        if mode not in ("total", "cash", "bank", "market"):
+            await ctx.send("Invalid mode. Choose: `total`, `cash`, `bank`, `market`.")
+            return
+
+        MM_USER_ID = 0
+
+        if mode == "market":
+            # Sum of quantity * fair_price per user across all holdings (excluding MM)
+            async with self.db.execute(
+                "SELECT h.user_id, SUM(h.quantity * c.fair_price) as market_value "
+                "FROM holdings h JOIN companies c ON h.channel_id = c.channel_id "
+                "WHERE h.user_id != ? AND h.quantity > 0 "
+                "GROUP BY h.user_id ORDER BY market_value DESC LIMIT 10",
+                (MM_USER_ID,),
+            ) as cur:
+                rows = await cur.fetchall()
+            title = "Market Value Leaderboard"
+            label = "Market"
+        elif mode == "cash":
+            async with self.db.execute(
+                "SELECT user_id, cash FROM economy ORDER BY cash DESC LIMIT 10"
+            ) as cur:
+                rows = await cur.fetchall()
+            title = "Cash Leaderboard"
+            label = "Wallet"
+        elif mode == "bank":
+            async with self.db.execute(
+                "SELECT user_id, bank FROM economy ORDER BY bank DESC LIMIT 10"
+            ) as cur:
+                rows = await cur.fetchall()
+            title = "Bank Leaderboard"
+            label = "Bank"
+        else:  # total
+            async with self.db.execute(
+                "SELECT e.user_id, "
+                "  (e.cash + e.bank + COALESCE(mv.market_value, 0)) as total "
+                "FROM economy e "
+                "LEFT JOIN ("
+                "  SELECT h.user_id, SUM(h.quantity * c.fair_price) as market_value "
+                "  FROM holdings h JOIN companies c ON h.channel_id = c.channel_id "
+                "  WHERE h.user_id != ? AND h.quantity > 0 "
+                "  GROUP BY h.user_id"
+                ") mv ON e.user_id = mv.user_id "
+                "ORDER BY total DESC LIMIT 10",
+                (MM_USER_ID,),
+            ) as cur:
+                rows = await cur.fetchall()
+            title = "Total Wealth Leaderboard"
+            label = "Total"
+
+        if not rows:
+            await ctx.send("No data yet.")
+            return
+
+        embed = discord.Embed(title=title, color=discord.Color.gold())
+        lines = []
+        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+        for rank, (user_id, amount) in enumerate(rows, start=1):
+            member = ctx.guild.get_member(user_id)
+            name = member.display_name if member else f"User {user_id}"
+            prefix = medals.get(rank, f"`#{rank}`")
+            lines.append(f"{prefix} **{name}** — {int(amount):,} \U0001f338")
+
+        embed.description = "\n".join(lines)
+        embed.set_footer(text=f"Showing {label} wealth · .lb [total|cash|bank|market]")
+        await ctx.send(embed=embed)
+
     # --- Remind ---
 
     @commands.command()
