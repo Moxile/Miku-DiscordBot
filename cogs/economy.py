@@ -16,6 +16,7 @@ ROB_BASE_CHANCE = 0.20       # 20% base success rate
 ROB_MIN_STEAL_PCT = 0.20     # steal at least 20% of target's cash on success
 ROB_MAX_STEAL_PCT = 0.40     # steal at most 40% of target's cash on success
 ROB_FINE_PCT = 0.25          # fine = 25% of what you would have stolen, paid to victim
+ROB_COOLDOWN = 7200          # 2 hours between rob attempts
 
 
 class Economy(commands.Cog):
@@ -63,6 +64,7 @@ class Economy(commands.Cog):
         )
         await self.db.commit()
         self.work_cooldowns: dict[tuple[int, int], float] = {}   # (guild_id, user_id) -> last_work_time
+        self.rob_cooldowns: dict[int, float] = {}                 # user_id -> last_rob_time
 
     async def cog_unload(self):
         if self.db:
@@ -245,6 +247,21 @@ class Economy(commands.Cog):
             await ctx.send("You can't rob a bot.")
             return
 
+        last_rob = self.rob_cooldowns.get(ctx.author.id, 0)
+        remaining = ROB_COOLDOWN - (time.time() - last_rob)
+        if remaining > 0:
+            minutes, secs = divmod(int(remaining), 60)
+            hours, minutes = divmod(minutes, 60)
+            parts = []
+            if hours:
+                parts.append(f"{hours}h")
+            if minutes:
+                parts.append(f"{minutes}m")
+            if secs or not parts:
+                parts.append(f"{secs}s")
+            await ctx.send(f"You need to lay low for a bit. Try again in **{' '.join(parts)}**.")
+            return
+
         robber_cash, _ = await self.get_account(ctx.author.id)
         target_cash, _ = await self.get_account(member.id)
 
@@ -320,6 +337,7 @@ class Economy(commands.Cog):
             )
             embed.set_footer(text=f"Success chance was {chance*100:.1f}%")
 
+        self.rob_cooldowns[ctx.author.id] = time.time()
         await ctx.send(embed=embed)
 
     # --- Set Cooldown (Owner only) ---
