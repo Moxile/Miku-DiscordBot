@@ -1,5 +1,4 @@
 import asyncio
-import datetime
 import random
 import re
 import time
@@ -64,7 +63,6 @@ class Economy(commands.Cog):
         )
         await self.db.commit()
         self.work_cooldowns: dict[tuple[int, int], float] = {}   # (guild_id, user_id) -> last_work_time
-        self.rob_blocked_until: dict[int, datetime.datetime] = {}  # user_id -> blocked until
 
     async def cog_unload(self):
         if self.db:
@@ -247,16 +245,6 @@ class Economy(commands.Cog):
             await ctx.send("You can't rob a bot.")
             return
 
-        # Check if robber is blocked from working (reuse same penalty block)
-        blocked_until = self.rob_blocked_until.get(ctx.author.id)
-        if blocked_until and datetime.datetime.utcnow() < blocked_until:
-            remaining = (blocked_until - datetime.datetime.utcnow()).seconds // 60
-            await ctx.send(
-                f"You're laying low after your last failed robbery. "
-                f"You can try again in **{remaining}m**."
-            )
-            return
-
         robber_cash, _ = await self.get_account(ctx.author.id)
         target_cash, _ = await self.get_account(member.id)
 
@@ -298,17 +286,9 @@ class Economy(commands.Cog):
             )
             embed.set_footer(text=f"Success chance was {chance*100:.1f}%")
         else:
-            # Failure — block work for the rest of the day and pay a fine
-            now = datetime.datetime.utcnow()
-            end_of_day = datetime.datetime(now.year, now.month, now.day, 23, 59, 59)
-            self.rob_blocked_until[ctx.author.id] = end_of_day
-
-            # Also put work on cooldown for the rest of the day
+            # Failure — block next work shift
             work_key = (ctx.guild.id, ctx.author.id)
-            seconds_left = (end_of_day - now).seconds
-            self.work_cooldowns[work_key] = time.time() - (
-                await self.get_work_cooldown(ctx.guild.id) - seconds_left
-            )
+            self.work_cooldowns[work_key] = time.time()
 
             fine = int(steal_amount * ROB_FINE_PCT)
             fine = min(fine, robber_cash)  # can't pay more than you have
@@ -330,7 +310,7 @@ class Economy(commands.Cog):
                 title="Caught Red-Handed!",
                 description=(
                     f"You were caught trying to rob **{member.display_name}** and paid a fine of "
-                    f"**{fine:,}** \U0001f338. You can't work for the rest of the day."
+                    f"**{fine:,}** \U0001f338. You've lost your next work shift."
                 ),
                 color=discord.Color.red(),
             )
