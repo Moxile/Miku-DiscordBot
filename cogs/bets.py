@@ -116,8 +116,8 @@ class Bets(commands.Cog):
 
         grand_total = sum(totals.values())
 
-        status_label = {"open": "🟢 Open", "closed": "🔴 Closed"}.get(status, status)
-        color = discord.Color.green() if status == "open" else discord.Color.red()
+        status_label = {"open": "🟢 Open", "locked": "🔒 Locked", "closed": "🔴 Closed"}.get(status, status)
+        color = {"open": discord.Color.green(), "locked": discord.Color.orange(), "closed": discord.Color.red()}.get(status, discord.Color.default())
         embed = discord.Embed(title=f"Bet #{bet_id}", description=f"**{statement}**\n{status_label}", color=color)
 
         for i, (opt_id, label) in enumerate(options):
@@ -130,7 +130,13 @@ class Bets(commands.Cog):
                 inline=True,
             )
 
-        embed.set_footer(text=f"Total pool: {grand_total:,} 🌸 | Use .bet {bet_id} <option#> <amount> to place a bet")
+        if status == "open":
+            footer = f"Total pool: {grand_total:,} 🌸 | Use .bet {bet_id} <option#> <amount> to place a bet"
+        elif status == "locked":
+            footer = f"Total pool: {grand_total:,} 🌸 | Betting is closed — awaiting results"
+        else:
+            footer = f"Total pool: {grand_total:,} 🌸"
+        embed.set_footer(text=footer)
         return embed
 
     # ── Commands ──────────────────────────────────────────────────
@@ -241,6 +247,9 @@ class Bets(commands.Cog):
             await ctx.send(f"Bet #{bet_id} not found in this server.")
             return
         status, channel_id = bet_row
+        if status == "locked":
+            await ctx.send(f"Bet #{bet_id} is locked — betting is closed.")
+            return
         if status != "open":
             await ctx.send(f"Bet #{bet_id} is no longer open.")
             return
@@ -306,6 +315,55 @@ class Bets(commands.Cog):
         )
 
     @commands.command()
+    async def lockbet(self, ctx: commands.Context, bet_id: int = None):
+        """Lock a bet so no more bets can be placed. Requires owner or bet role.
+        Usage: .lockbet <bet_id>
+        """
+        bet_role_id = await self._get_bet_role(ctx.guild.id)
+        if not _can_manage_bets(ctx, bet_role_id):
+            await ctx.send("You don't have permission to lock bets.")
+            return
+
+        if bet_id is None:
+            await ctx.send(f"Usage: `{ctx.prefix}lockbet <bet_id>`")
+            return
+
+        async with self.db.execute(
+            "SELECT status FROM bets WHERE id = ? AND guild_id = ?",
+            (bet_id, ctx.guild.id),
+        ) as cur:
+            bet_row = await cur.fetchone()
+
+        if not bet_row:
+            await ctx.send(f"Bet #{bet_id} not found in this server.")
+            return
+        if bet_row[0] != "open":
+            await ctx.send(f"Bet #{bet_id} is already {bet_row[0]}.")
+            return
+
+        await self.db.execute(
+            "UPDATE bets SET status = 'locked' WHERE id = ?", (bet_id,)
+        )
+        await self.db.commit()
+
+        embed = await self._build_embed(bet_id)
+
+        # Try to edit the original bet message
+        async with self.db.execute(
+            "SELECT message_id, channel_id FROM bets WHERE id = ?", (bet_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row and row[0]:
+            try:
+                ch = ctx.guild.get_channel(row[1])
+                msg = await ch.fetch_message(row[0])
+                await msg.edit(embed=embed)
+            except Exception:
+                pass
+
+        await ctx.send(f"Bet #{bet_id} is now locked — no more bets can be placed.")
+
+    @commands.command()
     async def closebet(self, ctx: commands.Context, bet_id: int = None, winner: int = None):
         """Close a bet and pay out winners. Requires owner or bet role.
         Usage: .closebet <bet_id> <winning_option#>
@@ -329,7 +387,7 @@ class Bets(commands.Cog):
             await ctx.send(f"Bet #{bet_id} not found in this server.")
             return
         status, statement = bet_row
-        if status != "open":
+        if status == "closed":
             await ctx.send(f"Bet #{bet_id} is already closed.")
             return
 
@@ -444,7 +502,7 @@ class Bets(commands.Cog):
         if not bet_row:
             await ctx.send(f"Bet #{bet_id} not found in this server.")
             return
-        if bet_row[0] != "open":
+        if bet_row[0] == "closed":
             await ctx.send(f"Bet #{bet_id} is already closed.")
             return
 
