@@ -102,6 +102,7 @@ class Economy(commands.Cog):
 
         if cooldown is None:
             earnings = random.randint(100, 300)
+            await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
             await update_wallet(self.pool, ctx.guild.id, ctx.author.id, earnings)
             await add_transaction(self.pool, ctx.guild.id, ctx.author.id, earnings, "work", "Earnings from work")
             await self.pool.execute(
@@ -134,8 +135,12 @@ class Economy(commands.Cog):
             await ctx.send("You can't give more than you have in your wallet!")
             return
 
+        await ensure_wallet(self.pool, ctx.guild.id, member.id)
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -amount)
         await update_wallet(self.pool, ctx.guild.id, member.id, amount)
+        await add_transaction(self.pool, ctx.guild.id, ctx.author.id, -amount, "gift", f"Gift to {member}")
+        await add_transaction(self.pool, ctx.guild.id, member.id, amount, "gift", f"Gift from {ctx.author}")
+        await ctx.send(f"You gifted {amount}{MAIN_CURRENCY_EMOJI} to {member.mention}!")
 
     @commands.command()
     @commands.is_owner()
@@ -145,6 +150,7 @@ class Economy(commands.Cog):
             await ctx.send("Amount must be greater than zero.")
             return
 
+        await ensure_wallet(self.pool, ctx.guild.id, member.id)
         await update_wallet(self.pool, ctx.guild.id, member.id, amount)
         await add_transaction(self.pool, ctx.guild.id, member.id, amount, "admin_add", f"Added by {ctx.author}")
 

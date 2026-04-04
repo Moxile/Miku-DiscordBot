@@ -7,6 +7,7 @@ from discord.ext import commands
 from discord import app_commands
 
 from cogs.utils.db import ensure_wallet, update_wallet, update_bank, add_transaction
+from cogs.utils.checks import require_channel, WrongChannel, invalidate
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, PREFIX
 
 import random
@@ -22,7 +23,13 @@ class Gambling(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
-    
+
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, WrongChannel):
+            await ctx.send(str(error), delete_after=10)
+        else:
+            raise error
+
     async def check_bet(self, ctx, amount, min_amount=2):
         # helper function for validating wallet has enough to fund a bet
         if not isinstance(amount, int) or amount <= 0:
@@ -35,9 +42,10 @@ class Gambling(commands.Cog):
         return True, None
 
     @commands.command(aliases=["cf"])
-    async def coinflip(self, ctx, tries=1):
+    @require_channel("gambling_channel")
+    async def coinflip(self, ctx, tries: int = 1):
         """Do a coinflip. Specify how many times to flip a coin or leave blank to flip once."""
-        if not isinstance(tries, int) or tries <= 0:
+        if tries <= 0:
             await ctx.send("Please enter a valid number of tries (positive amount).")
             return
         results = []
@@ -48,11 +56,15 @@ class Gambling(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["bf"])
-    async def betflip(self, ctx, choice, bet_per_try, tries=1):
-        """Bet on heads or tails. Specify your choice, how much to bet per try, and how many times to flip. You can specify and amount or use 'all' to bet everything. (example: .betflip h 10 5 - bet 10 on heads per flipfor 5 flips)"""
+    @require_channel("gambling_channel")
+    async def betflip(self, ctx, choice, bet_per_try: int, tries: int = 1):
+        """Bet on heads or tails. Specify your choice, how much to bet per try, and how many times to flip. (example: .betflip h 10 5 - bet 10 on heads per flip for 5 flips)"""
         # validate inputs
-        if not isinstance(tries, int) or tries <= 0:
+        if tries <= 0:
             await ctx.send("Please enter a valid number of tries (positive amount).")
+            return
+        if bet_per_try <= 0:
+            await ctx.send("Please enter a valid number for your bet.")
             return
         is_valid, error = await self.check_bet(ctx, bet_per_try * tries)
         if not is_valid:
@@ -134,6 +146,7 @@ class Gambling(commands.Cog):
         return embed
 
     @commands.command(aliases=["bj"])
+    @require_channel("gambling_channel")
     async def blackjack(self, ctx, bet: str):
         """Start a game of blackjack by placing a bet. You can specify an amount or use 'all' to bet everything. During the game, use .hit, .stand, .double, or .split."""
         if bet.lower() == "all":
@@ -241,6 +254,7 @@ class Gambling(commands.Cog):
         del self.games[(ctx.guild.id, ctx.author.id)]
 
     @commands.command()
+    @require_channel("gambling_channel")
     async def hit(self, ctx):
         """Take a hit and get another card. Only works during your turn in an active blackjack game."""
         if (ctx.guild.id, ctx.author.id) not in self.games or self.games[(ctx.guild.id, ctx.author.id)]["game"] != "blackjack":
@@ -274,6 +288,7 @@ class Gambling(commands.Cog):
                 await ctx.send(embed=embed)
 
     @commands.command()
+    @require_channel("gambling_channel")
     async def stand(self, ctx):
         """Stand and end your turn. Only works during your turn in an active blackjack game."""
         if (ctx.guild.id, ctx.author.id) not in self.games or self.games[(ctx.guild.id, ctx.author.id)]["game"] != "blackjack":
@@ -295,6 +310,7 @@ class Gambling(commands.Cog):
             
 
     @commands.command()
+    @require_channel("gambling_channel")
     async def split(self, ctx):
         """Split your hand into two separate hands if you have a pair. Only works during your turn in an active blackjack game."""
         if (ctx.guild.id, ctx.author.id) not in self.games or self.games[(ctx.guild.id, ctx.author.id)]["game"] != "blackjack":
@@ -336,6 +352,7 @@ class Gambling(commands.Cog):
 
 
     @commands.command()
+    @require_channel("gambling_channel")
     async def double(self, ctx):
         """Double your bet and take exactly one more card. Only works during your turn in an active blackjack game and only if you have exactly 2 cards in your hand."""
         if (ctx.guild.id, ctx.author.id) not in self.games or self.games[(ctx.guild.id, ctx.author.id)]["game"] != "blackjack":
@@ -394,6 +411,7 @@ class Gambling(commands.Cog):
             await self.dealer_turn(ctx, game)
 
     @commands.command()
+    @require_channel("gambling_channel")
     async def roulette(self, ctx, choice, bet: str):
         """Play a game of roulette by placing a bet on a color, odd/even, or specific number. You can specify an amount or use 'all' to bet everything. (example: .roulette red 10 - bet 10 on red)"""
         if bet.lower() == "all":
@@ -493,6 +511,7 @@ class Gambling(commands.Cog):
         return 0
     
     @commands.command(aliases=["rr"])
+    @require_channel("gambling_channel")
     async def russian_roulette(self, ctx, bet: str):
         """Play Russian Roulette with other players. You can specify an amount or use 'all' to bet everything. Everyone must match the same bet to join."""
         if bet.lower() == "all":
@@ -606,6 +625,28 @@ class Gambling(commands.Cog):
             f"- {channel.guild.get_member(pid).display_name if channel.guild.get_member(pid) else str(pid)} {'🏆' if pid == winner else '💀'}" for pid in players
         ), inline=False)
         await channel.send(embed=embed)
+
+    # ── Admin ──
+
+    @commands.command()
+    @commands.is_owner()
+    async def setgamblingchannel(self, ctx, channel: discord.TextChannel = None):
+        """Admin: Set (or clear) the channel where gambling commands are allowed."""
+        if channel is None:
+            await self.pool.execute(
+                "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'gambling_channel'",
+                ctx.guild.id,
+            )
+            invalidate(ctx.guild.id, "gambling_channel")
+            await ctx.send("Gambling channel restriction removed — commands allowed everywhere.")
+        else:
+            await self.pool.execute(
+                """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, 'gambling_channel', $2)
+                   ON CONFLICT (guild_id, key) DO UPDATE SET value = $2""",
+                ctx.guild.id, str(channel.id),
+            )
+            invalidate(ctx.guild.id, "gambling_channel")
+            await ctx.send(f"Gambling commands restricted to {channel.mention}.")
 
 
 async def setup(bot):

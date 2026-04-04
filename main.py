@@ -163,6 +163,13 @@ async def init_db(pool: asyncpg.Pool):
             amount        BIGINT NOT NULL CHECK (amount > 0),
             placed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS guild_settings (
+            guild_id BIGINT NOT NULL,
+            key      TEXT NOT NULL,
+            value    TEXT NOT NULL,
+            PRIMARY KEY (guild_id, key)
+        );
     """)
 
     # Safety constraints — prevent negative balances/holdings as a last line of defense.

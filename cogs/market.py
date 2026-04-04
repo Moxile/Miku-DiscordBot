@@ -18,6 +18,7 @@ from cogs.utils.db import (
     update_treasury, set_company_level, get_shareholders,
     get_avg_buy_price,
 )
+from cogs.utils.checks import require_channel, WrongChannel, invalidate
 from config import MAIN_CURRENCY_EMOJI, LEVEL_BASE_THRESHOLD, COST_FACTOR
 
 
@@ -48,6 +49,12 @@ class Market(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
+
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, WrongChannel):
+            await ctx.send(str(error), delete_after=10)
+        else:
+            raise error
 
     async def _get_company_channels(self, guild_id: int) -> set[int]:
         now = time.monotonic()
@@ -473,6 +480,7 @@ class Market(commands.Cog):
     # ── Trading ──
 
     @commands.command(aliases=['mb', 'mbuy'])
+    @require_channel("trading_channel")
     async def marketbuy(self, ctx, stock: discord.TextChannel, quantity: int = 1):
         """Buy shares immediately at the best available price. Mention the stock channel and specify the quantity."""
         if quantity <= 0:
@@ -560,6 +568,7 @@ class Market(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['ms', 'msell'])
+    @require_channel("trading_channel")
     async def marketsell(self, ctx, stock: discord.TextChannel, quantity: int = 1):
         """Sell shares immediately at the best available price. Mention the stock channel and specify the quantity."""
         if quantity <= 0:
@@ -624,6 +633,7 @@ class Market(commands.Cog):
     # ── Limit orders ──
 
     @commands.command(aliases=['bo', 'border'])
+    @require_channel("trading_channel")
     async def buyorder(self, ctx, stock: discord.TextChannel, quantity: int, price: int):
         """Place a limit buy order. The order will execute as soon as a matching sell order is placed at or below your specified price. Use by mentioning channel, then quantity and highest price you are paying."""
         if quantity <= 0 or price <= 0:
@@ -691,6 +701,7 @@ class Market(commands.Cog):
             await ctx.send(f"Buy order fully filled! Bought {filled}x **{company['name']}** for {spent}{MAIN_CURRENCY_EMOJI}.")
 
     @commands.command(aliases=['so', 'sorder'])
+    @require_channel("trading_channel")
     async def sellorder(self, ctx, stock: discord.TextChannel, quantity: int, price: int):
         """Place a limit sell order. The order will execute as soon as a matching buy order is placed at or above your specified price. Use by mentioning channel, then quantity and lowest price you are accepting."""
         if quantity <= 0 or price <= 0:
@@ -751,6 +762,7 @@ class Market(commands.Cog):
             await ctx.send(f"Sell order fully filled! Sold {filled}x **{company['name']}** for {revenue}{MAIN_CURRENCY_EMOJI}.")
 
     @commands.command(aliases=['co', 'corder'])
+    @require_channel("trading_channel")
     async def cancelorder(self, ctx, order_id: int):
         """Cancel an open order by its ID. Use the `orderbook` command to see order IDs."""
         async with self.pool.acquire() as conn:
@@ -770,6 +782,26 @@ class Market(commands.Cog):
             await ctx.send(f"Sell order #{order_id} cancelled. {order['remaining']} shares are available again.")
 
     # ── Error handling ──
+
+    @commands.command()
+    @commands.is_owner()
+    async def settradingchannel(self, ctx, channel: discord.TextChannel = None):
+        """Admin: Set (or clear) the channel where trading commands are allowed."""
+        if channel is None:
+            await self.pool.execute(
+                "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'trading_channel'",
+                ctx.guild.id,
+            )
+            invalidate(ctx.guild.id, "trading_channel")
+            await ctx.send("Trading channel restriction removed — commands allowed everywhere.")
+        else:
+            await self.pool.execute(
+                """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, 'trading_channel', $2)
+                   ON CONFLICT (guild_id, key) DO UPDATE SET value = $2""",
+                ctx.guild.id, str(channel.id),
+            )
+            invalidate(ctx.guild.id, "trading_channel")
+            await ctx.send(f"Trading commands restricted to {channel.mention}.")
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):

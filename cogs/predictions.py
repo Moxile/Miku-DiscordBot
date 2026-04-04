@@ -43,15 +43,6 @@ class Predictions(commands.Cog):
     @commands.is_owner()
     async def setpredictorrole(self, ctx, role: discord.Role):
         """Admin: Set which role can create predictions."""
-        # Store in DB for persistence
-        await self.pool.execute(
-            """CREATE TABLE IF NOT EXISTS guild_settings (
-                guild_id BIGINT NOT NULL,
-                key      TEXT NOT NULL,
-                value    TEXT NOT NULL,
-                PRIMARY KEY (guild_id, key)
-            )""",
-        )
         await self.pool.execute(
             """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, 'predictor_role', $2)
                ON CONFLICT (guild_id, key) DO UPDATE SET value = $2""",
@@ -63,14 +54,6 @@ class Predictions(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         """Load predictor roles from DB on startup."""
-        await self.pool.execute(
-            """CREATE TABLE IF NOT EXISTS guild_settings (
-                guild_id BIGINT NOT NULL,
-                key      TEXT NOT NULL,
-                value    TEXT NOT NULL,
-                PRIMARY KEY (guild_id, key)
-            )""",
-        )
         rows = await self.pool.fetch(
             "SELECT guild_id, value FROM guild_settings WHERE key = 'predictor_role'",
         )
