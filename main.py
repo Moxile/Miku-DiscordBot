@@ -135,6 +135,33 @@ async def init_db(pool: asyncpg.Pool):
         );
     """)
 
+    # Reminders system
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS reminders (
+            id          BIGSERIAL PRIMARY KEY,
+            guild_id    BIGINT NOT NULL,
+            user_id     BIGINT NOT NULL,
+            channel_id  BIGINT NOT NULL,
+            message     TEXT,
+            remind_at   TIMESTAMPTZ NOT NULL,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    """)
+
+    # Waifu system
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS waifus (
+            guild_id       BIGINT NOT NULL,
+            user_id        BIGINT NOT NULL,
+            owner_id       BIGINT,
+            value          BIGINT NOT NULL DEFAULT 5000,
+            last_bought_at TIMESTAMPTZ,
+            spouse_id      BIGINT,
+            engaged_since  TIMESTAMPTZ,
+            PRIMARY KEY (guild_id, user_id)
+        );
+    """)
+
     # Predictions system
     await pool.execute("""
         CREATE TABLE IF NOT EXISTS predictions (
@@ -195,6 +222,9 @@ COG_COLORS = {
     "Moderation": discord.Color.red(),
     "Shop": discord.Color.purple(),
     "Predictions": discord.Color.teal(),
+    "Reminders": discord.Color.from_rgb(255, 182, 193),
+    "Waifu": discord.Color.from_rgb(255, 105, 180),
+    "Leaderboard": discord.Color.from_rgb(255, 215, 0),
 }
 
 
@@ -287,6 +317,9 @@ class MikuBot(commands.Bot):
         await self.load_extension("cogs.market")
         await self.load_extension("cogs.shop")
         await self.load_extension("cogs.predictions")
+        await self.load_extension("cogs.reminders")
+        await self.load_extension("cogs.waifu")
+        await self.load_extension("cogs.leaderboard")
 
     async def close(self):
         if self.pool:
