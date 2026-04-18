@@ -262,6 +262,7 @@ class Market(commands.Cog):
         embed = discord.Embed(title=f"{member.display_name}'s Portfolio", color=discord.Color.green())
         total_value = 0
         total_cost = 0
+        total_divs = 0
         for h in holdings:
             company = await get_company(self.pool, ctx.guild.id, h["stock_channel_id"])
             name = company["name"] if company else str(h["stock_channel_id"])
@@ -274,15 +275,57 @@ class Market(commands.Cog):
             total_value += value
             total_cost += cost_basis
             pl_str = f"+{pl}" if pl >= 0 else str(pl)
+            # Dividends received for this stock
+            div_row = await self.pool.fetchrow(
+                """SELECT COALESCE(SUM(amount), 0) AS total FROM transactions
+                   WHERE guild_id = $1 AND user_id = $2 AND tx_type = 'dividend'
+                     AND description = $3""",
+                ctx.guild.id, member.id, f"Dividend from {name}",
+            )
+            divs = div_row["total"]
+            total_divs += divs
             embed.add_field(
                 name=name,
                 value=f"{h['quantity']} shares @ {price}{MAIN_CURRENCY_EMOJI} = {value}{MAIN_CURRENCY_EMOJI}\n"
-                      f"Avg cost: {avg_cost}{MAIN_CURRENCY_EMOJI} | P/L: {pl_str}{MAIN_CURRENCY_EMOJI}",
+                      f"Avg cost: {avg_cost}{MAIN_CURRENCY_EMOJI} | P/L: {pl_str}{MAIN_CURRENCY_EMOJI}\n"
+                      f"Dividends received: {divs}{MAIN_CURRENCY_EMOJI}",
                 inline=False,
             )
         total_pl = total_value - total_cost
         total_pl_str = f"+{total_pl}" if total_pl >= 0 else str(total_pl)
-        embed.set_footer(text=f"Total value: {total_value}{MAIN_CURRENCY_EMOJI} | Total P/L: {total_pl_str}{MAIN_CURRENCY_EMOJI}")
+        embed.set_footer(text=f"Total value: {total_value}{MAIN_CURRENCY_EMOJI} | Total P/L: {total_pl_str}{MAIN_CURRENCY_EMOJI} | Total dividends: {total_divs}{MAIN_CURRENCY_EMOJI}")
+        await ctx.send(embed=embed)
+
+    @commands.command(aliases=['divhist', 'dh'])
+    async def dividendhistory(self, ctx, member: discord.Member = None):
+        """Show all dividend payouts you (or another member) received.
+        Usage: .dividendhistory [@member]"""
+        member = member or ctx.author
+        rows = await self.pool.fetch(
+            """SELECT amount, description, created_at FROM transactions
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type = 'dividend'
+               ORDER BY created_at DESC""",
+            ctx.guild.id, member.id,
+        )
+        if not rows:
+            await ctx.send(f"{member.display_name} has not received any dividends.")
+            return
+
+        total = sum(r["amount"] for r in rows)
+        embed = discord.Embed(
+            title=f"{member.display_name}'s Dividend History",
+            color=discord.Color.blue(),
+        )
+        # Show most recent 15 entries
+        lines = []
+        for row in rows[:15]:
+            date = row["created_at"].strftime("%Y-%m-%d")
+            desc = row["description"] or "Dividend"
+            lines.append(f"`{date}` {desc} — **{row['amount']:,}**{MAIN_CURRENCY_EMOJI}")
+        embed.description = "\n".join(lines)
+        if len(rows) > 15:
+            embed.description += f"\n*... and {len(rows) - 15} more*"
+        embed.set_footer(text=f"Total dividends received: {total:,}{MAIN_CURRENCY_EMOJI}")
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['ci', 'cinfo'])

@@ -1,3 +1,5 @@
+import math
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -7,6 +9,58 @@ import datetime
 import random
 
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, WORK_COOLDOWN
+
+PER_PAGE = 10
+
+
+class TransactionPaginator(discord.ui.View):
+    def __init__(self, rows: list, member: discord.Member, invoker_id: int, *, timeout=120):
+        super().__init__(timeout=timeout)
+        self.rows = rows
+        self.member = member
+        self.invoker_id = invoker_id
+        self.page = 0
+        self.max_page = max(0, math.ceil(len(rows) / PER_PAGE) - 1)
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page >= self.max_page
+
+    def build_embed(self) -> discord.Embed:
+        start = self.page * PER_PAGE
+        page_rows = self.rows[start:start + PER_PAGE]
+        embed = discord.Embed(
+            title=f"{self.member.display_name}'s Transactions",
+            color=discord.Color.green(),
+        )
+        lines = []
+        for row in page_rows:
+            date = row["created_at"].strftime("%Y-%m-%d %H:%M")
+            sign = "+" if row["amount"] >= 0 else ""
+            desc = row["description"] or row["tx_type"]
+            lines.append(f"`{date}` **{sign}{row['amount']:,}**{MAIN_CURRENCY_EMOJI} — {desc}")
+        embed.description = "\n".join(lines) if lines else "No transactions."
+        embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1} — {len(self.rows)} total transactions")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message("This isn't your transaction list.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.max_page, self.page + 1)
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 class Economy(commands.Cog):
     def __init__(self, bot):
@@ -141,6 +195,24 @@ class Economy(commands.Cog):
         await add_transaction(self.pool, ctx.guild.id, ctx.author.id, -amount, "gift", f"Gift to {member}")
         await add_transaction(self.pool, ctx.guild.id, member.id, amount, "gift", f"Gift from {ctx.author}")
         await ctx.send(f"You gifted {amount}{MAIN_CURRENCY_EMOJI} to {member.mention}!")
+
+    @commands.command(aliases=["transactions", "txlog"])
+    async def curtrs(self, ctx, member: discord.Member = None):
+        """Show your (or someone's) full transaction history with pagination.
+        Usage: .curtrs [@member]"""
+        member = member or ctx.author
+        rows = await self.pool.fetch(
+            """SELECT amount, tx_type, description, created_at FROM transactions
+               WHERE guild_id = $1 AND user_id = $2
+               ORDER BY created_at DESC""",
+            ctx.guild.id, member.id,
+        )
+        if not rows:
+            await ctx.send(f"{member.display_name} has no transactions.")
+            return
+
+        view = TransactionPaginator(rows, member, ctx.author.id)
+        await ctx.send(embed=view.build_embed(), view=view)
 
     @commands.command()
     @commands.is_owner()
