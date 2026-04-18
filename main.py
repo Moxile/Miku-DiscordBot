@@ -227,6 +227,7 @@ COG_COLORS = {
     "Leaderboard": discord.Color.from_rgb(255, 215, 0),
     "Acro": discord.Color.orange(),
     "GTE": discord.Color.dark_green(),
+    "Utility": discord.Color.blurple(),
 }
 
 
@@ -324,6 +325,7 @@ class MikuBot(commands.Bot):
         await self.load_extension("cogs.leaderboard")
         await self.load_extension("cogs.acro")
         await self.load_extension("cogs.gte")
+        await self.load_extension("cogs.utility")
 
     async def close(self):
         if self.pool:
