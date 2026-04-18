@@ -1,6 +1,7 @@
 import asyncio
 import io
 import re
+import time
 
 import aiohttp
 import discord
@@ -105,9 +106,10 @@ class GTE(commands.Cog):
     # ── Command ──
 
     @commands.command()
-    async def gte(self, ctx: commands.Context, link: str, award: int, duration: str = "60s"):
-        """Start a Guess the Elo game. Post a game link, set an award, and let people guess ratings.
-        Usage: .gte <lichess_link> <award> [duration]
+    async def gte(self, ctx: commands.Context, lichess_link: str, award: int, duration: str = "60s"):
+        """Start a Guess the Elo game. The award is paid from your wallet to the closest guesser.
+
+        Guess format: <white_rating> vs <black_rating> (e.g. 1500 vs 1800)
         Example: .gte https://lichess.org/7o8NKKnL 500 90s"""
         # Delete the command message to hide the link
         try:
@@ -135,12 +137,12 @@ class GTE(commands.Cog):
 
         # Check for unsupported sites
         for site in _KNOWN_UNSUPPORTED:
-            if site in link:
+            if site in lichess_link:
                 await ctx.send(f"**{site}** support coming soon! Only Lichess is supported for now.")
                 return
 
         # Identify site
-        site = _identify_site(link)
+        site = _identify_site(lichess_link)
         if not site:
             await ctx.send("Unrecognised link. Currently supported: Lichess.")
             return
@@ -164,7 +166,7 @@ class GTE(commands.Cog):
         session = await self._get_session()
         extractor = SITE_EXTRACTORS[site]
         try:
-            white_rating, black_rating, gif_bytes, variant, tc_str = await extractor(session, link)
+            white_rating, black_rating, gif_bytes, variant, tc_str = await extractor(session, lichess_link)
         except ValueError as e:
             # Refund on failure
             async with self.pool.acquire() as conn:
@@ -197,6 +199,7 @@ class GTE(commands.Cog):
 
         # Post GIF as attachment
         gif_file = discord.File(io.BytesIO(gif_bytes), filename="game.gif")
+        ends_at = int(time.time()) + seconds
         embed = discord.Embed(
             title="Guess the Elo!",
             description=(
@@ -204,7 +207,7 @@ class GTE(commands.Cog):
                 f"**Award:** {MAIN_CURRENCY_EMOJI} **{award:,}** (funded by {ctx.author.display_name})\n\n"
                 f"Guess both players' ratings!\n"
                 f"Type `<white> vs <black>` (e.g. `1500 vs 1800`)\n"
-                f"You have **{seconds} seconds**."
+                f"Guessing ends <t:{ends_at}:R>"
             ),
             color=discord.Color.dark_green(),
         )

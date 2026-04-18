@@ -331,5 +331,5 @@ class MikuBot(commands.Bot):
         await super().close()
 
 bot = MikuBot()
-bot.help_command = Help()
+bot.help_command = Help(command_attrs={"aliases": ["h"]})
 bot.run(os.getenv("DISCORD_TOKEN"))
