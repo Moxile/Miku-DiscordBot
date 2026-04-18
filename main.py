@@ -225,6 +225,8 @@ COG_COLORS = {
     "Reminders": discord.Color.from_rgb(255, 182, 193),
     "Waifu": discord.Color.from_rgb(255, 105, 180),
     "Leaderboard": discord.Color.from_rgb(255, 215, 0),
+    "Acro": discord.Color.orange(),
+    "GTE": discord.Color.dark_green(),
 }
 
 
@@ -320,6 +322,8 @@ class MikuBot(commands.Bot):
         await self.load_extension("cogs.reminders")
         await self.load_extension("cogs.waifu")
         await self.load_extension("cogs.leaderboard")
+        await self.load_extension("cogs.acro")
+        await self.load_extension("cogs.gte")
 
     async def close(self):
         if self.pool:
