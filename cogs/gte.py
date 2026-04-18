@@ -108,9 +108,7 @@ class GTE(commands.Cog):
     @commands.command()
     async def gte(self, ctx: commands.Context, lichess_link: str, award: int, duration: str = "60s"):
         """Start a Guess the Elo game. The award is paid from your wallet to the closest guesser.
-
-        Guess format: <white_rating> vs <black_rating> (e.g. 1500 vs 1800)
-        Example: .gte https://lichess.org/7o8NKKnL 500 90s"""
+        Usage: .gte <link to game> award duration"""
         # Delete the command message to hide the link
         try:
             await ctx.message.delete()
