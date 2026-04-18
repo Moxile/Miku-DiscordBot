@@ -2,6 +2,8 @@ import ast
 import io
 import operator
 import re
+import struct
+import zlib
 
 import discord
 from discord.ext import commands
@@ -93,42 +95,28 @@ class Utility(commands.Cog):
         g = int(hex_str[2:4], 16)
         b = int(hex_str[4:6], 16)
 
-        # Create a solid-color image (256x128)
-        # BMP format: simplest to generate without external libraries
+        # Create a solid-color PNG (256x128) — no external libraries needed
         width, height = 256, 128
-        row_size = (width * 3 + 3) & ~3  # rows padded to 4-byte boundary
-        pixel_data_size = row_size * height
-        file_size = 54 + pixel_data_size
+        raw_row = b"\x00" + bytes([r, g, b]) * width  # filter byte + RGB pixels
+        raw_data = raw_row * height
+        compressed = zlib.compress(raw_data)
 
-        bmp = bytearray()
-        # File header (14 bytes)
-        bmp += b"BM"
-        bmp += file_size.to_bytes(4, "little")
-        bmp += (0).to_bytes(4, "little")
-        bmp += (54).to_bytes(4, "little")
-        # DIB header (40 bytes)
-        bmp += (40).to_bytes(4, "little")
-        bmp += width.to_bytes(4, "little")
-        bmp += height.to_bytes(4, "little")
-        bmp += (1).to_bytes(2, "little")   # planes
-        bmp += (24).to_bytes(2, "little")  # bits per pixel
-        bmp += (0).to_bytes(4, "little")   # no compression
-        bmp += pixel_data_size.to_bytes(4, "little")
-        bmp += (2835).to_bytes(4, "little")  # h resolution
-        bmp += (2835).to_bytes(4, "little")  # v resolution
-        bmp += (0).to_bytes(4, "little")
-        bmp += (0).to_bytes(4, "little")
-        # Pixel data (BMP stores BGR, bottom-to-top)
-        row = bytes([b, g, r]) * width + b"\x00" * (row_size - width * 3)
-        bmp += row * height
+        def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+            chunk = chunk_type + data
+            return struct.pack(">I", len(data)) + chunk + struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
 
-        file = discord.File(io.BytesIO(bmp), filename="color.bmp")
+        png = b"\x89PNG\r\n\x1a\n"
+        png += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        png += _png_chunk(b"IDAT", compressed)
+        png += _png_chunk(b"IEND", b"")
+
+        file = discord.File(io.BytesIO(png), filename="color.png")
         embed = discord.Embed(
             title=f"#{hex_str.upper()}",
             description=f"RGB({r}, {g}, {b})",
             color=discord.Color.from_rgb(r, g, b),
         )
-        embed.set_image(url="attachment://color.bmp")
+        embed.set_image(url="attachment://color.png")
         await ctx.send(file=file, embed=embed)
 
     @calc.error

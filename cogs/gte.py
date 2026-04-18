@@ -321,6 +321,10 @@ class GTE(commands.Cog):
         if not game or game["phase"] != "guessing":
             return
 
+        # Host can't guess
+        if message.author.id == game["starter_id"]:
+            return
+
         match = _GUESS_RE.match(message.content.strip())
         if not match:
             return
