@@ -89,7 +89,9 @@ class GTE(commands.Cog):
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = aiohttp.ClientSession(
+                headers={"User-Agent": "MikuDiscordBot/1.0"}
+            )
         return self._session
 
     async def cog_unload(self):
