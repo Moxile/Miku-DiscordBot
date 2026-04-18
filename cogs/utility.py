@@ -93,9 +93,9 @@ class Utility(commands.Cog):
         g = int(hex_str[2:4], 16)
         b = int(hex_str[4:6], 16)
 
-        # Create a small solid-color image (64x64)
+        # Create a solid-color image (256x128)
         # BMP format: simplest to generate without external libraries
-        width, height = 64, 64
+        width, height = 256, 128
         row_size = (width * 3 + 3) & ~3  # rows padded to 4-byte boundary
         pixel_data_size = row_size * height
         file_size = 54 + pixel_data_size
@@ -128,7 +128,7 @@ class Utility(commands.Cog):
             description=f"RGB({r}, {g}, {b})",
             color=discord.Color.from_rgb(r, g, b),
         )
-        embed.set_thumbnail(url="attachment://color.bmp")
+        embed.set_image(url="attachment://color.bmp")
         await ctx.send(file=file, embed=embed)
 
     @calc.error
