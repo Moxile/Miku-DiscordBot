@@ -10,7 +10,7 @@ from cogs.utils.db import (
     ensure_wallet, update_wallet, add_transaction,
     get_company, list_companies, create_company, delete_company,
     get_portfolio, get_holding, update_holding,
-    get_open_orders, get_open_orders_locked, create_order, cancel_order, get_escrowed_shares,
+    get_open_orders, get_open_orders_locked, get_user_orders, create_order, cancel_order, get_escrowed_shares,
     add_trade, get_last_trade_price,
     lock_wallet, lock_company,
     upsert_char_count, compute_daily_revenue,
@@ -254,7 +254,7 @@ class Market(commands.Cog):
 
     @commands.command(aliases=['m', 'stocks', 'ex'])
     async def exchange(self, ctx):
-        """List all companies on the exchange with their current price and IPO availability."""
+        """List all companies on the exchange with best bid/ask and IPO availability."""
         companies = await list_companies(self.pool, ctx.guild.id)
         if not companies:
             await ctx.send("No companies are listed yet.")
@@ -264,10 +264,12 @@ class Market(commands.Cog):
         for c in companies:
             channel = ctx.guild.get_channel(c["stock_channel_id"])
             name = channel.mention if channel else c["name"]
-            last_price = await get_last_trade_price(self.pool, ctx.guild.id, c["stock_channel_id"])
-            price_display = f"{last_price}{MAIN_CURRENCY_EMOJI}" if last_price else f"{c['ipo_price']}{MAIN_CURRENCY_EMOJI} (IPO)"
-            ipo_status = f" | IPO: {c['available_ipo_shares']}/{c['total_shares']} left" if c["available_ipo_shares"] > 0 else ""
-            embed.add_field(name=f"{c['name']} ({name})", value=f"Price: {price_display}{ipo_status}", inline=False)
+            buy_orders = await get_open_orders(self.pool, ctx.guild.id, c["stock_channel_id"], "buy")
+            sell_orders = await get_open_orders(self.pool, ctx.guild.id, c["stock_channel_id"], "sell")
+            best_bid = f"{buy_orders[0]['price']}{MAIN_CURRENCY_EMOJI}" if buy_orders else "None"
+            best_ask = f"{sell_orders[0]['price']}{MAIN_CURRENCY_EMOJI}" if sell_orders else "None"
+            ipo_status = f" | IPO: {c['available_ipo_shares']}/{c['total_shares']} @ {c['ipo_price']}{MAIN_CURRENCY_EMOJI}" if c["available_ipo_shares"] > 0 else ""
+            embed.add_field(name=f"{c['name']} ({name})", value=f"Bid: {best_bid} / Ask: {best_ask}{ipo_status}", inline=False)
 
         await ctx.send(embed=embed)
 
@@ -276,8 +278,9 @@ class Market(commands.Cog):
         """Show your current holdings as well as how those evolve. Use with a member mention to see others portfolio."""
         member = member or ctx.author
         holdings = await get_portfolio(self.pool, ctx.guild.id, member.id)
-        if not holdings:
-            await ctx.send(f"{member.display_name} has no holdings.")
+        orders = await get_user_orders(self.pool, ctx.guild.id, member.id)
+        if not holdings and not orders:
+            await ctx.send(f"{member.display_name} has no holdings or open orders.")
             return
 
         embed = discord.Embed(title=f"{member.display_name}'s Portfolio", color=discord.Color.green())
@@ -314,6 +317,16 @@ class Market(commands.Cog):
             )
         total_pl = total_value - total_cost
         total_pl_str = f"+{total_pl}" if total_pl >= 0 else str(total_pl)
+
+        if orders:
+            order_lines = []
+            for o in orders:
+                company = await get_company(self.pool, ctx.guild.id, o["stock_channel_id"])
+                stock_name = company["name"] if company else str(o["stock_channel_id"])
+                side = "BUY" if o["side"] == "buy" else "SELL"
+                order_lines.append(f"#{o['id']} {side} {o['remaining']}x {stock_name} @ {o['price']}{MAIN_CURRENCY_EMOJI}")
+            embed.add_field(name="Open Orders", value="\n".join(order_lines), inline=False)
+
         embed.set_footer(text=f"Total value: {total_value}{MAIN_CURRENCY_EMOJI} | Total P/L: {total_pl_str}{MAIN_CURRENCY_EMOJI} | Total dividends: {total_divs}{MAIN_CURRENCY_EMOJI}")
         await ctx.send(embed=embed)
 
