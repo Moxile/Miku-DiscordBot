@@ -199,6 +199,35 @@ async def init_db(pool: asyncpg.Pool):
         );
     """)
 
+    # Offers (bookmaker-style fixed-odds bets)
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS offers (
+            id              BIGSERIAL PRIMARY KEY,
+            guild_id        BIGINT NOT NULL,
+            channel_id      BIGINT NOT NULL,
+            host_id         BIGINT NOT NULL,
+            description     TEXT NOT NULL DEFAULT '',
+            odds            NUMERIC(10, 4) NOT NULL CHECK (odds > 1),
+            min_stake       BIGINT NOT NULL CHECK (min_stake > 0),
+            max_stake       BIGINT NOT NULL CHECK (max_stake >= min_stake),
+            pool            BIGINT NOT NULL CHECK (pool > 0),
+            pool_remaining  BIGINT NOT NULL CHECK (pool_remaining >= 0),
+            status          TEXT NOT NULL DEFAULT 'open'
+                            CHECK (status IN ('open', 'won', 'lost', 'cancelled')),
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            closed_at       TIMESTAMPTZ
+        );
+
+        CREATE TABLE IF NOT EXISTS offer_takes (
+            id         BIGSERIAL PRIMARY KEY,
+            offer_id   BIGINT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+            user_id    BIGINT NOT NULL,
+            stake      BIGINT NOT NULL CHECK (stake > 0),
+            liability  BIGINT NOT NULL CHECK (liability >= 0),
+            placed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    """)
+
     # Safety constraints — prevent negative balances/holdings as a last line of defense.
     # These are idempotent: if the constraint already exists, DO NOTHING catches the error.
     for stmt in [
@@ -320,6 +349,7 @@ class MikuBot(commands.Bot):
         await self.load_extension("cogs.market")
         await self.load_extension("cogs.shop")
         await self.load_extension("cogs.predictions")
+        await self.load_extension("cogs.offers")
         await self.load_extension("cogs.reminders")
         await self.load_extension("cogs.waifu")
         await self.load_extension("cogs.leaderboard")
