@@ -169,31 +169,52 @@ class Market(commands.Cog):
                         weekly_revenue = await get_weekly_revenue_total(
                             conn, guild.id, company["stock_channel_id"], monday, saturday,
                         )
+                        # --- OLD MODEL: dividends = 20% of profit, paid only when profit > 0 ---
+                        # cost = int(0.05 * company["treasury"])
+                        # profit = weekly_revenue - cost
+                        #
+                        # dividends_paid = 0
+                        # dividend_per_share = 0
+                        #
+                        # if profit > 0:
+                        #     dividend_pool = int(0.20 * profit)
+                        #     dividend_per_share = dividend_pool // company["total_shares"]
+                        #
+                        #     if dividend_per_share > 0:
+                        #         shareholders = await get_shareholders(conn, guild.id, company["stock_channel_id"])
+                        #         for sh in shareholders:
+                        #             payout = dividend_per_share * sh["quantity"]
+                        #             await ensure_wallet(conn, guild.id, sh["user_id"])
+                        #             await update_wallet(conn, guild.id, sh["user_id"], payout)
+                        #             await add_transaction(conn, guild.id, sh["user_id"], payout, "dividend",
+                        #                                   f"Dividend from {company['name']}")
+                        #             dividends_paid += payout
+                        #
+                        #     # Treasury gets profit minus what was paid out
+                        #     # (IPO shares' dividend portion stays in treasury implicitly)
+                        #     await update_treasury(conn, guild.id, company["stock_channel_id"], profit - dividends_paid)
+                        # else:
+                        #     await update_treasury(conn, guild.id, company["stock_channel_id"], profit)
+
+                        # --- NEW MODEL: dividends = 10% of revenue, always paid ---
                         cost = int(0.05 * company["treasury"])
-                        profit = weekly_revenue - cost
-
+                        dividend_pool = int(0.40 * weekly_revenue)
+                        dividend_per_share = dividend_pool // company["total_shares"]
                         dividends_paid = 0
-                        dividend_per_share = 0
+                        profit = weekly_revenue - cost  # kept for reporting
 
-                        if profit > 0:
-                            dividend_pool = int(0.20 * profit)
-                            dividend_per_share = dividend_pool // company["total_shares"]
+                        if dividend_per_share > 0:
+                            shareholders = await get_shareholders(conn, guild.id, company["stock_channel_id"])
+                            for sh in shareholders:
+                                payout = dividend_per_share * sh["quantity"]
+                                await ensure_wallet(conn, guild.id, sh["user_id"])
+                                await update_wallet(conn, guild.id, sh["user_id"], payout)
+                                await add_transaction(conn, guild.id, sh["user_id"], payout, "dividend",
+                                                      f"Dividend from {company['name']}")
+                                dividends_paid += payout
 
-                            if dividend_per_share > 0:
-                                shareholders = await get_shareholders(conn, guild.id, company["stock_channel_id"])
-                                for sh in shareholders:
-                                    payout = dividend_per_share * sh["quantity"]
-                                    await ensure_wallet(conn, guild.id, sh["user_id"])
-                                    await update_wallet(conn, guild.id, sh["user_id"], payout)
-                                    await add_transaction(conn, guild.id, sh["user_id"], payout, "dividend",
-                                                          f"Dividend from {company['name']}")
-                                    dividends_paid += payout
-
-                            # Treasury gets profit minus what was paid out
-                            # (IPO shares' dividend portion stays in treasury implicitly)
-                            await update_treasury(conn, guild.id, company["stock_channel_id"], profit - dividends_paid)
-                        else:
-                            await update_treasury(conn, guild.id, company["stock_channel_id"], profit)
+                        await update_treasury(conn, guild.id, company["stock_channel_id"],
+                                              weekly_revenue - dividends_paid - cost)
 
                         # Level-up check
                         company = await lock_company(conn, guild.id, company["stock_channel_id"])
@@ -476,26 +497,47 @@ class Market(commands.Cog):
                     weekly_revenue = await get_weekly_revenue_total(
                         conn, ctx.guild.id, company["stock_channel_id"], monday, yesterday,
                     )
-                    cost = int(COST_FACTOR * company["treasury"])
-                    profit = weekly_revenue - cost
-                    dividends_paid = 0
-                    dividend_per_share = 0
+                    # --- OLD MODEL: dividends = 20% of profit, paid only when profit > 0 ---
+                    # cost = int(COST_FACTOR * company["treasury"])
+                    # profit = weekly_revenue - cost
+                    # dividends_paid = 0
+                    # dividend_per_share = 0
+                    #
+                    # if profit > 0:
+                    #     dividend_pool = int(0.20 * profit)
+                    #     dividend_per_share = dividend_pool // company["total_shares"]
+                    #     if dividend_per_share > 0:
+                    #         shareholders = await get_shareholders(conn, ctx.guild.id, company["stock_channel_id"])
+                    #         for sh in shareholders:
+                    #             payout = dividend_per_share * sh["quantity"]
+                    #             await ensure_wallet(conn, ctx.guild.id, sh["user_id"])
+                    #             await update_wallet(conn, ctx.guild.id, sh["user_id"], payout)
+                    #             await add_transaction(conn, ctx.guild.id, sh["user_id"], payout, "dividend",
+                    #                                   f"Dividend from {company['name']}")
+                    #             dividends_paid += payout
+                    #     await update_treasury(conn, ctx.guild.id, company["stock_channel_id"], profit - dividends_paid)
+                    # else:
+                    #     await update_treasury(conn, ctx.guild.id, company["stock_channel_id"], profit)
 
-                    if profit > 0:
-                        dividend_pool = int(0.20 * profit)
-                        dividend_per_share = dividend_pool // company["total_shares"]
-                        if dividend_per_share > 0:
-                            shareholders = await get_shareholders(conn, ctx.guild.id, company["stock_channel_id"])
-                            for sh in shareholders:
-                                payout = dividend_per_share * sh["quantity"]
-                                await ensure_wallet(conn, ctx.guild.id, sh["user_id"])
-                                await update_wallet(conn, ctx.guild.id, sh["user_id"], payout)
-                                await add_transaction(conn, ctx.guild.id, sh["user_id"], payout, "dividend",
-                                                      f"Dividend from {company['name']}")
-                                dividends_paid += payout
-                        await update_treasury(conn, ctx.guild.id, company["stock_channel_id"], profit - dividends_paid)
-                    else:
-                        await update_treasury(conn, ctx.guild.id, company["stock_channel_id"], profit)
+                    # --- NEW MODEL: dividends = 10% of revenue, always paid ---
+                    cost = int(COST_FACTOR * company["treasury"])
+                    dividend_pool = int(0.40 * weekly_revenue)
+                    dividend_per_share = dividend_pool // company["total_shares"]
+                    dividends_paid = 0
+                    profit = weekly_revenue - cost  # kept for reporting
+
+                    if dividend_per_share > 0:
+                        shareholders = await get_shareholders(conn, ctx.guild.id, company["stock_channel_id"])
+                        for sh in shareholders:
+                            payout = dividend_per_share * sh["quantity"]
+                            await ensure_wallet(conn, ctx.guild.id, sh["user_id"])
+                            await update_wallet(conn, ctx.guild.id, sh["user_id"], payout)
+                            await add_transaction(conn, ctx.guild.id, sh["user_id"], payout, "dividend",
+                                                  f"Dividend from {company['name']}")
+                            dividends_paid += payout
+
+                    await update_treasury(conn, ctx.guild.id, company["stock_channel_id"],
+                                          weekly_revenue - dividends_paid - cost)
 
                     company = await lock_company(conn, ctx.guild.id, company["stock_channel_id"])
                     leveled_up = False
