@@ -6,6 +6,7 @@ from cogs.utils.db import (
     create_offer, get_offer, lock_offer, get_active_offers, get_offer_takes,
     add_offer_take, decrement_offer_pool, set_offer_status,
 )
+from cogs.utils.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI
 
 
@@ -69,28 +70,29 @@ class Offers(commands.Cog):
             if tokens[0].lower().startswith("x"):
                 # Multiplier form
                 odds = float(tokens[0][1:])
-                min_stake = int(tokens[1])
-                max_stake = int(tokens[2])
-                pool = int(tokens[3])
+                min_stake = parse_amount(tokens[1])
+                max_stake = parse_amount(tokens[2])
+                pool = parse_amount(tokens[3])
                 description = " ".join(tokens[4:])
             else:
                 # Fixed form: <return> <risk> <pool> <msg>
-                ret = int(tokens[0])
-                risk = int(tokens[1])
-                pool = int(tokens[2])
-                if risk <= 0 or ret <= risk:
-                    await ctx.send("Return must be greater than risk, risk must be positive.")
+                ret = parse_amount(tokens[0])
+                risk = parse_amount(tokens[1])
+                pool = parse_amount(tokens[2])
+                if ret <= risk:
+                    await ctx.send("Return must be greater than risk.")
                     return
                 odds = ret / risk
                 min_stake = risk
                 max_stake = risk
                 description = " ".join(tokens[3:])
-        except (ValueError, IndexError):
-            await ctx.send(
+        except (AmountError, ValueError, IndexError) as e:
+            msg = str(e) if isinstance(e, AmountError) else (
                 "Invalid arguments.\n"
-                "`.offer x<odds> <min> <max> <pool> <message>` — e.g. `.offer x10 100 200 5000 Pens win`\n"
+                "`.offer x<odds> <min> <max> <pool> <message>` — e.g. `.offer x10 100 200 5k Pens win`\n"
                 "`.offer <return> <risk> <pool> <message>` — e.g. `.offer 100 10 500 Miku hits 3 goals`"
             )
+            await ctx.send(msg)
             return
 
         if odds <= 1:
@@ -146,10 +148,12 @@ class Offers(commands.Cog):
     # ── Accept ──
 
     @commands.command()
-    async def take(self, ctx, offer_id: int, stake: int):
+    async def take(self, ctx, offer_id: int, stake: str):
         """Accept a host's offer with a given stake. Usage: .take <offer_id> <stake>"""
-        if stake <= 0:
-            await ctx.send("Stake must be positive.")
+        try:
+            stake = parse_amount(stake)
+        except AmountError as e:
+            await ctx.send(str(e))
             return
 
         async with self.pool_conn.acquire() as conn:

@@ -19,6 +19,7 @@ from cogs.utils.db import (
     get_avg_buy_price,
 )
 from cogs.utils.checks import require_channel, WrongChannel, invalidate
+from cogs.utils.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI, LEVEL_BASE_THRESHOLD, COST_FACTOR
 
 
@@ -427,8 +428,13 @@ class Market(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def listcompany(self, ctx, stock: discord.TextChannel, name: str, ipo_price: int = 100, total_shares: int = 1000):
+    async def listcompany(self, ctx, stock: discord.TextChannel, name: str, ipo_price: str = "100", total_shares: int = 1000):
         """Admin: list a new company on the market, associating it with a text channel. Optionally use IPO, total shares to adjust the default 100, 1000."""
+        try:
+            ipo_price = parse_amount(ipo_price)
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
 
         existing = await get_company(self.pool, ctx.guild.id, stock.id)
         if existing:
@@ -732,10 +738,15 @@ class Market(commands.Cog):
 
     @commands.command(aliases=['bo', 'border'])
     @require_channel("trading_channel")
-    async def buyorder(self, ctx, stock: discord.TextChannel, quantity: int, price: int):
+    async def buyorder(self, ctx, stock: discord.TextChannel, quantity: int, price: str):
         """Place a limit buy order. The order will execute as soon as a matching sell order is placed at or below your specified price. Use by mentioning channel, then quantity and highest price you are paying."""
-        if quantity <= 0 or price <= 0:
-            await ctx.send("Quantity and price must be positive.")
+        try:
+            price = parse_amount(price)
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
+        if quantity <= 0:
+            await ctx.send("Quantity must be positive.")
             return
 
         company = await get_company(self.pool, ctx.guild.id, stock.id)
@@ -800,10 +811,15 @@ class Market(commands.Cog):
 
     @commands.command(aliases=['so', 'sorder'])
     @require_channel("trading_channel")
-    async def sellorder(self, ctx, stock: discord.TextChannel, quantity: int, price: int):
+    async def sellorder(self, ctx, stock: discord.TextChannel, quantity: int, price: str):
         """Place a limit sell order. The order will execute as soon as a matching buy order is placed at or above your specified price. Use by mentioning channel, then quantity and lowest price you are accepting."""
-        if quantity <= 0 or price <= 0:
-            await ctx.send("Quantity and price must be positive.")
+        try:
+            price = parse_amount(price)
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
+        if quantity <= 0:
+            await ctx.send("Quantity must be positive.")
             return
 
         company = await get_company(self.pool, ctx.guild.id, stock.id)

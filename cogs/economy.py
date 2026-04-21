@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from cogs.utils.db import ensure_wallet, update_wallet, update_bank, add_transaction
+from cogs.utils.money import parse_amount, AmountError
 
 import datetime
 import random
@@ -76,17 +77,12 @@ class Economy(commands.Cog):
         """Deposit money from you wallet into your banj account. You can specify and amount or use 'all' to deposit everything."""
         bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         wallet = bal["wallet"]
-        if amount.lower() == "all":
-            amount = wallet
-        elif not amount.isdigit():
-            await ctx.send("Please enter a valid amount to deposit.")
+        try:
+            amount = parse_amount(amount, wallet_balance=wallet)
+        except AmountError as e:
+            await ctx.send(str(e))
             return
-        else:
-            amount = int(amount)
 
-        if amount <= 0:
-            await ctx.send("Amount must be greater than zero.")
-            return
         if wallet < amount:
             await ctx.send("You can't deposit more than you have in your wallet!")
             return
@@ -103,17 +99,12 @@ class Economy(commands.Cog):
         """Withdraw money from your bank account into your wallet. You can specify and amount or use 'all' to withdraw everything."""
         bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         bank = bal["bank"]
-        if amount.lower() == "all":
-            amount = bank
-        elif not amount.isdigit():
-            await ctx.send("Please enter a valid amount to withdraw.")
+        try:
+            amount = parse_amount(amount, wallet_balance=bank)
+        except AmountError as e:
+            await ctx.send(str(e))
             return
-        else:
-            amount = int(amount)
 
-        if amount <= 0:
-            await ctx.send("Amount must be greater than zero.")
-            return
         if bank < amount:
             await ctx.send("You can't withdraw more than you have in your bank account!")
             return
@@ -179,12 +170,14 @@ class Economy(commands.Cog):
 
     
     @commands.command()
-    async def gift(self, ctx, member: discord.Member, amount: int):
+    async def gift(self, ctx, member: discord.Member, amount: str):
         """Gift money from your wallet to another user's wallet. You must mention the recipient and specify the amount."""
-        if amount <= 0:
-            await ctx.send("Amount must be greater than zero.")
-            return
         bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        try:
+            amount = parse_amount(amount, wallet_balance=bal["wallet"])
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
         if bal["wallet"] < amount:
             await ctx.send("You can't give more than you have in your wallet!")
             return
@@ -216,10 +209,12 @@ class Economy(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def add(self, ctx, member: discord.Member, amount: int):
+    async def add(self, ctx, member: discord.Member, amount: str):
         """Admin: Add money to a user's wallet."""
-        if amount <= 0:
-            await ctx.send("Amount must be greater than zero.")
+        try:
+            amount = parse_amount(amount)
+        except AmountError as e:
+            await ctx.send(str(e))
             return
 
         await ensure_wallet(self.pool, ctx.guild.id, member.id)
@@ -228,10 +223,12 @@ class Economy(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def remove(self, ctx, member: discord.Member, amount: int):
+    async def remove(self, ctx, member: discord.Member, amount: str):
         """Admin: Remove money from a user's wallet and bank."""
-        if amount <= 0:
-            await ctx.send("Amount must be greater than zero.")
+        try:
+            amount = parse_amount(amount)
+        except AmountError as e:
+            await ctx.send(str(e))
             return
 
         bal = await ensure_wallet(self.pool, ctx.guild.id, member.id)

@@ -199,6 +199,22 @@ async def init_db(pool: asyncpg.Pool):
         );
     """)
 
+    # Reaction roles
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS reaction_roles (
+            guild_id    BIGINT NOT NULL,
+            channel_id  BIGINT NOT NULL,
+            message_id  BIGINT NOT NULL,
+            emoji       TEXT   NOT NULL,
+            is_custom   BOOLEAN NOT NULL,
+            role_id     BIGINT NOT NULL,
+            created_by  BIGINT NOT NULL,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (guild_id, message_id, emoji)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rr_message ON reaction_roles(message_id);
+    """)
+
     # Offers (bookmaker-style fixed-odds bets)
     await pool.execute("""
         CREATE TABLE IF NOT EXISTS offers (
@@ -257,6 +273,7 @@ COG_COLORS = {
     "Acro": discord.Color.orange(),
     "GTE": discord.Color.dark_green(),
     "Utility": discord.Color.blurple(),
+    "ReactionRoles": discord.Color.fuchsia(),
 }
 
 
@@ -356,6 +373,7 @@ class MikuBot(commands.Bot):
         await self.load_extension("cogs.acro")
         await self.load_extension("cogs.gte")
         await self.load_extension("cogs.utility")
+        await self.load_extension("cogs.reaction_roles")
 
     async def close(self):
         if self.pool:

@@ -12,6 +12,7 @@ from cogs.utils.db import (
     set_waifu_owner, set_engagement, set_marriage, dissolve_marriage,
     decay_waifu_values,
 )
+from cogs.utils.money import parse_amount, AmountError
 
 
 class Waifu(commands.Cog):
@@ -69,7 +70,7 @@ class Waifu(commands.Cog):
     # ── Commands ──
 
     @commands.command(aliases=["wbuy"])
-    async def waifubuy(self, ctx: commands.Context, member: discord.Member, amount: int = None):
+    async def waifubuy(self, ctx: commands.Context, member: discord.Member, amount: str = None):
         """Buy a user as your waifu. Pay at least their current value.
         Usage: .waifubuy <@user> [amount]"""
         if member == ctx.author:
@@ -78,6 +79,12 @@ class Waifu(commands.Cog):
         if member.bot:
             await ctx.send("You can't buy a bot.")
             return
+        if amount is not None:
+            try:
+                amount = parse_amount(amount)
+            except AmountError as e:
+                await ctx.send(str(e))
+                return
 
         async with self.pool.acquire() as conn:
             async with conn.transaction():

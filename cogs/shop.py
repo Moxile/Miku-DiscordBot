@@ -6,6 +6,7 @@ from cogs.utils.db import (
     create_item, delete_item, get_item_by_name, get_shop_items,
     get_inventory, add_to_inventory,
 )
+from cogs.utils.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI
 
 
@@ -95,8 +96,13 @@ class Shop(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def additem(self, ctx, price: int, *, name: str):
+    async def additem(self, ctx, price: str, *, name: str):
         """Admin: Add a new item to the shop. Usage: .additem <price> <name>"""
+        try:
+            price = parse_amount(price)
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
         try:
             item = await create_item(self.pool, ctx.guild.id, name, price)
             await ctx.send(f"**{item['name']}** added to the shop for {price}{MAIN_CURRENCY_EMOJI}. Use `.itemdesc {name} <description>` to add a description.")
@@ -105,8 +111,13 @@ class Shop(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def addrole(self, ctx, price: int, role: discord.Role, *, name: str):
+    async def addrole(self, ctx, price: str, role: discord.Role, *, name: str):
         """Admin: Add a role item to the shop. Usage: .addrole <price> @role <name>"""
+        try:
+            price = parse_amount(price)
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
         try:
             item = await create_item(self.pool, ctx.guild.id, name, price, item_type="role", role_given=role.id)
             await ctx.send(f"**{item['name']}** (grants {role.mention}) added to the shop for {price}{MAIN_CURRENCY_EMOJI}.")

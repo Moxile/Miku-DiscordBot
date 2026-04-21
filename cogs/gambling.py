@@ -8,6 +8,7 @@ from discord import app_commands
 
 from cogs.utils.db import ensure_wallet, update_wallet, update_bank, add_transaction
 from cogs.utils.checks import require_channel, WrongChannel, invalidate
+from cogs.utils.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, PREFIX
 
 import random
@@ -57,14 +58,16 @@ class Gambling(commands.Cog):
 
     @commands.command(aliases=["bf"])
     @require_channel("gambling_channel")
-    async def betflip(self, ctx, choice, bet_per_try: int, tries: int = 1):
+    async def betflip(self, ctx, choice, bet_per_try: str, tries: int = 1):
         """Bet on heads or tails. Specify your choice, how much to bet per try, and how many times to flip. (example: .betflip h 10 5 - bet 10 on heads per flip for 5 flips)"""
         # validate inputs
         if tries <= 0:
             await ctx.send("Please enter a valid number of tries (positive amount).")
             return
-        if bet_per_try <= 0:
-            await ctx.send("Please enter a valid number for your bet.")
+        try:
+            bet_per_try = parse_amount(bet_per_try)
+        except AmountError as e:
+            await ctx.send(str(e))
             return
         is_valid, error = await self.check_bet(ctx, bet_per_try * tries)
         if not is_valid:
@@ -149,15 +152,12 @@ class Gambling(commands.Cog):
     @require_channel("gambling_channel")
     async def blackjack(self, ctx, bet: str):
         """Start a game of blackjack by placing a bet. You can specify an amount or use 'all' to bet everything. During the game, use .hit, .stand, .double, or .split."""
-        if bet.lower() == "all":
-            wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-            bet = wallet["wallet"]
-        else:
-            try:
-                bet = int(bet)
-            except ValueError:
-                await ctx.send("Please enter a valid amount or 'all'.")
-                return
+        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        try:
+            bet = parse_amount(bet, wallet_balance=wallet["wallet"])
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
         is_valid, error = await self.check_bet(ctx, bet)
         if not is_valid:
             await ctx.send(error)
@@ -414,15 +414,12 @@ class Gambling(commands.Cog):
     @require_channel("gambling_channel")
     async def roulette(self, ctx, choice, bet: str):
         """Play a game of roulette by placing a bet on a color, odd/even, or specific number. You can specify an amount or use 'all' to bet everything. (example: .roulette red 10 - bet 10 on red)"""
-        if bet.lower() == "all":
-            wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-            bet = wallet["wallet"]
-        else:
-            try:
-                bet = int(bet)
-            except ValueError:
-                await ctx.send("Please enter a valid amount or 'all'.")
-                return
+        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        try:
+            bet = parse_amount(bet, wallet_balance=wallet["wallet"])
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
         is_valid, error = await self.check_bet(ctx, bet)
         if not is_valid:
             await ctx.send(error)
@@ -514,15 +511,12 @@ class Gambling(commands.Cog):
     @require_channel("gambling_channel")
     async def russian_roulette(self, ctx, bet: str):
         """Play Russian Roulette with other players. You can specify an amount or use 'all' to bet everything. Everyone must match the same bet to join."""
-        if bet.lower() == "all":
-            wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-            bet = wallet["wallet"]
-        else:
-            try:
-                bet = int(bet)
-            except ValueError:
-                await ctx.send("Please enter a valid amount or 'all'.")
-                return
+        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        try:
+            bet = parse_amount(bet, wallet_balance=wallet["wallet"])
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
         is_valid, error = await self.check_bet(ctx, bet)
         if not is_valid:
             await ctx.send(error)

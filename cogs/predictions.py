@@ -8,6 +8,7 @@ from cogs.utils.db import (
     close_prediction, resolve_prediction, get_winning_bets,
     get_active_predictions,
 )
+from cogs.utils.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI
 
 # In-memory cache: guild_id -> role_id
@@ -101,18 +102,12 @@ class Predictions(commands.Cog):
             return
 
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-        if amount.lower() == "all":
-            amount = wallet["wallet"]
-        else:
-            try:
-                amount = int(amount)
-            except ValueError:
-                await ctx.send("Please enter a valid amount or 'all'.")
-                return
-
-        if amount <= 0:
-            await ctx.send("Please enter a positive amount.")
+        try:
+            amount = parse_amount(amount, wallet_balance=wallet["wallet"])
+        except AmountError as e:
+            await ctx.send(str(e))
             return
+
         if wallet["wallet"] < amount:
             await ctx.send(f"You don't have enough {MAIN_CURRENCY_EMOJI}.")
             return

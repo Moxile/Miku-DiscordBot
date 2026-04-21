@@ -7,6 +7,7 @@ from discord.ext import commands
 
 from config import MAIN_CURRENCY_EMOJI
 from cogs.utils.db import ensure_wallet, update_wallet, add_transaction
+from cogs.utils.money import parse_amount, AmountError
 
 
 class Acro(commands.Cog):
@@ -21,7 +22,7 @@ class Acro(commands.Cog):
     # ── Command ──
 
     @commands.command()
-    async def acro(self, ctx: commands.Context, bet: int = None):
+    async def acro(self, ctx: commands.Context, bet: str = None):
         """Start an Acro game. Everyone gets 60s to submit a phrase matching random letters.
         Then 30s of voting. Winner takes the pot.
         Usage: .acro [bet]"""
@@ -29,9 +30,12 @@ class Acro(commands.Cog):
             await ctx.send("An Acro game is already running in this channel!")
             return
 
-        if bet is not None and bet <= 0:
-            await ctx.send("Bet must be a positive amount.")
-            return
+        if bet is not None:
+            try:
+                bet = parse_amount(bet)
+            except AmountError as e:
+                await ctx.send(str(e))
+                return
 
         letter_count = random.randint(3, 5)
         letters = [random.choice(string.ascii_uppercase) for _ in range(letter_count)]
