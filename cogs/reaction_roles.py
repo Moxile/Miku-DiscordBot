@@ -138,13 +138,13 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
 
     # ── Commands ──
 
-    @commands.group(name="rr", aliases=["reactionrole", "reactionroles"], invoke_without_command=True)
+    @commands.group(name="reactionroles", aliases=["reactionrole"], invoke_without_command=True)
     @commands.has_permissions(manage_roles=True)
-    async def rr(self, ctx: commands.Context):
+    async def reactionroles(self, ctx: commands.Context):
         """Admin: manage reaction roles. Subcommands: add, remove, list, clear."""
         await ctx.send_help(ctx.command)
 
-    @rr.command(name="add")
+    @reactionroles.command(name="add")
     @commands.has_permissions(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True, add_reactions=True)
     async def rr_add(self, ctx: commands.Context, message: discord.Message, emoji: str, *, role: discord.Role):
@@ -194,7 +194,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         )
         await ctx.send(embed=embed)
 
-    @rr.command(name="remove", aliases=["rm", "delete"])
+    @reactionroles.command(name="remove", aliases=["rm", "delete"])
     @commands.has_permissions(manage_roles=True)
     async def rr_remove(self, ctx: commands.Context, message: discord.Message, emoji: str):
         """Remove a reaction role binding.
@@ -218,7 +218,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
 
         await ctx.send(f"Removed reaction role binding for {emoji}.")
 
-    @rr.command(name="list")
+    @reactionroles.command(name="list")
     @commands.has_permissions(manage_roles=True)
     async def rr_list(self, ctx: commands.Context, message: discord.Message = None):
         """List reaction roles for a message, or all bindings in this server."""
@@ -256,7 +256,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
 
         await ctx.send(embed=embed)
 
-    @rr.command(name="clear")
+    @reactionroles.command(name="clear")
     @commands.has_permissions(manage_roles=True)
     async def rr_clear(self, ctx: commands.Context, message: discord.Message):
         """Remove all reaction role bindings on a message."""
