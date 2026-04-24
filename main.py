@@ -244,6 +244,16 @@ async def init_db(pool: asyncpg.Pool):
         );
     """)
 
+    # Counting channel
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS counting (
+            guild_id   BIGINT PRIMARY KEY,
+            channel_id BIGINT NOT NULL,
+            count      INTEGER DEFAULT 0,
+            last_user  BIGINT  DEFAULT NULL
+        );
+    """)
+
     # Safety constraints — prevent negative balances/holdings as a last line of defense.
     # These are idempotent: if the constraint already exists, DO NOTHING catches the error.
     for stmt in [
@@ -374,6 +384,7 @@ class MikuBot(commands.Bot):
         await self.load_extension("cogs.gte")
         await self.load_extension("cogs.utility")
         await self.load_extension("cogs.reaction_roles")
+        await self.load_extension("cogs.counting")
 
     async def close(self):
         if self.pool:
