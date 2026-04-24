@@ -4,7 +4,7 @@ import operator
 import discord
 from discord.ext import commands
 
-from config import MAIN_CURRENCY_EMOJI
+from config import MAIN_CURRENCY_EMOJI, PREFIX
 from cogs.utils.db import ensure_wallet, update_wallet, add_transaction
 
 REWARD = 5
@@ -78,14 +78,14 @@ class Counting(commands.Cog):
         self._cache[guild_id] = state
         return state
 
-    async def _reset(self, guild_id: int):
+    async def _reset(self, guild_id: int, breaker_id: int):
         await self.pool.execute(
-            "UPDATE counting SET count = 0, last_user = NULL WHERE guild_id = $1",
-            guild_id,
+            "UPDATE counting SET count = 0, last_user = $2 WHERE guild_id = $1",
+            guild_id, breaker_id,
         )
         if guild_id in self._cache:
             self._cache[guild_id]["count"] = 0
-            self._cache[guild_id]["last_user"] = None
+            self._cache[guild_id]["last_user"] = breaker_id
 
     async def _advance(self, guild_id: int, user_id: int, new_count: int):
         await self.pool.execute(
@@ -145,9 +145,10 @@ class Counting(commands.Cog):
         if state is None or message.channel.id != state["channel_id"]:
             return
 
+        if message.content.startswith(PREFIX):
+            return  # bot command — ignore silently
+
         value = safe_eval(message.content)
-        if value is None:
-            return  # not a math expression — ignore silently
 
         guild_id = message.guild.id
         user_id = message.author.id
@@ -155,15 +156,15 @@ class Counting(commands.Cog):
 
         if user_id == state["last_user"]:
             await message.add_reaction("❌")
-            await self._reset(guild_id)
+            await self._reset(guild_id, user_id)
             await message.channel.send(
                 f"{message.author.mention} can't count twice in a row! Back to **0**."
             )
             return
 
-        if value != current + 1:
+        if value is None or value != current + 1:
             await message.add_reaction("❌")
-            await self._reset(guild_id)
+            await self._reset(guild_id, user_id)
             await message.channel.send(
                 f"{message.author.mention} broke the count at **{current}**! "
                 f"Expected **{current + 1}**. Back to **0**."
