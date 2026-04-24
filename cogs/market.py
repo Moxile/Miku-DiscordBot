@@ -20,7 +20,13 @@ from cogs.utils.db import (
 )
 from cogs.utils.checks import require_channel, WrongChannel, invalidate
 from cogs.utils.money import parse_amount, AmountError
-from config import MAIN_CURRENCY_EMOJI, LEVEL_BASE_THRESHOLD, COST_FACTOR
+from config import (
+    MAIN_CURRENCY_EMOJI,
+    LEVEL_BASE_THRESHOLD,
+    COST_FACTOR,
+    DIVIDEND_REVENUE_SHARE,
+    LEVEL_UP_TREASURY_CONSUME,
+)
 
 
 class Market(commands.Cog):
@@ -199,7 +205,7 @@ class Market(commands.Cog):
 
                         # --- NEW MODEL: dividends = 10% of revenue, always paid ---
                         cost = int(0.05 * company["treasury"])
-                        dividend_pool = int(0.40 * weekly_revenue)
+                        dividend_pool = int(DIVIDEND_REVENUE_SHARE * weekly_revenue)
                         dividend_per_share = dividend_pool // company["total_shares"]
                         dividends_paid = 0
                         profit = weekly_revenue - cost  # kept for reporting
@@ -224,7 +230,7 @@ class Market(commands.Cog):
                         threshold = LEVEL_BASE_THRESHOLD * (2 ** (next_level - 1))
 
                         if company["treasury"] >= threshold:
-                            consume = int(0.80 * company["treasury"])
+                            consume = int(LEVEL_UP_TREASURY_CONSUME * company["treasury"])
                             new_multiplier = company["revenue_multiplier"] * 2
                             await set_company_level(conn, guild.id, company["stock_channel_id"],
                                                      next_level, new_multiplier, consume)
@@ -540,7 +546,7 @@ class Market(commands.Cog):
 
                     # --- NEW MODEL: dividends = 10% of revenue, always paid ---
                     cost = int(COST_FACTOR * company["treasury"])
-                    dividend_pool = int(0.40 * weekly_revenue)
+                    dividend_pool = int(DIVIDEND_REVENUE_SHARE * weekly_revenue)
                     dividend_per_share = dividend_pool // company["total_shares"]
                     dividends_paid = 0
                     profit = weekly_revenue - cost  # kept for reporting
@@ -563,7 +569,7 @@ class Market(commands.Cog):
                     next_level = company["company_level"] + 1
                     threshold = LEVEL_BASE_THRESHOLD * (2 ** (next_level - 1))
                     if company["treasury"] >= threshold:
-                        consume = int(0.80 * company["treasury"])
+                        consume = int(LEVEL_UP_TREASURY_CONSUME * company["treasury"])
                         new_multiplier = company["revenue_multiplier"] * 2
                         await set_company_level(conn, ctx.guild.id, company["stock_channel_id"],
                                                  next_level, new_multiplier, consume)

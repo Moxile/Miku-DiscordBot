@@ -16,11 +16,15 @@ import csv
 import random
 from dataclasses import dataclass, field
 
-
-LEVEL_BASE_THRESHOLD = 500_000
-COST_FACTOR = 0.05
-DIVIDEND_REVENUE_SHARE = 0.40
-LEVEL_UP_TREASURY_CONSUME = 0.80
+from config import (
+    REVENUE_BASE_MULTIPLIER,
+    REVENUE_INNER_EXP,
+    REVENUE_OUTER_EXP,
+    LEVEL_BASE_THRESHOLD,
+    COST_FACTOR,
+    DIVIDEND_REVENUE_SHARE,
+    LEVEL_UP_TREASURY_CONSUME,
+)
 
 
 @dataclass
@@ -43,7 +47,7 @@ class SimResult:
 class Company:
     total_shares: int = 1000
     treasury: int = 100_000
-    revenue_multiplier: int = 1729
+    revenue_multiplier: int = REVENUE_BASE_MULTIPLIER
     level: int = 0
     # shares held by users (the rest sit in the unsold IPO pool and do not
     # receive dividends — the treasury keeps their implicit share)
@@ -51,9 +55,8 @@ class Company:
 
 
 def daily_revenue(char_counts: list[int], revenue_multiplier: int) -> int:
-    """int(multiplier * sum(char_count ** 0.25) ** 0.75) — diminishing returns on user count."""
-    raw = sum(c ** 0.25 for c in char_counts if c > 0)
-    return int(raw ** 0.75 * revenue_multiplier)
+    raw = sum(c ** REVENUE_INNER_EXP for c in char_counts if c > 0)
+    return int(raw ** REVENUE_OUTER_EXP * revenue_multiplier)
 
 
 def process_week(company: Company, weekly_revenue: int) -> dict:

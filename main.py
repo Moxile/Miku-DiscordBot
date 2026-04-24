@@ -4,7 +4,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from config import PREFIX
+from config import PREFIX, REVENUE_BASE_MULTIPLIER
 
 load_dotenv()
 
@@ -110,14 +110,14 @@ async def init_db(pool: asyncpg.Pool):
     """)
 
     # Revenue system tables and columns (idempotent migrations)
-    await pool.execute("""
+    await pool.execute(f"""
         ALTER TABLE companies ADD COLUMN IF NOT EXISTS treasury BIGINT NOT NULL DEFAULT 0;
         ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_level INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE companies ADD COLUMN IF NOT EXISTS revenue_multiplier INTEGER NOT NULL DEFAULT 1729;
+        ALTER TABLE companies ADD COLUMN IF NOT EXISTS revenue_multiplier INTEGER NOT NULL DEFAULT {REVENUE_BASE_MULTIPLIER};
     """)
-    # Migrate all companies to the new multiplier formula: 1729 * 2^level
-    await pool.execute("""
-        UPDATE companies SET revenue_multiplier = (1729 * POWER(2, company_level))::INTEGER;
+    # Migrate all companies to the current multiplier formula: BASE * 2^level
+    await pool.execute(f"""
+        UPDATE companies SET revenue_multiplier = ({REVENUE_BASE_MULTIPLIER} * POWER(2, company_level))::INTEGER;
     """)
     await pool.execute("""
         CREATE TABLE IF NOT EXISTS channel_activity (

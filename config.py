@@ -7,8 +7,14 @@ CURRENCY_NAME = "Flowers"
 
 WORK_COOLDOWN = 3600 # 1 hour in seconds
 
-LEVEL_BASE_THRESHOLD = 125_000 # Market
-COST_FACTOR = 0.05 # 5% of treasury as cost
+# Market economy
+REVENUE_BASE_MULTIPLIER = 800   # starting multiplier for level-0 companies
+REVENUE_INNER_EXP       = 0.25   # per-user char-count exponent
+REVENUE_OUTER_EXP       = 0.75   # outer exponent — diminishing returns on user count
+LEVEL_BASE_THRESHOLD    = 500_000
+COST_FACTOR             = 0.05
+DIVIDEND_REVENUE_SHARE  = 0.40
+LEVEL_UP_TREASURY_CONSUME = 0.80
 
 # Waifu system
 WAIFU_BASE_VALUE = 5000
