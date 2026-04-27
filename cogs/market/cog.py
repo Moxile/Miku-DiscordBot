@@ -647,7 +647,10 @@ class Market(commands.Cog):
                         await update_wallet(conn, ctx.guild.id, ctx.author.id, -cost)
                         await ensure_wallet(conn, ctx.guild.id, order["user_id"])
                         await update_wallet(conn, ctx.guild.id, order["user_id"], cost)
-                        await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
+                        try:
+                            await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
+                        except ValueError:
+                            order_rems[order["id"]] = 0
                         await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
                         await conn.execute(
                             "UPDATE orders SET remaining = remaining - $2 WHERE id = $1",
@@ -710,7 +713,10 @@ class Market(commands.Cog):
                     revenue = fill_qty * order["price"]
 
                     await update_wallet(conn, ctx.guild.id, ctx.author.id, revenue)
-                    await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -fill_qty)
+                    try:
+                        await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
+                    except ValueError:
+                        continue
                     await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, fill_qty)
                     await conn.execute(
                         "UPDATE orders SET remaining = remaining - $2 WHERE id = $1",
@@ -797,7 +803,10 @@ class Market(commands.Cog):
                     if refund > 0:
                         await update_wallet(conn, ctx.guild.id, ctx.author.id, refund)
 
-                    await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
+                    try:
+                        await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
+                    except ValueError:
+                        continue
                     await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
                     await conn.execute(
                         "UPDATE orders SET remaining = remaining - $2 WHERE id = $1",
@@ -862,7 +871,10 @@ class Market(commands.Cog):
                     fill_revenue = fill_qty * order["price"]
 
                     await update_wallet(conn, ctx.guild.id, ctx.author.id, fill_revenue)
-                    await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -fill_qty)
+                    try:
+                        await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
+                    except ValueError:
+                        continue
                     await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, fill_qty)
                     await conn.execute(
                         "UPDATE orders SET remaining = remaining - $2 WHERE id = $1",

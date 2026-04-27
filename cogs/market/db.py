@@ -68,13 +68,34 @@ async def lock_holding(conn: asyncpg.Connection, guild_id: int, user_id: int, st
 
 
 async def update_holding(conn: Conn, guild_id: int, user_id: int, stock_channel_id: int, quantity_change: int):
-    await conn.execute(
-        """INSERT INTO portfolios (guild_id, user_id, stock_channel_id, quantity)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (guild_id, user_id, stock_channel_id)
-           DO UPDATE SET quantity = portfolios.quantity + $4""",
+    # Positive change → insert or increment
+    if quantity_change > 0:
+        await conn.execute(
+            """
+            INSERT INTO portfolios (guild_id, user_id, stock_channel_id, quantity)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (guild_id, user_id, stock_channel_id)
+            DO UPDATE SET quantity = portfolios.quantity + $4
+            """,
+            guild_id, user_id, stock_channel_id, quantity_change,
+        )
+        return
+
+    # Negative change → ONLY update if enough shares exist
+    result = await conn.execute(
+        """
+        UPDATE portfolios
+        SET quantity = quantity + $4
+        WHERE guild_id = $1
+          AND user_id = $2
+          AND stock_channel_id = $3
+          AND quantity + $4 >= 0
+        """,
         guild_id, user_id, stock_channel_id, quantity_change,
     )
+
+    if result == "UPDATE 0":
+        raise ValueError("Insufficient shares (would go negative)")
 
 
 async def get_open_orders(conn: Conn, guild_id: int, stock_channel_id: int, side: str = None):
