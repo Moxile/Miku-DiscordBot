@@ -155,14 +155,15 @@ class Market(commands.Cog):
     async def before_wednesday(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(time=datetime.time(hour=0, minute=10, tzinfo=datetime.timezone.utc))
+    @tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc))
     async def sunday_financials_task(self):
-        """Process weekly financials every Sunday."""
+        """Process weekly financials every Monday."""
         now = datetime.datetime.now(datetime.timezone.utc)
-        if now.weekday() != 6:
+        if now.weekday() != 0:
             return
-        monday = (now - datetime.timedelta(days=now.weekday())).date()
-        saturday = (now - datetime.timedelta(days=1)).date()
+        yesterday = (now - datetime.timedelta(days=1)).date()
+        monday = yesterday - datetime.timedelta(days=yesterday.weekday())
+        saturday = yesterday
 
         for guild in self.bot.guilds:
             companies = await list_companies(self.pool, guild.id)
@@ -479,7 +480,7 @@ class Market(commands.Cog):
             return
         now = datetime.datetime.now(datetime.timezone.utc)
         yesterday = (now - datetime.timedelta(days=1)).date()
-        monday = (yesterday - datetime.timedelta(days=yesterday.weekday())).date()
+        monday = yesterday - datetime.timedelta(days=yesterday.weekday())
 
         companies = await list_companies(self.pool, ctx.guild.id)
         for comp in companies:
