@@ -657,6 +657,7 @@ class Market(commands.Cog):
                             order["id"], fill_qty,
                         )
                         await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, order["user_id"], fill_qty, order["price"], "market")
+                        await add_transaction(conn, ctx.guild.id, order["user_id"], cost, "market_sell", f"Sold {fill_qty}x {company['name']}")
                         bought += fill_qty
                         total_cost += cost
                         remaining_funds -= cost
@@ -714,7 +715,7 @@ class Market(commands.Cog):
 
                     await update_wallet(conn, ctx.guild.id, ctx.author.id, revenue)
                     try:
-                        await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
+                        await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -fill_qty)
                     except ValueError:
                         continue
                     await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, fill_qty)
@@ -723,6 +724,7 @@ class Market(commands.Cog):
                         order["id"], fill_qty,
                     )
                     await add_trade(conn, ctx.guild.id, stock.id, order["user_id"], ctx.author.id, fill_qty, order["price"], "market")
+                    await add_transaction(conn, ctx.guild.id, order["user_id"], -revenue, "market_buy", f"Bought {fill_qty}x {company['name']}")
 
                     sold += fill_qty
                     total_revenue += revenue
@@ -813,6 +815,7 @@ class Market(commands.Cog):
                         order["id"], fill_qty,
                     )
                     await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, order["user_id"], fill_qty, order["price"], "limit")
+                    await add_transaction(conn, ctx.guild.id, order["user_id"], fill_cost, "market_sell", f"Sold {fill_qty}x {company['name']} via limit")
 
                     filled += fill_qty
                     spent += fill_cost
@@ -820,7 +823,7 @@ class Market(commands.Cog):
                 remaining = quantity - filled
                 if remaining > 0:
                     row = await create_order(conn, ctx.guild.id, stock.id, ctx.author.id, "buy", remaining, price)
-                else:
+                if filled > 0:
                     await add_transaction(conn, ctx.guild.id, ctx.author.id, -spent, "market_buy", f"Bought {filled}x {company['name']} via limit")
 
         if remaining > 0:
@@ -872,7 +875,7 @@ class Market(commands.Cog):
 
                     await update_wallet(conn, ctx.guild.id, ctx.author.id, fill_revenue)
                     try:
-                        await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
+                        await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -fill_qty)
                     except ValueError:
                         continue
                     await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, fill_qty)
@@ -881,6 +884,7 @@ class Market(commands.Cog):
                         order["id"], fill_qty,
                     )
                     await add_trade(conn, ctx.guild.id, stock.id, order["user_id"], ctx.author.id, fill_qty, order["price"], "limit")
+                    await add_transaction(conn, ctx.guild.id, order["user_id"], -fill_revenue, "market_buy", f"Bought {fill_qty}x {company['name']} via limit")
 
                     filled += fill_qty
                     revenue += fill_revenue
