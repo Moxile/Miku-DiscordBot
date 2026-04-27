@@ -58,6 +58,15 @@ async def get_holding(conn: Conn, guild_id: int, user_id: int, stock_channel_id:
     return row["quantity"] if row else 0
 
 
+async def lock_holding(conn: asyncpg.Connection, guild_id: int, user_id: int, stock_channel_id: int) -> int:
+    """Lock and return the portfolio quantity for a user. Must be called within a transaction."""
+    row = await conn.fetchrow(
+        "SELECT quantity FROM portfolios WHERE guild_id = $1 AND user_id = $2 AND stock_channel_id = $3 FOR UPDATE",
+        guild_id, user_id, stock_channel_id,
+    )
+    return row["quantity"] if row else 0
+
+
 async def update_holding(conn: Conn, guild_id: int, user_id: int, stock_channel_id: int, quantity_change: int):
     await conn.execute(
         """INSERT INTO portfolios (guild_id, user_id, stock_channel_id, quantity)
@@ -224,6 +233,42 @@ async def get_shareholders(conn: Conn, guild_id: int, stock_channel_id: int):
            WHERE guild_id = $1 AND stock_channel_id = $2 AND quantity > 0""",
         guild_id, stock_channel_id,
     )
+
+
+async def reset_all_orders(conn: Conn, guild_id: int) -> tuple[int, int, int]:
+    """Cancel all open orders guild-wide, refunding escrowed funds for buy orders.
+
+    Sell-order shares are never deducted from portfolios (escrow is virtual),
+    so no share restitution is needed for those.
+
+    Returns (buy_count, sell_count, total_refunded).
+    """
+    buy_orders = await conn.fetch(
+        "SELECT user_id, remaining, price FROM orders WHERE guild_id = $1 AND side = 'buy' AND remaining > 0",
+        guild_id,
+    )
+
+    refunds: dict[int, int] = {}
+    for order in buy_orders:
+        uid = order["user_id"]
+        refunds[uid] = refunds.get(uid, 0) + order["remaining"] * order["price"]
+
+    for uid, amount in refunds.items():
+        await conn.execute(
+            "UPDATE wallets SET wallet = wallet + $3 WHERE guild_id = $1 AND user_id = $2",
+            guild_id, uid, amount,
+        )
+
+    sell_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM orders WHERE guild_id = $1 AND side = 'sell' AND remaining > 0",
+        guild_id,
+    )
+    await conn.execute(
+        "DELETE FROM orders WHERE guild_id = $1 AND remaining > 0",
+        guild_id,
+    )
+
+    return len(buy_orders), sell_count, sum(refunds.values())
 
 
 async def get_avg_buy_price(conn: Conn, guild_id: int, user_id: int, stock_channel_id: int):

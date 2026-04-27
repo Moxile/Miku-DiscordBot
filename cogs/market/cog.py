@@ -9,7 +9,7 @@ from discord.ext import commands, tasks
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction, lock_wallet
 from cogs.market.db import (
     get_company, list_companies, create_company, delete_company,
-    get_portfolio, get_holding, update_holding,
+    get_portfolio, lock_holding, update_holding,
     get_open_orders, get_open_orders_locked, get_user_orders, create_order, cancel_order, get_escrowed_shares,
     add_trade, get_last_trade_price,
     lock_company,
@@ -17,6 +17,7 @@ from cogs.market.db import (
     get_weekly_revenue, get_weekly_revenue_total,
     update_treasury, set_company_level, get_shareholders,
     get_avg_buy_price,
+    reset_all_orders,
 )
 from core.checks import require_channel, WrongChannel, invalidate
 from core.money import parse_amount, AmountError
@@ -382,7 +383,7 @@ class Market(commands.Cog):
         if company["available_ipo_shares"] > 0:
             sell_lines.append(f"{company['available_ipo_shares']}x @ {company['ipo_price']}{MAIN_CURRENCY_EMOJI} — IPO")
         if sell_orders:
-            for o in reversed(sell_orders[:10]):
+            for o in sell_orders[:10]:
                 member = ctx.guild.get_member(o["user_id"])
                 name = member.display_name if member else str(o["user_id"])
                 sell_lines.append(f"{o['remaining']}x @ {o['price']}{MAIN_CURRENCY_EMOJI} — {name}")
@@ -638,7 +639,7 @@ class Market(commands.Cog):
 
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                holding = await get_holding(conn, ctx.guild.id, ctx.author.id, stock.id)
+                holding = await lock_holding(conn, ctx.guild.id, ctx.author.id, stock.id)
                 escrowed = await get_escrowed_shares(conn, ctx.guild.id, ctx.author.id, stock.id)
                 available = holding - escrowed
                 if available < quantity:
@@ -779,7 +780,7 @@ class Market(commands.Cog):
 
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                holding = await get_holding(conn, ctx.guild.id, ctx.author.id, stock.id)
+                holding = await lock_holding(conn, ctx.guild.id, ctx.author.id, stock.id)
                 escrowed = await get_escrowed_shares(conn, ctx.guild.id, ctx.author.id, stock.id)
                 available = holding - escrowed
                 if available < quantity:
@@ -845,6 +846,20 @@ class Market(commands.Cog):
             await ctx.send(f"Sell order #{order_id} cancelled. {order['remaining']} shares are available again.")
 
     # ── Channel admin ──
+
+    @commands.command(aliases=['ro'])
+    @commands.is_owner()
+    async def resetorders(self, ctx):
+        """Admin: Cancel all open buy/sell orders server-wide and refund escrowed funds to users."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                buy_count, sell_count, refund_total = await reset_all_orders(conn, ctx.guild.id)
+
+        embed = discord.Embed(title="Orders Reset", color=discord.Color.orange())
+        embed.add_field(name="Buy Orders Cancelled", value=str(buy_count), inline=True)
+        embed.add_field(name="Sell Orders Cancelled", value=str(sell_count), inline=True)
+        embed.add_field(name="Funds Refunded", value=f"{refund_total}{MAIN_CURRENCY_EMOJI}", inline=True)
+        await ctx.send(embed=embed)
 
     @commands.command()
     @commands.is_owner()
