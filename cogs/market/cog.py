@@ -18,6 +18,7 @@ from cogs.market.db import (
     update_treasury, set_company_level, get_shareholders,
     get_avg_buy_price,
     reset_all_orders,
+    remove_member_shares,
 )
 from core.checks import require_channel, WrongChannel, invalidate
 from core.money import parse_amount, AmountError
@@ -89,6 +90,18 @@ class Market(commands.Cog):
         key = (message.guild.id, message.channel.id, message.author.id, today)
         async with self._buffer_lock:
             self._char_buffer[key] += char_count
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        guild_id = member.guild.id
+        user_id = member.id
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await remove_member_shares(conn, guild_id, user_id)
+                await conn.execute(
+                    "DELETE FROM balances WHERE guild_id = $1 AND user_id = $2",
+                    guild_id, user_id,
+                )
 
     @tasks.loop(seconds=60)
     async def flush_char_buffer(self):
@@ -351,19 +364,34 @@ class Market(commands.Cog):
         last_price = await get_last_trade_price(self.pool, ctx.guild.id, stock.id)
         buy_orders = await get_open_orders(self.pool, ctx.guild.id, stock.id, "buy")
         sell_orders = await get_open_orders(self.pool, ctx.guild.id, stock.id, "sell")
+        shareholders = await get_shareholders(self.pool, ctx.guild.id, stock.id)
 
         best_bid = f"{buy_orders[0]['price']}{MAIN_CURRENCY_EMOJI}" if buy_orders else "None"
         best_ask = f"{sell_orders[0]['price']}{MAIN_CURRENCY_EMOJI}" if sell_orders else "None"
 
+        total_shares = company["total_shares"]
+        top_holders = sorted(shareholders, key=lambda r: r["quantity"], reverse=True)[:5]
+        if top_holders:
+            owners_lines = []
+            for row in top_holders:
+                member = ctx.guild.get_member(row["user_id"])
+                name = member.display_name if member else f"<@{row['user_id']}>"
+                pct = row["quantity"] / total_shares * 100
+                owners_lines.append(f"{name} — {row['quantity']} ({pct:.1f}%)")
+            owners_value = "\n".join(owners_lines)
+        else:
+            owners_value = "No shareholders yet"
+
         embed = discord.Embed(title=f"{company['name']} - Company Info", color=discord.Color.blue())
         embed.add_field(name="Channel", value=stock.mention, inline=True)
-        embed.add_field(name="Total Shares", value=str(company["total_shares"]), inline=True)
+        embed.add_field(name="Total Shares", value=str(total_shares), inline=True)
         embed.add_field(name="IPO Price", value=f"{company['ipo_price']}{MAIN_CURRENCY_EMOJI}", inline=True)
         embed.add_field(name="IPO Shares Left", value=str(company["available_ipo_shares"]), inline=True)
         embed.add_field(name="Last Trade", value=f"{last_price}{MAIN_CURRENCY_EMOJI}" if last_price else "No trades yet", inline=True)
         embed.add_field(name="Best Bid / Ask", value=f"{best_bid} / {best_ask}", inline=True)
         embed.add_field(name="Treasury", value=f"{company['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
         embed.add_field(name="Level", value=str(company["company_level"]), inline=True)
+        embed.add_field(name="Top Shareholders", value=owners_value, inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['ob'])

@@ -271,6 +271,36 @@ async def reset_all_orders(conn: Conn, guild_id: int) -> tuple[int, int, int]:
     return len(buy_orders), sell_count, sum(refunds.values())
 
 
+async def remove_member_shares(conn: asyncpg.Connection, guild_id: int, user_id: int) -> list:
+    """Cancel all open orders and return all portfolio shares to IPO for a leaving member.
+
+    Buy-order escrowed funds are forfeited (user is gone). Sell-order escrow is virtual so no
+    share restitution is needed — the portfolio delete handles that.
+    Returns a list of records with (stock_channel_id, quantity, name) for logging.
+    """
+    await conn.execute(
+        "DELETE FROM orders WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )
+    holdings = await conn.fetch(
+        """SELECT p.stock_channel_id, p.quantity, c.name
+           FROM portfolios p
+           JOIN companies c ON c.guild_id = p.guild_id AND c.stock_channel_id = p.stock_channel_id
+           WHERE p.guild_id = $1 AND p.user_id = $2 AND p.quantity > 0""",
+        guild_id, user_id,
+    )
+    for h in holdings:
+        await conn.execute(
+            "UPDATE companies SET available_ipo_shares = available_ipo_shares + $3 WHERE guild_id = $1 AND stock_channel_id = $2",
+            guild_id, h["stock_channel_id"], h["quantity"],
+        )
+    await conn.execute(
+        "DELETE FROM portfolios WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )
+    return list(holdings)
+
+
 async def get_avg_buy_price(conn: Conn, guild_id: int, user_id: int, stock_channel_id: int):
     """Compute average buy price for a user's stock from trade history."""
     row = await conn.fetchrow(
