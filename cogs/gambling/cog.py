@@ -85,7 +85,7 @@ class Gambling(commands.Cog):
             results.append(result)
 
         if total > 0:
-            total = int(0.8 * total)
+            total = int(0.98 * total)
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, total)
         await add_transaction(self.pool, ctx.guild.id, ctx.author.id, total, "betflip", f"{tries} tries at {bet_per_try}{MAIN_CURRENCY_EMOJI} each")
 
