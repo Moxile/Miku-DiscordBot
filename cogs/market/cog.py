@@ -583,47 +583,68 @@ class Market(commands.Cog):
                 bought = 0
                 total_cost = 0
 
-                # Phase 1: Buy from IPO
                 company = await lock_company(conn, ctx.guild.id, stock.id)
-                if company["available_ipo_shares"] > 0:
-                    wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
-                    ipo_qty = min(quantity, company["available_ipo_shares"])
-                    affordable = min(ipo_qty, wallet["wallet"] // company["ipo_price"])
-                    if affordable > 0:
-                        cost = affordable * company["ipo_price"]
+                sell_orders = await get_open_orders_locked(conn, ctx.guild.id, stock.id, "sell")
+                wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
+                remaining_funds = wallet["wallet"]
+
+                ipo_rem = company["available_ipo_shares"]
+                ipo_price = company["ipo_price"]
+                order_rems = {o["id"]: o["remaining"] for o in sell_orders}
+
+                while bought < quantity and remaining_funds > 0:
+                    need = quantity - bought
+
+                    # Find cheapest available sell order (skip own orders)
+                    best_order = None
+                    for o in sell_orders:
+                        if o["user_id"] == ctx.author.id:
+                            continue
+                        if order_rems[o["id"]] > 0:
+                            best_order = o
+                            break  # already sorted ASC, so first valid is cheapest
+
+                    has_ipo = ipo_rem > 0
+                    has_order = best_order is not None
+
+                    if not has_ipo and not has_order:
+                        break
+
+                    use_ipo = (has_ipo and not has_order) or (has_ipo and has_order and ipo_price <= best_order["price"])
+
+                    if use_ipo:
+                        fill_qty = min(need, ipo_rem, remaining_funds // ipo_price)
+                        if fill_qty <= 0:
+                            break
+                        cost = fill_qty * ipo_price
                         await update_wallet(conn, ctx.guild.id, ctx.author.id, -cost)
-                        await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, affordable)
+                        await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
                         await conn.execute(
                             "UPDATE companies SET available_ipo_shares = available_ipo_shares - $3 WHERE guild_id = $1 AND stock_channel_id = $2",
-                            ctx.guild.id, stock.id, affordable,
+                            ctx.guild.id, stock.id, fill_qty,
                         )
-                        await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, None, affordable, company["ipo_price"], "ipo")
+                        await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, None, fill_qty, ipo_price, "ipo")
                         await update_treasury(conn, ctx.guild.id, stock.id, cost)
-                        bought += affordable
+                        bought += fill_qty
                         total_cost += cost
-
-                # Phase 2: Buy from sell orders (lowest price first)
-                if bought < quantity:
-                    sell_orders = await get_open_orders_locked(conn, ctx.guild.id, stock.id, "sell")
-                    wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
-                    remaining_funds = wallet["wallet"]
-
-                    for order in sell_orders:
-                        if bought >= quantity:
+                        remaining_funds -= cost
+                        ipo_rem -= fill_qty
+                    else:
+                        order = best_order
+                        fill_qty = min(need, order_rems[order["id"]], remaining_funds // order["price"])
+                        if fill_qty <= 0:
                             break
-                        if order["user_id"] == ctx.author.id:
+                        seller_qty = await conn.fetchval(
+                            "SELECT COALESCE(quantity, 0) FROM portfolios WHERE guild_id = $1 AND user_id = $2 AND stock_channel_id = $3 FOR UPDATE",
+                            ctx.guild.id, order["user_id"], stock.id,
+                        )
+                        fill_qty = min(fill_qty, seller_qty or 0)
+                        if fill_qty <= 0:
+                            order_rems[order["id"]] = 0
                             continue
-
-                        fill_qty = min(quantity - bought, order["remaining"])
                         cost = fill_qty * order["price"]
-
-                        if cost > remaining_funds:
-                            fill_qty = remaining_funds // order["price"]
-                            if fill_qty <= 0:
-                                break
-                            cost = fill_qty * order["price"]
-
                         await update_wallet(conn, ctx.guild.id, ctx.author.id, -cost)
+                        await ensure_wallet(conn, ctx.guild.id, order["user_id"])
                         await update_wallet(conn, ctx.guild.id, order["user_id"], cost)
                         await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
                         await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
@@ -632,10 +653,10 @@ class Market(commands.Cog):
                             order["id"], fill_qty,
                         )
                         await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, order["user_id"], fill_qty, order["price"], "market")
-
                         bought += fill_qty
                         total_cost += cost
                         remaining_funds -= cost
+                        order_rems[order["id"]] -= fill_qty
 
                 if bought > 0:
                     await add_transaction(conn, ctx.guild.id, ctx.author.id, -total_cost, "market_buy", f"Bought {bought}x {company['name']}")
@@ -688,7 +709,6 @@ class Market(commands.Cog):
                     revenue = fill_qty * order["price"]
 
                     await update_wallet(conn, ctx.guild.id, ctx.author.id, revenue)
-                    await update_wallet(conn, ctx.guild.id, order["user_id"], 0)
                     await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -fill_qty)
                     await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, fill_qty)
                     await conn.execute(
@@ -758,8 +778,19 @@ class Market(commands.Cog):
                         break
 
                     fill_qty = min(quantity - filled, order["remaining"])
+
+                    # Lock seller's portfolio and cap fill_qty at what they actually hold
+                    seller_qty = await conn.fetchval(
+                        "SELECT COALESCE(quantity, 0) FROM portfolios WHERE guild_id = $1 AND user_id = $2 AND stock_channel_id = $3 FOR UPDATE",
+                        ctx.guild.id, order["user_id"], stock.id,
+                    )
+                    fill_qty = min(fill_qty, seller_qty or 0)
+                    if fill_qty <= 0:
+                        continue
+
                     fill_cost = fill_qty * order["price"]
 
+                    await ensure_wallet(conn, ctx.guild.id, order["user_id"])
                     await update_wallet(conn, ctx.guild.id, order["user_id"], fill_cost)
                     refund = fill_qty * (price - order["price"])
                     if refund > 0:
