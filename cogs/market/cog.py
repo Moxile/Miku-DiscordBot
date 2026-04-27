@@ -18,6 +18,7 @@ from cogs.market.db import (
     update_treasury, set_company_level, get_shareholders,
     get_avg_buy_price,
     reset_all_orders,
+    fix_sell_orders,
     remove_member_shares,
 )
 from core.checks import require_channel, WrongChannel, invalidate
@@ -918,6 +919,19 @@ class Market(commands.Cog):
         embed.add_field(name="Buy Orders Cancelled", value=str(buy_count), inline=True)
         embed.add_field(name="Sell Orders Cancelled", value=str(sell_count), inline=True)
         embed.add_field(name="Funds Refunded", value=f"{refund_total}{MAIN_CURRENCY_EMOJI}", inline=True)
+        await ctx.send(embed=embed)
+
+    @commands.command(aliases=['fo'])
+    @commands.is_owner()
+    async def fixorders(self, ctx):
+        """Admin: Trim or cancel sell orders that exceed seller portfolio holdings. Oldest orders are preserved first."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                cancelled, trimmed = await fix_sell_orders(conn, ctx.guild.id)
+
+        embed = discord.Embed(title="Orders Fixed", color=discord.Color.green())
+        embed.add_field(name="Cancelled", value=str(cancelled), inline=True)
+        embed.add_field(name="Trimmed", value=str(trimmed), inline=True)
         await ctx.send(embed=embed)
 
     @commands.command()

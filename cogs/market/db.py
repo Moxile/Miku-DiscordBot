@@ -235,6 +235,58 @@ async def get_shareholders(conn: Conn, guild_id: int, stock_channel_id: int):
     )
 
 
+async def fix_sell_orders(conn: Conn, guild_id: int) -> tuple[int, int]:
+    """Trim or cancel sell orders that exceed the seller's actual portfolio holdings.
+
+    Preserves oldest orders first; newer orders are trimmed or cancelled when a seller
+    is over-extended. Buy orders are left untouched.
+
+    Returns (cancelled_count, trimmed_count).
+    """
+    rows = await conn.fetch(
+        """
+        SELECT o.id, o.user_id, o.stock_channel_id, o.remaining,
+               COALESCE(p.quantity, 0) AS portfolio_qty
+        FROM orders o
+        LEFT JOIN portfolios p
+               ON p.guild_id = o.guild_id
+              AND p.user_id = o.user_id
+              AND p.stock_channel_id = o.stock_channel_id
+        WHERE o.guild_id = $1 AND o.side = 'sell' AND o.remaining > 0
+        ORDER BY o.user_id, o.stock_channel_id, o.created_at ASC
+        """,
+        guild_id,
+    )
+
+    groups: dict[tuple, dict] = {}
+    for row in rows:
+        key = (row["user_id"], row["stock_channel_id"])
+        if key not in groups:
+            groups[key] = {"portfolio_qty": row["portfolio_qty"], "orders": []}
+        groups[key]["orders"].append(row)
+
+    to_cancel: list[int] = []
+    to_trim: list[tuple[int, int]] = []  # (order_id, new_remaining)
+
+    for data in groups.values():
+        available = data["portfolio_qty"]
+        for order in data["orders"]:
+            if available <= 0:
+                to_cancel.append(order["id"])
+            elif order["remaining"] <= available:
+                available -= order["remaining"]
+            else:
+                to_trim.append((order["id"], available))
+                available = 0
+
+    if to_cancel:
+        await conn.execute("DELETE FROM orders WHERE id = ANY($1::bigint[])", to_cancel)
+    for order_id, new_remaining in to_trim:
+        await conn.execute("UPDATE orders SET remaining = $2 WHERE id = $1", order_id, new_remaining)
+
+    return len(to_cancel), len(to_trim)
+
+
 async def reset_all_orders(conn: Conn, guild_id: int) -> tuple[int, int, int]:
     """Cancel all open orders guild-wide, refunding escrowed funds for buy orders.
 
