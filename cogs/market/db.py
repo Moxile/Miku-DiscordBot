@@ -255,7 +255,7 @@ async def reset_all_orders(conn: Conn, guild_id: int) -> tuple[int, int, int]:
 
     for uid, amount in refunds.items():
         await conn.execute(
-            "UPDATE wallets SET wallet = wallet + $3 WHERE guild_id = $1 AND user_id = $2",
+            "UPDATE balances SET wallet = wallet + $3 WHERE guild_id = $1 AND user_id = $2",
             guild_id, uid, amount,
         )
 
