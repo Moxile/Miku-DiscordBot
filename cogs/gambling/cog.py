@@ -475,7 +475,6 @@ class Gambling(commands.Cog):
         return 0
 
     @commands.command(aliases=["rr"])
-    @require_channel("gambling_channel")
     async def russian_roulette(self, ctx, bet: str):
         """Play Russian Roulette with other players. You can specify an amount or use 'all' to bet everything. Everyone must match the same bet to join."""
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
