@@ -1,6 +1,8 @@
 
 
 
+from decimal import Decimal
+
 PREFIX = "."
 MAIN_CURRENCY_EMOJI = "🌸"
 CURRENCY_NAME = "Flowers"
@@ -13,7 +15,7 @@ REVENUE_INNER_EXP       = 0.25   # per-user char-count exponent
 REVENUE_OUTER_EXP       = 0.75   # outer exponent — diminishing returns on user count
 LEVEL_BASE_THRESHOLD    = 500_000
 COST_FACTOR             = 0.05
-DIVIDEND_REVENUE_SHARE  = 0.40
+DIVIDEND_REVENUE_SHARE  = Decimal("0.40")
 LEVEL_UP_TREASURY_CONSUME = 0.80
 
 # Waifu system
@@ -23,3 +25,13 @@ WAIFU_DECAY_RATE = 0.10        # lose 10% of excess per day
 MARRIAGE_FEE = 10_000          # Flowers to propose
 ENGAGEMENT_DAYS = 7            # days of mutual ownership before proposing
 REMINDER_MAX_DAYS = 10         # max reminder duration
+
+# Lichess integration
+LICHESS_VARIANTS = [
+    {"name": "Atomic",     "key": "atomic"},
+    {"name": "Antichess",  "key": "antichess"},
+    {"name": "Crazyhouse", "key": "crazyhouse"},
+]
+RATING_ROLE_MIN_DEFAULT  = 2000
+RATING_ROLE_STEP_DEFAULT = 100
+RATING_SEPARATOR_ROLE    = "--- Ratings ---"

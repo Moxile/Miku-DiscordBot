@@ -1,279 +1,15 @@
+from __future__ import annotations
 import os
 import asyncpg
 import discord
+from aiohttp import web
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from config import PREFIX, REVENUE_BASE_MULTIPLIER
+from config import PREFIX
+from core.db_init import init_db
 
 load_dotenv()
-
-async def init_db(pool: asyncpg.Pool):
-    await pool.execute("""
-        CREATE TABLE IF NOT EXISTS balances (
-            guild_id    BIGINT NOT NULL,
-            user_id     BIGINT NOT NULL,
-            wallet     BIGINT NOT NULL DEFAULT 0,
-            bank        BIGINT NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS transactions (
-            id          BIGSERIAL PRIMARY KEY,
-            guild_id    BIGINT NOT NULL,
-            user_id     BIGINT NOT NULL,
-            amount      BIGINT NOT NULL,
-            tx_type     TEXT NOT NULL,
-            description TEXT,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            FOREIGN KEY (guild_id, user_id) REFERENCES balances(guild_id, user_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS items (
-            id           SERIAL PRIMARY KEY,
-            guild_id     BIGINT NOT NULL,
-            name         TEXT NOT NULL,
-            description  TEXT,
-            price        BIGINT NOT NULL,
-            sell_price   BIGINT NOT NULL DEFAULT 0,
-            item_type    TEXT NOT NULL DEFAULT 'item',
-            metadata     JSONB DEFAULT '{}',
-            is_available BOOLEAN NOT NULL DEFAULT TRUE,
-            role_given   BIGINT,
-            UNIQUE (guild_id, name)
-        );
-
-        CREATE TABLE IF NOT EXISTS inventory (
-            guild_id    BIGINT NOT NULL,
-            user_id     BIGINT NOT NULL,
-            item_id     INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-            quantity    INTEGER NOT NULL DEFAULT 1,
-            PRIMARY KEY (guild_id, user_id, item_id)
-        );
-                       
-        CREATE TABLE IF NOT EXISTS cooldowns (
-            guild_id    BIGINT NOT NULL,
-            user_id     BIGINT NOT NULL,
-            command     TEXT NOT NULL,
-            expires_at  TIMESTAMPTZ NOT NULL,
-            PRIMARY KEY (guild_id, user_id, command)
-        );
-                       
-        CREATE TABLE IF NOT EXISTS companies (
-            guild_id             BIGINT NOT NULL,
-            stock_channel_id     BIGINT NOT NULL,
-            name                 TEXT NOT NULL,
-            total_shares         INTEGER NOT NULL DEFAULT 100,
-            available_ipo_shares INTEGER NOT NULL DEFAULT 100,
-            ipo_price            INTEGER NOT NULL DEFAULT 100,
-            listed_by            BIGINT NOT NULL,
-            listed_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (guild_id, stock_channel_id),
-            UNIQUE (guild_id, name)
-        );
-
-        CREATE TABLE IF NOT EXISTS portfolios (
-            guild_id         BIGINT NOT NULL,
-            user_id          BIGINT NOT NULL,
-            stock_channel_id BIGINT NOT NULL,
-            quantity         INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id, stock_channel_id),
-            FOREIGN KEY (guild_id, stock_channel_id) REFERENCES companies(guild_id, stock_channel_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS orders (
-            id               BIGSERIAL PRIMARY KEY,
-            guild_id         BIGINT NOT NULL,
-            stock_channel_id BIGINT NOT NULL,
-            user_id          BIGINT NOT NULL,
-            side             TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
-            quantity         INTEGER NOT NULL,
-            remaining        INTEGER NOT NULL,
-            price            INTEGER NOT NULL,
-            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            FOREIGN KEY (guild_id, stock_channel_id) REFERENCES companies(guild_id, stock_channel_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS trade_history (
-            id               BIGSERIAL PRIMARY KEY,
-            guild_id         BIGINT NOT NULL,
-            stock_channel_id BIGINT NOT NULL,
-            buyer_id         BIGINT NOT NULL,
-            seller_id        BIGINT,
-            quantity         INTEGER NOT NULL,
-            price            INTEGER NOT NULL,
-            trade_type       TEXT NOT NULL DEFAULT 'market',
-            traded_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            FOREIGN KEY (guild_id, stock_channel_id) REFERENCES companies(guild_id, stock_channel_id) ON DELETE CASCADE
-        );
-
-    """)
-
-    # Revenue system tables and columns (idempotent migrations)
-    await pool.execute(f"""
-        ALTER TABLE companies ADD COLUMN IF NOT EXISTS treasury BIGINT NOT NULL DEFAULT 0;
-        ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_level INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE companies ADD COLUMN IF NOT EXISTS revenue_multiplier INTEGER NOT NULL DEFAULT {REVENUE_BASE_MULTIPLIER};
-    """)
-    # Migrate all companies to the current multiplier formula: BASE * 2^level
-    await pool.execute(f"""
-        UPDATE companies SET revenue_multiplier = ({REVENUE_BASE_MULTIPLIER} * POWER(2, company_level))::INTEGER;
-    """)
-    await pool.execute("""
-        CREATE TABLE IF NOT EXISTS channel_activity (
-            guild_id         BIGINT NOT NULL,
-            stock_channel_id BIGINT NOT NULL,
-            user_id          BIGINT NOT NULL,
-            activity_date    DATE NOT NULL,
-            char_count       BIGINT NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, stock_channel_id, user_id, activity_date),
-            FOREIGN KEY (guild_id, stock_channel_id) REFERENCES companies(guild_id, stock_channel_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS company_revenue (
-            guild_id         BIGINT NOT NULL,
-            stock_channel_id BIGINT NOT NULL,
-            revenue_date     DATE NOT NULL,
-            revenue          BIGINT NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, stock_channel_id, revenue_date),
-            FOREIGN KEY (guild_id, stock_channel_id) REFERENCES companies(guild_id, stock_channel_id) ON DELETE CASCADE
-        );
-    """)
-
-    # Reminders system
-    await pool.execute("""
-        CREATE TABLE IF NOT EXISTS reminders (
-            id          BIGSERIAL PRIMARY KEY,
-            guild_id    BIGINT NOT NULL,
-            user_id     BIGINT NOT NULL,
-            channel_id  BIGINT NOT NULL,
-            message     TEXT,
-            remind_at   TIMESTAMPTZ NOT NULL,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-    """)
-
-    # Waifu system
-    await pool.execute("""
-        CREATE TABLE IF NOT EXISTS waifus (
-            guild_id       BIGINT NOT NULL,
-            user_id        BIGINT NOT NULL,
-            owner_id       BIGINT,
-            value          BIGINT NOT NULL DEFAULT 5000,
-            last_bought_at TIMESTAMPTZ,
-            spouse_id      BIGINT,
-            engaged_since  TIMESTAMPTZ,
-            PRIMARY KEY (guild_id, user_id)
-        );
-    """)
-
-    # Predictions system
-    await pool.execute("""
-        CREATE TABLE IF NOT EXISTS predictions (
-            id           BIGSERIAL PRIMARY KEY,
-            guild_id     BIGINT NOT NULL,
-            creator_id   BIGINT NOT NULL,
-            question     TEXT NOT NULL,
-            status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'resolved')),
-            winner_option_id BIGINT,
-            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-
-        CREATE TABLE IF NOT EXISTS prediction_options (
-            id            BIGSERIAL PRIMARY KEY,
-            prediction_id BIGINT NOT NULL REFERENCES predictions(id) ON DELETE CASCADE,
-            label         TEXT NOT NULL,
-            option_index  INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS prediction_bets (
-            id            BIGSERIAL PRIMARY KEY,
-            prediction_id BIGINT NOT NULL REFERENCES predictions(id) ON DELETE CASCADE,
-            option_id     BIGINT NOT NULL REFERENCES prediction_options(id) ON DELETE CASCADE,
-            guild_id      BIGINT NOT NULL,
-            user_id       BIGINT NOT NULL,
-            amount        BIGINT NOT NULL CHECK (amount > 0),
-            placed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-
-        CREATE TABLE IF NOT EXISTS guild_settings (
-            guild_id BIGINT NOT NULL,
-            key      TEXT NOT NULL,
-            value    TEXT NOT NULL,
-            PRIMARY KEY (guild_id, key)
-        );
-    """)
-
-    # Reaction roles
-    await pool.execute("""
-        CREATE TABLE IF NOT EXISTS reaction_roles (
-            guild_id    BIGINT NOT NULL,
-            channel_id  BIGINT NOT NULL,
-            message_id  BIGINT NOT NULL,
-            emoji       TEXT   NOT NULL,
-            is_custom   BOOLEAN NOT NULL,
-            role_id     BIGINT NOT NULL,
-            created_by  BIGINT NOT NULL,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY (guild_id, message_id, emoji)
-        );
-        CREATE INDEX IF NOT EXISTS idx_rr_message ON reaction_roles(message_id);
-    """)
-
-    # Offers (bookmaker-style fixed-odds bets)
-    await pool.execute("""
-        CREATE TABLE IF NOT EXISTS offers (
-            id              BIGSERIAL PRIMARY KEY,
-            guild_id        BIGINT NOT NULL,
-            channel_id      BIGINT NOT NULL,
-            host_id         BIGINT NOT NULL,
-            description     TEXT NOT NULL DEFAULT '',
-            odds            NUMERIC(10, 4) NOT NULL CHECK (odds > 1),
-            min_stake       BIGINT NOT NULL CHECK (min_stake > 0),
-            max_stake       BIGINT NOT NULL CHECK (max_stake >= min_stake),
-            pool            BIGINT NOT NULL CHECK (pool > 0),
-            pool_remaining  BIGINT NOT NULL CHECK (pool_remaining >= 0),
-            status          TEXT NOT NULL DEFAULT 'open'
-                            CHECK (status IN ('open', 'won', 'lost', 'cancelled')),
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            closed_at       TIMESTAMPTZ
-        );
-
-        CREATE TABLE IF NOT EXISTS offer_takes (
-            id         BIGSERIAL PRIMARY KEY,
-            offer_id   BIGINT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-            user_id    BIGINT NOT NULL,
-            stake      BIGINT NOT NULL CHECK (stake > 0),
-            liability  BIGINT NOT NULL CHECK (liability >= 0),
-            placed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-    """)
-
-    # Counting channel
-    await pool.execute("""
-        CREATE TABLE IF NOT EXISTS counting (
-            guild_id   BIGINT PRIMARY KEY,
-            channel_id BIGINT NOT NULL,
-            count      INTEGER DEFAULT 0,
-            last_user  BIGINT  DEFAULT NULL
-        );
-    """)
-
-    # Safety constraints — prevent negative balances/holdings as a last line of defense.
-    # These are idempotent: if the constraint already exists, DO NOTHING catches the error.
-    for stmt in [
-        "ALTER TABLE balances ADD CONSTRAINT wallet_non_negative CHECK (wallet >= 0)",
-        "ALTER TABLE balances ADD CONSTRAINT bank_non_negative CHECK (bank >= 0)",
-        "ALTER TABLE portfolios ADD CONSTRAINT quantity_non_negative CHECK (quantity >= 0)",
-        "ALTER TABLE companies ADD CONSTRAINT ipo_shares_non_negative CHECK (available_ipo_shares >= 0)",
-        "ALTER TABLE companies ADD CONSTRAINT treasury_non_negative CHECK (treasury >= 0)",
-        "ALTER TABLE orders ADD CONSTRAINT remaining_non_negative CHECK (remaining >= 0)",
-    ]:
-        try:
-            await pool.execute(stmt)
-        except asyncpg.DuplicateObjectError:
-            pass
-
 
 COG_COLORS = {
     "Economy": discord.Color.green(),
@@ -291,14 +27,31 @@ COG_COLORS = {
     "ReactionRoles": discord.Color.fuchsia(),
 }
 
+EXTENSIONS = [
+    "cogs.moderation",
+    "cogs.economy",
+    "cogs.gambling",
+    "cogs.market",
+    "cogs.shop",
+    "cogs.predictions",
+    "cogs.offers",
+    "cogs.reminders",
+    "cogs.waifu",
+    "cogs.leaderboard",
+    "cogs.acro",
+    "cogs.gte",
+    "cogs.utility",
+    "cogs.reaction_roles",
+    "cogs.counting",
+    "cogs.lichess",
+]
+
 
 class Help(commands.HelpCommand):
     async def command_callback(self, ctx, /, *, command=None):
         """Override to support case-insensitive cog lookup."""
         if command:
-            bot = ctx.bot
-            # Try case-insensitive cog match
-            for name, cog in bot.cogs.items():
+            for name, cog in ctx.bot.cogs.items():
                 if name.lower() == command.lower():
                     return await self.send_cog_help(cog)
         return await super().command_callback(ctx, command=command)
@@ -315,7 +68,7 @@ class Help(commands.HelpCommand):
             embed.add_field(name=name, value=value, inline=False)
         try:
             await ctx.author.send(embed=embed)
-            await ctx.message.add_reaction("\u2705")
+            await ctx.message.add_reaction("✅")
         except discord.Forbidden:
             await ctx.send(embed=embed)
 
@@ -367,6 +120,7 @@ class MikuBot(commands.Bot):
         intents.members = True
         super().__init__(command_prefix=PREFIX, intents=intents)
         self.pool: asyncpg.Pool | None = None
+        self.oauth_runner: web.AppRunner | None = None
 
     async def setup_hook(self):
         self.pool = await asyncpg.create_pool(
@@ -375,26 +129,29 @@ class MikuBot(commands.Bot):
             max_size=10,
         )
         await init_db(self.pool)
-        await self.load_extension("cogs.moderation")
-        await self.load_extension("cogs.economy")
-        await self.load_extension("cogs.gambling")
-        await self.load_extension("cogs.market")
-        await self.load_extension("cogs.shop")
-        await self.load_extension("cogs.predictions")
-        await self.load_extension("cogs.offers")
-        await self.load_extension("cogs.reminders")
-        await self.load_extension("cogs.waifu")
-        await self.load_extension("cogs.leaderboard")
-        await self.load_extension("cogs.acro")
-        await self.load_extension("cogs.gte")
-        await self.load_extension("cogs.utility")
-        await self.load_extension("cogs.reaction_roles")
-        await self.load_extension("cogs.counting")
+
+        for ext in EXTENSIONS:
+            await self.load_extension(ext)
+
+        # Start the embedded OAuth callback server
+        lichess_cog = self.cogs.get("Lichess")
+        if lichess_cog and os.getenv("LICHESS_CLIENT_ID"):
+            app = web.Application()
+            app.router.add_get("/callback", lichess_cog.handle_callback)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            port = int(os.getenv("OAUTH_PORT", "8080"))
+            site = web.TCPSite(runner, "0.0.0.0", port)
+            await site.start()
+            self.oauth_runner = runner
 
     async def close(self):
+        if self.oauth_runner:
+            await self.oauth_runner.cleanup()
         if self.pool:
             await self.pool.close()
         await super().close()
+
 
 bot = MikuBot()
 bot.help_command = Help(command_attrs={"aliases": ["h"]})
