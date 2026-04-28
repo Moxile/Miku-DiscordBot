@@ -303,7 +303,10 @@ class Gambling(commands.Cog):
         if len(current_hand) != 2:
             return
 
-        if current_hand[0][0] != current_hand[1][0]:
+        def card_value(rank):
+            return 10 if rank in ("10", "J", "Q", "K") else rank
+
+        if card_value(current_hand[0][0]) != card_value(current_hand[1][0]):
             return
 
         is_valid, error = await self.check_bet(ctx, game["bet"])
