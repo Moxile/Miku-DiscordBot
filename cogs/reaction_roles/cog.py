@@ -190,6 +190,26 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
             pass
 
     @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        if member.bot:
+            return
+        async with self.pool.acquire() as conn:
+            default_rows = await get_defaults_for_guild(conn, member.guild.id)
+        if not default_rows:
+            return
+        guild = member.guild
+        if not guild.me.guild_permissions.manage_roles:
+            return
+        for row in default_rows:
+            role = guild.get_role(row["role_id"])
+            if role is None or role >= guild.me.top_role:
+                continue
+            try:
+                await member.add_roles(role, reason="Default reaction role on join")
+            except discord.Forbidden:
+                pass
+
+    @commands.Cog.listener()
     async def on_guild_role_delete(self, role: discord.Role):
         async with self.pool.acquire() as conn:
             await delete_reaction_roles_for_role(conn, role.guild.id, role.id)
