@@ -901,6 +901,51 @@ class Market(commands.Cog):
         else:
             await ctx.send(f"Sell order fully filled! Sold {filled}x **{company['name']}** for {revenue}{MAIN_CURRENCY_EMOJI}.")
 
+    @commands.command(aliases=['gs', 'giftstock'])
+    @require_channel("trading_channel")
+    async def giftstocks(self, ctx, member: discord.Member, stock: discord.TextChannel, quantity: int = 1):
+        """Gift shares to another member for free. Usage: .giftstocks @member #stock-channel [quantity]"""
+        if member.bot:
+            await ctx.send("You cannot gift stocks to a bot.")
+            return
+        if member == ctx.author:
+            await ctx.send("You cannot gift stocks to yourself.")
+            return
+        if quantity <= 0:
+            await ctx.send("Quantity must be positive.")
+            return
+
+        company = await get_company(self.pool, ctx.guild.id, stock.id)
+        if not company:
+            await ctx.send("This channel is not a listed company.")
+            return
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                holding = await lock_holding(conn, ctx.guild.id, ctx.author.id, stock.id)
+                escrowed = await get_escrowed_shares(conn, ctx.guild.id, ctx.author.id, stock.id)
+                available = holding - escrowed
+                if available < quantity:
+                    await ctx.send(
+                        f"You only have {available} available shares of **{company['name']}** "
+                        f"({holding} held, {escrowed} in open sell orders)."
+                    )
+                    return
+
+                await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -quantity)
+                await update_holding(conn, ctx.guild.id, member.id, stock.id, quantity)
+                await add_transaction(conn, ctx.guild.id, ctx.author.id, 0, "gift_send",
+                                      f"Gifted {quantity}x {company['name']} to {member.display_name}")
+                await add_transaction(conn, ctx.guild.id, member.id, 0, "gift_receive",
+                                      f"Received {quantity}x {company['name']} from {ctx.author.display_name}")
+
+        embed = discord.Embed(title="Stocks Gifted", color=discord.Color.purple())
+        embed.add_field(name="From", value=ctx.author.display_name, inline=True)
+        embed.add_field(name="To", value=member.display_name, inline=True)
+        embed.add_field(name="Stock", value=company["name"], inline=True)
+        embed.add_field(name="Quantity", value=str(quantity), inline=True)
+        await ctx.send(embed=embed)
+
     @commands.command(aliases=['co', 'corder'])
     @require_channel("trading_channel")
     async def cancelorder(self, ctx, order_id: int):
