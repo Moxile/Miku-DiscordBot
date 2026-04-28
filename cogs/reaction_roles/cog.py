@@ -438,17 +438,34 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
             await ctx.send("I can't assign that role — it's at or above my highest role.")
             return
 
-        # Build the set of members who have reacted to any mapped emoji
+        # Re-fetch the message so reactions reflect current state, not the stale cache
+        try:
+            message = await message.channel.fetch_message(message.id)
+        except discord.NotFound:
+            await ctx.send("Couldn't fetch that message.")
+            return
+
+        # Build the set of user IDs who have reacted to any mapped emoji
         mapped_keys = {r["emoji"] for r in all_rows}
         reacted_ids: set[int] = set()
         for reaction in message.reactions:
-            key = str(reaction.emoji.id) if reaction.emoji.is_custom_emoji() else reaction.emoji.name
+            emoji = reaction.emoji
+            if isinstance(emoji, str):
+                key = emoji
+            elif emoji.id:
+                key = str(emoji.id)
+            else:
+                key = emoji.name
             if mapped_keys and key not in mapped_keys:
                 continue
             async for user in reaction.users():
                 reacted_ids.add(user.id)
 
         status = await ctx.send("Syncing default role to eligible members...")
+
+        # Ensure the member list is fully loaded before iterating
+        if not ctx.guild.chunked:
+            await ctx.guild.chunk()
 
         count = 0
         for member in ctx.guild.members:
