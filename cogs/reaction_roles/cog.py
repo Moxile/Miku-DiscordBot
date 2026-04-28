@@ -84,7 +84,13 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         except discord.NotFound:
             return False
         for reaction in message.reactions:
-            key = str(reaction.emoji.id) if reaction.emoji.is_custom_emoji() else reaction.emoji.name
+            emoji = reaction.emoji
+            if isinstance(emoji, str):
+                key = emoji
+            elif emoji.id:
+                key = str(emoji.id)
+            else:
+                key = emoji.name
             if key not in mapped_keys:
                 continue
             async for user in reaction.users():
