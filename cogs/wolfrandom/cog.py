@@ -19,7 +19,7 @@ class WolfRandom(commands.Cog):
         if MOVES_FILE.exists():
             self._moves = [line.strip() for line in MOVES_FILE.read_text().splitlines() if line.strip()]
 
-    @commands.command()
+    @commands.command(aliases=['wr'])
     async def wolfrandom(self, ctx):
         """Pick a random set of first moves for the atomic chess variant."""
         if not self._moves:
