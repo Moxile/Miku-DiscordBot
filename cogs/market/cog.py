@@ -20,6 +20,7 @@ from cogs.market.db import (
     reset_all_orders,
     fix_sell_orders,
     remove_member_shares,
+    process_dilution,
 )
 from core.checks import require_channel, WrongChannel, invalidate
 from core.money import parse_amount, AmountError
@@ -27,7 +28,7 @@ from config import (
     MAIN_CURRENCY_EMOJI,
     LEVEL_BASE_THRESHOLD,
     COST_FACTOR,
-    DIVIDEND_REVENUE_SHARE,
+    DIVIDEND_PROFIT_SHARE,
     LEVEL_UP_TREASURY_CONSUME,
 )
 
@@ -193,10 +194,10 @@ class Market(commands.Cog):
                         )
 
                         cost = int(0.05 * company["treasury"])
-                        dividend_pool = int(DIVIDEND_REVENUE_SHARE * weekly_revenue)
+                        profit = weekly_revenue - cost
+                        dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
                         dividend_per_share = dividend_pool // company["total_shares"]
                         dividends_paid = 0
-                        profit = weekly_revenue - cost
 
                         if dividend_per_share > 0:
                             shareholders = await get_shareholders(conn, guild.id, company["stock_channel_id"])
@@ -223,6 +224,9 @@ class Market(commands.Cog):
                                                      next_level, new_multiplier, consume)
                             leveled_up = True
 
+                        dilution = await process_dilution(conn, guild.id, company["stock_channel_id"],
+                                                          profit, company)
+
                 if channel:
                     updated = await get_company(self.pool, guild.id, comp["stock_channel_id"])
                     embed = discord.Embed(title=f"{company['name']} - Weekly Financial Summary", color=discord.Color.blue())
@@ -232,6 +236,15 @@ class Market(commands.Cog):
                     embed.add_field(name="Dividend/Share", value=f"{dividend_per_share}{MAIN_CURRENCY_EMOJI}", inline=True)
                     embed.add_field(name="Total Dividends Paid", value=f"{dividends_paid}{MAIN_CURRENCY_EMOJI}", inline=True)
                     embed.add_field(name="Treasury", value=f"{updated['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
+                    if dilution["new_shares"] > 0:
+                        embed.add_field(
+                            name="Dilution",
+                            value=(
+                                f"+{dilution['new_shares']} shares @ {dilution['dilution_price']}{MAIN_CURRENCY_EMOJI} "
+                                f"({dilution['filled_via_orders']} filled, {dilution['ipo_pool_added']} to IPO pool)"
+                            ),
+                            inline=False,
+                        )
                     if leveled_up:
                         embed.add_field(
                             name="LEVEL UP!",
@@ -522,10 +535,10 @@ class Market(commands.Cog):
                     )
 
                     cost = int(COST_FACTOR * company["treasury"])
-                    dividend_pool = int(DIVIDEND_REVENUE_SHARE * weekly_revenue)
+                    profit = weekly_revenue - cost
+                    dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
                     dividend_per_share = dividend_pool // company["total_shares"]
                     dividends_paid = 0
-                    profit = weekly_revenue - cost
 
                     if dividend_per_share > 0:
                         shareholders = await get_shareholders(conn, ctx.guild.id, company["stock_channel_id"])
@@ -551,6 +564,9 @@ class Market(commands.Cog):
                                                  next_level, new_multiplier, consume)
                         leveled_up = True
 
+                    dilution = await process_dilution(conn, ctx.guild.id, company["stock_channel_id"],
+                                                      profit, company)
+
             updated = await get_company(self.pool, ctx.guild.id, comp["stock_channel_id"])
             embed = discord.Embed(title=f"{company['name']} - Financial Summary", color=discord.Color.blue())
             embed.add_field(name="Weekly Revenue", value=f"{weekly_revenue}{MAIN_CURRENCY_EMOJI}", inline=True)
@@ -559,6 +575,15 @@ class Market(commands.Cog):
             embed.add_field(name="Dividend/Share", value=f"{dividend_per_share}{MAIN_CURRENCY_EMOJI}", inline=True)
             embed.add_field(name="Total Dividends Paid", value=f"{dividends_paid}{MAIN_CURRENCY_EMOJI}", inline=True)
             embed.add_field(name="Treasury", value=f"{updated['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
+            if dilution["new_shares"] > 0:
+                embed.add_field(
+                    name="Dilution",
+                    value=(
+                        f"+{dilution['new_shares']} shares @ {dilution['dilution_price']}{MAIN_CURRENCY_EMOJI} "
+                        f"({dilution['filled_via_orders']} filled, {dilution['ipo_pool_added']} to IPO pool)"
+                    ),
+                    inline=False,
+                )
             if leveled_up:
                 embed.add_field(name="LEVEL UP!", value=f"Level {next_level} reached!", inline=False)
             await ctx.send(embed=embed)

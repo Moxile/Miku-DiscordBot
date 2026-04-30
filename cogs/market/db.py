@@ -1,6 +1,8 @@
+from decimal import Decimal
+
 import asyncpg
 
-from config import REVENUE_OUTER_EXP
+from config import REVENUE_OUTER_EXP, DILUTION_MAX_RATE, DILUTION_PROFIT_SCALE, DILUTION_DISCOUNT
 from core.db import Conn
 
 
@@ -29,8 +31,8 @@ async def list_companies(conn: Conn, guild_id: int):
 async def create_company(conn: Conn, guild_id: int, stock_channel_id: int, name: str, listed_by: int,
                           total_shares: int = 100, ipo_price: int = 100):
     await conn.execute(
-        """INSERT INTO companies (guild_id, stock_channel_id, name, total_shares, available_ipo_shares, ipo_price, listed_by)
-           VALUES ($1, $2, $3, $4, $4, $5, $6)""",
+        """INSERT INTO companies (guild_id, stock_channel_id, name, total_shares, available_ipo_shares, ipo_price, base_ipo_price, listed_by)
+           VALUES ($1, $2, $3, $4, $4, $5, $5, $6)""",
         guild_id, stock_channel_id, name, total_shares, ipo_price, listed_by,
     )
 
@@ -372,6 +374,82 @@ async def remove_member_shares(conn: asyncpg.Connection, guild_id: int, user_id:
         guild_id, user_id,
     )
     return list(holdings)
+
+
+async def process_dilution(conn: asyncpg.Connection, guild_id: int, stock_channel_id: int,
+                            profit: int, company: asyncpg.Record) -> dict:
+    """Issue new shares as weekly dilution. Must be called within a transaction with company locked.
+
+    Fills open buy orders top-down (highest bid first) at the buyer's bid price, then adds
+    remaining shares to the IPO pool at the dilution price. Returns a summary dict.
+    """
+    if profit <= 0:
+        return {"new_shares": 0, "filled_via_orders": 0, "ipo_pool_added": 0,
+                "dilution_price": 0, "treasury_gain": 0}
+
+    dilution_rate = min(DILUTION_MAX_RATE, Decimal(profit) / DILUTION_PROFIT_SCALE)
+    new_shares = max(1, int(dilution_rate * company["total_shares"]))
+
+    best_bid = await conn.fetchval(
+        "SELECT MAX(price) FROM orders WHERE guild_id = $1 AND stock_channel_id = $2 AND side = 'buy' AND remaining > 0",
+        guild_id, stock_channel_id,
+    )
+
+    dilution_price = (
+        max(company["base_ipo_price"], int(best_bid * DILUTION_DISCOUNT))
+        if best_bid is not None
+        else company["base_ipo_price"]
+    )
+
+    buy_orders = await get_open_orders_locked(conn, guild_id, stock_channel_id, "buy")
+
+    remaining = new_shares
+    filled_via_orders = 0
+    treasury_gain = 0
+
+    for order in buy_orders:
+        if remaining <= 0:
+            break
+        if order["price"] < dilution_price:
+            break
+
+        fill = min(order["remaining"], remaining)
+
+        await update_holding(conn, guild_id, order["user_id"], stock_channel_id, fill)
+        await conn.execute(
+            "UPDATE orders SET remaining = remaining - $3 WHERE id = $1 AND guild_id = $2",
+            order["id"], guild_id, fill,
+        )
+        await add_trade(conn, guild_id, stock_channel_id, order["user_id"], None, fill, order["price"], "dilution")
+
+        treasury_gain += fill * order["price"]
+        filled_via_orders += fill
+        remaining -= fill
+
+    if filled_via_orders > 0:
+        await conn.execute(
+            "UPDATE companies SET total_shares = total_shares + $3, treasury = treasury + $4 WHERE guild_id = $1 AND stock_channel_id = $2",
+            guild_id, stock_channel_id, filled_via_orders, treasury_gain,
+        )
+
+    ipo_pool_added = remaining
+    if ipo_pool_added > 0:
+        await conn.execute(
+            """UPDATE companies
+               SET total_shares = total_shares + $3,
+                   available_ipo_shares = available_ipo_shares + $3,
+                   ipo_price = $4
+               WHERE guild_id = $1 AND stock_channel_id = $2""",
+            guild_id, stock_channel_id, ipo_pool_added, dilution_price,
+        )
+
+    return {
+        "new_shares": new_shares,
+        "filled_via_orders": filled_via_orders,
+        "ipo_pool_added": ipo_pool_added,
+        "dilution_price": dilution_price,
+        "treasury_gain": treasury_gain,
+    }
 
 
 async def get_avg_buy_price(conn: Conn, guild_id: int, user_id: int, stock_channel_id: int):

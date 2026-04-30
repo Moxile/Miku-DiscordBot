@@ -22,8 +22,10 @@ from config import (
     REVENUE_OUTER_EXP,
     LEVEL_BASE_THRESHOLD,
     COST_FACTOR,
-    DIVIDEND_REVENUE_SHARE,
+    DIVIDEND_PROFIT_SHARE,
     LEVEL_UP_TREASURY_CONSUME,
+    DILUTION_MAX_RATE,
+    DILUTION_PROFIT_SCALE,
 )
 
 
@@ -41,6 +43,7 @@ class SimResult:
     level: int = 0
     revenue_multiplier: int = 0
     leveled_up: bool = False
+    new_shares: int = 0
 
 
 @dataclass
@@ -60,11 +63,13 @@ def daily_revenue(char_counts: list[int], revenue_multiplier: int) -> int:
 
 
 def process_week(company: Company, weekly_revenue: int) -> dict:
+    from decimal import Decimal
+
     cost = int(COST_FACTOR * company.treasury)
-    dividend_pool = int(DIVIDEND_REVENUE_SHARE * weekly_revenue)
+    profit = weekly_revenue - cost
+    dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
     dividend_per_share = dividend_pool // company.total_shares
     dividends_paid = dividend_per_share * company.user_shares
-    profit = weekly_revenue - cost
     company.treasury += weekly_revenue - dividends_paid - cost
 
     leveled_up = False
@@ -76,12 +81,19 @@ def process_week(company: Company, weekly_revenue: int) -> dict:
         company.level = next_level
         leveled_up = True
 
+    new_shares = 0
+    if profit > 0:
+        dilution_rate = min(DILUTION_MAX_RATE, Decimal(profit) / DILUTION_PROFIT_SCALE)
+        new_shares = max(1, int(dilution_rate * company.total_shares))
+        company.total_shares += new_shares
+
     return {
         "cost": cost,
         "profit": profit,
         "dividend_per_share": dividend_per_share,
         "dividends_paid": dividends_paid,
         "leveled_up": leveled_up,
+        "new_shares": new_shares,
     }
 
 
@@ -134,6 +146,7 @@ def simulate(
             r.level = company.level
             r.revenue_multiplier = company.revenue_multiplier
             r.leveled_up = info["leveled_up"]
+            r.new_shares = info["new_shares"]
             week_revenue_accum = 0
 
         results.append(r)
@@ -144,7 +157,7 @@ def simulate(
 def print_weekly_report(results: list[SimResult]) -> None:
     header = (
         f"{'Week':>4} {'WeeklyRev':>10} {'Cost':>8} {'Profit':>9} "
-        f"{'DPS':>5} {'DivPaid':>9} {'Treasury':>10} {'Lvl':>3} {'Mult':>5}"
+        f"{'DPS':>5} {'DivPaid':>9} {'Treasury':>10} {'Lvl':>3} {'Mult':>5} {'NewShares':>9}"
     )
     print(header)
     print("-" * len(header))
@@ -157,7 +170,7 @@ def print_weekly_report(results: list[SimResult]) -> None:
         print(
             f"{r.week:>4} {r.weekly_revenue:>10} {r.cost:>8} {r.profit:>9} "
             f"{r.dividend_per_share:>5} {r.dividends_paid:>9} {r.treasury:>10} "
-            f"{r.level:>3} {r.revenue_multiplier:>5}{flag}"
+            f"{r.level:>3} {r.revenue_multiplier:>5} {r.new_shares:>9}{flag}"
         )
     print("-" * len(header))
     final = results[-1]
@@ -173,13 +186,13 @@ def write_csv(results: list[SimResult], path: str) -> None:
         w.writerow([
             "day", "week", "daily_revenue", "weekly_revenue", "cost", "profit",
             "dividend_per_share", "dividends_paid", "treasury", "level",
-            "revenue_multiplier", "leveled_up",
+            "revenue_multiplier", "leveled_up", "new_shares",
         ])
         for r in results:
             w.writerow([
                 r.day, r.week, r.daily_revenue, r.weekly_revenue, r.cost,
                 r.profit, r.dividend_per_share, r.dividends_paid, r.treasury,
-                r.level, r.revenue_multiplier, int(r.leveled_up),
+                r.level, r.revenue_multiplier, int(r.leveled_up), r.new_shares,
             ])
 
 

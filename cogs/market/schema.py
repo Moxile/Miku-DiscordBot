@@ -76,6 +76,9 @@ MIGRATIONS = [
     f"ALTER TABLE companies ADD COLUMN IF NOT EXISTS revenue_multiplier INTEGER NOT NULL DEFAULT {REVENUE_BASE_MULTIPLIER}",
     # Migrate all companies to the current multiplier formula: BASE * 2^level
     f"UPDATE companies SET revenue_multiplier = ({REVENUE_BASE_MULTIPLIER} * POWER(2, company_level))::INTEGER",
+    # Price floor used by the dilution system — set once at IPO, never changed
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS base_ipo_price INTEGER NOT NULL DEFAULT 100",
+    "UPDATE companies SET base_ipo_price = ipo_price WHERE base_ipo_price = 100",
 ]
 
 CONSTRAINTS = [
