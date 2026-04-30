@@ -25,6 +25,7 @@ COG_COLORS = {
     "GTE": discord.Color.dark_green(),
     "Utility": discord.Color.blurple(),
     "ReactionRoles": discord.Color.fuchsia(),
+    "WolfRandom": discord.Color.dark_teal(),
 }
 
 EXTENSIONS = [
@@ -44,6 +45,7 @@ EXTENSIONS = [
     "cogs.reaction_roles",
     "cogs.counting",
     "cogs.lichess",
+    "cogs.wolfrandom",
 ]
 
 
