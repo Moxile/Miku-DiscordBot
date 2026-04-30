@@ -8,8 +8,6 @@ from discord.ext import commands
 from config import MAIN_CURRENCY_EMOJI, PREFIX
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 
-REWARD = 5
-
 _OPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -175,7 +173,7 @@ class Counting(commands.Cog):
         await message.add_reaction("✅")
         async with self.pool.acquire() as conn:
             await ensure_wallet(conn, guild_id, user_id)
-            await update_wallet(conn, guild_id, user_id, REWARD)
+            await update_wallet(conn, guild_id, user_id, len(str(value))-2)
             await add_transaction(
-                conn, guild_id, user_id, REWARD, "counting", f"Counted {value} correctly"
+                conn, guild_id, user_id, len(str(value))-2, "counting", f"Counted {value} correctly"
             )
