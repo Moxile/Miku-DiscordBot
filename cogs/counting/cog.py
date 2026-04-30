@@ -173,7 +173,7 @@ class Counting(commands.Cog):
         await message.add_reaction("✅")
         async with self.pool.acquire() as conn:
             await ensure_wallet(conn, guild_id, user_id)
-            await update_wallet(conn, guild_id, user_id, len(str(value))-2)
+            await update_wallet(conn, guild_id, user_id, len(str(value))+2)
             await add_transaction(
-                conn, guild_id, user_id, len(str(value))-2, "counting", f"Counted {value} correctly"
+                conn, guild_id, user_id, len(str(value))+2, "counting", f"Counted {value} correctly"
             )
