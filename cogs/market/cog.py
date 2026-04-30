@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import random
 import time
 from collections import defaultdict
 
@@ -21,13 +22,13 @@ from cogs.market.db import (
     fix_sell_orders,
     remove_member_shares,
     process_dilution,
+    refund_company_buy_orders,
 )
 from core.checks import require_channel, WrongChannel, invalidate
 from core.money import parse_amount, AmountError
 from config import (
     MAIN_CURRENCY_EMOJI,
     LEVEL_BASE_THRESHOLD,
-    COST_FACTOR,
     DIVIDEND_PROFIT_SHARE,
     LEVEL_UP_TREASURY_CONSUME,
 )
@@ -185,53 +186,92 @@ class Market(commands.Cog):
             companies = await list_companies(self.pool, guild.id)
             for comp in companies:
                 channel = guild.get_channel(comp["stock_channel_id"])
+                killed = False
+                kill_reason = ""
+                weekly_revenue = cost = profit = 0
+                cost_rate = 0.05
+                dividend_per_share = dividends_paid = 0
+                leveled_up = False
+                next_level = 1
+                dilution = {"new_shares": 0}
 
                 async with self.pool.acquire() as conn:
                     async with conn.transaction():
                         company = await lock_company(conn, guild.id, comp["stock_channel_id"])
-                        weekly_revenue = await get_weekly_revenue_total(
-                            conn, guild.id, company["stock_channel_id"], monday, saturday,
+
+                        age = datetime.datetime.now(datetime.timezone.utc) - company["listed_at"]
+                        if age.days >= 7:
+                            trade_count = await conn.fetchval(
+                                "SELECT COUNT(*) FROM trade_history WHERE guild_id = $1 AND stock_channel_id = $2",
+                                guild.id, comp["stock_channel_id"],
+                            )
+                            if trade_count == 0:
+                                await refund_company_buy_orders(conn, guild.id, comp["stock_channel_id"])
+                                await delete_company(conn, guild.id, comp["stock_channel_id"])
+                                killed = True
+                                kill_reason = "No shares were ever traded. The company has been dissolved."
+
+                        if not killed:
+                            weekly_revenue = await get_weekly_revenue_total(
+                                conn, guild.id, company["stock_channel_id"], monday, saturday,
+                            )
+
+                            cost_rate = random.uniform(0.05, 0.10)
+                            cost = max(5000, int(cost_rate * company["treasury"]))
+                            profit = weekly_revenue - cost
+                            dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
+                            dividend_per_share = dividend_pool // company["total_shares"]
+                            dividends_paid = 0
+
+                            if dividend_per_share > 0:
+                                shareholders = await get_shareholders(conn, guild.id, company["stock_channel_id"])
+                                for sh in shareholders:
+                                    payout = dividend_per_share * sh["quantity"]
+                                    await ensure_wallet(conn, guild.id, sh["user_id"])
+                                    await update_wallet(conn, guild.id, sh["user_id"], payout)
+                                    await add_transaction(conn, guild.id, sh["user_id"], payout, "dividend",
+                                                          f"Dividend from {company['name']}")
+                                    dividends_paid += payout
+
+                            treasury_delta = weekly_revenue - dividends_paid - cost
+                            treasury_after = company["treasury"] + treasury_delta
+
+                            if treasury_after < 0:
+                                await refund_company_buy_orders(conn, guild.id, comp["stock_channel_id"])
+                                await delete_company(conn, guild.id, comp["stock_channel_id"])
+                                killed = True
+                                kill_reason = "Treasury depleted by operating costs. The company has gone bankrupt."
+                            else:
+                                await update_treasury(conn, guild.id, company["stock_channel_id"], treasury_delta)
+
+                                leveled_up = False
+                                next_level = company["company_level"] + 1
+                                threshold = LEVEL_BASE_THRESHOLD * (2 ** (next_level - 1))
+
+                                if treasury_after >= threshold:
+                                    consume = int(LEVEL_UP_TREASURY_CONSUME * treasury_after)
+                                    new_multiplier = company["revenue_multiplier"] * 2
+                                    await set_company_level(conn, guild.id, company["stock_channel_id"],
+                                                             next_level, new_multiplier, consume)
+                                    leveled_up = True
+
+                                dilution = await process_dilution(conn, guild.id, company["stock_channel_id"],
+                                                                  profit, company)
+
+                if killed:
+                    self._company_channels.pop(guild.id, None)
+                    if channel:
+                        embed = discord.Embed(
+                            title=f"{comp['name']} - BANKRUPT",
+                            description=kill_reason,
+                            color=discord.Color.dark_red(),
                         )
-
-                        cost = int(0.05 * company["treasury"])
-                        profit = weekly_revenue - cost
-                        dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
-                        dividend_per_share = dividend_pool // company["total_shares"]
-                        dividends_paid = 0
-
-                        if dividend_per_share > 0:
-                            shareholders = await get_shareholders(conn, guild.id, company["stock_channel_id"])
-                            for sh in shareholders:
-                                payout = dividend_per_share * sh["quantity"]
-                                await ensure_wallet(conn, guild.id, sh["user_id"])
-                                await update_wallet(conn, guild.id, sh["user_id"], payout)
-                                await add_transaction(conn, guild.id, sh["user_id"], payout, "dividend",
-                                                      f"Dividend from {company['name']}")
-                                dividends_paid += payout
-
-                        await update_treasury(conn, guild.id, company["stock_channel_id"],
-                                              weekly_revenue - dividends_paid - cost)
-
-                        company = await lock_company(conn, guild.id, company["stock_channel_id"])
-                        leveled_up = False
-                        next_level = company["company_level"] + 1
-                        threshold = LEVEL_BASE_THRESHOLD * (2 ** (next_level - 1))
-
-                        if company["treasury"] >= threshold:
-                            consume = int(LEVEL_UP_TREASURY_CONSUME * company["treasury"])
-                            new_multiplier = company["revenue_multiplier"] * 2
-                            await set_company_level(conn, guild.id, company["stock_channel_id"],
-                                                     next_level, new_multiplier, consume)
-                            leveled_up = True
-
-                        dilution = await process_dilution(conn, guild.id, company["stock_channel_id"],
-                                                          profit, company)
-
-                if channel:
+                        await channel.send(embed=embed)
+                elif channel:
                     updated = await get_company(self.pool, guild.id, comp["stock_channel_id"])
                     embed = discord.Embed(title=f"{company['name']} - Weekly Financial Summary", color=discord.Color.blue())
                     embed.add_field(name="Weekly Revenue", value=f"{weekly_revenue}{MAIN_CURRENCY_EMOJI}", inline=True)
-                    embed.add_field(name="Operating Cost (5%)", value=f"{cost}{MAIN_CURRENCY_EMOJI}", inline=True)
+                    embed.add_field(name=f"Operating Cost ({cost_rate * 100:.1f}%)", value=f"{cost}{MAIN_CURRENCY_EMOJI}", inline=True)
                     embed.add_field(name="Profit", value=f"{profit}{MAIN_CURRENCY_EMOJI}", inline=True)
                     embed.add_field(name="Dividend/Share", value=f"{dividend_per_share}{MAIN_CURRENCY_EMOJI}", inline=True)
                     embed.add_field(name="Total Dividends Paid", value=f"{dividends_paid}{MAIN_CURRENCY_EMOJI}", inline=True)
@@ -527,66 +567,106 @@ class Market(commands.Cog):
 
         companies = await list_companies(self.pool, ctx.guild.id)
         for comp in companies:
+            killed = False
+            kill_reason = ""
+            weekly_revenue = cost = profit = 0
+            cost_rate = 0.05
+            dividend_per_share = dividends_paid = 0
+            leveled_up = False
+            next_level = 1
+            dilution = {"new_shares": 0}
+
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
                     company = await lock_company(conn, ctx.guild.id, comp["stock_channel_id"])
-                    weekly_revenue = await get_weekly_revenue_total(
-                        conn, ctx.guild.id, company["stock_channel_id"], monday, yesterday,
-                    )
 
-                    cost = int(COST_FACTOR * company["treasury"])
-                    profit = weekly_revenue - cost
-                    dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
-                    dividend_per_share = dividend_pool // company["total_shares"]
-                    dividends_paid = 0
+                    age = datetime.datetime.now(datetime.timezone.utc) - company["listed_at"]
+                    if age.days >= 7:
+                        trade_count = await conn.fetchval(
+                            "SELECT COUNT(*) FROM trade_history WHERE guild_id = $1 AND stock_channel_id = $2",
+                            ctx.guild.id, comp["stock_channel_id"],
+                        )
+                        if trade_count == 0:
+                            await refund_company_buy_orders(conn, ctx.guild.id, comp["stock_channel_id"])
+                            await delete_company(conn, ctx.guild.id, comp["stock_channel_id"])
+                            killed = True
+                            kill_reason = "No shares were ever traded. The company has been dissolved."
 
-                    if dividend_per_share > 0:
-                        shareholders = await get_shareholders(conn, ctx.guild.id, company["stock_channel_id"])
-                        for sh in shareholders:
-                            payout = dividend_per_share * sh["quantity"]
-                            await ensure_wallet(conn, ctx.guild.id, sh["user_id"])
-                            await update_wallet(conn, ctx.guild.id, sh["user_id"], payout)
-                            await add_transaction(conn, ctx.guild.id, sh["user_id"], payout, "dividend",
-                                                  f"Dividend from {company['name']}")
-                            dividends_paid += payout
+                    if not killed:
+                        weekly_revenue = await get_weekly_revenue_total(
+                            conn, ctx.guild.id, company["stock_channel_id"], monday, yesterday,
+                        )
 
-                    await update_treasury(conn, ctx.guild.id, company["stock_channel_id"],
-                                          weekly_revenue - dividends_paid - cost)
+                        cost_rate = random.uniform(0.05, 0.10)
+                        cost = max(5000, int(cost_rate * company["treasury"]))
+                        profit = weekly_revenue - cost
+                        dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
+                        dividend_per_share = dividend_pool // company["total_shares"]
+                        dividends_paid = 0
 
-                    company = await lock_company(conn, ctx.guild.id, company["stock_channel_id"])
-                    leveled_up = False
-                    next_level = company["company_level"] + 1
-                    threshold = LEVEL_BASE_THRESHOLD * (2 ** (next_level - 1))
-                    if company["treasury"] >= threshold:
-                        consume = int(LEVEL_UP_TREASURY_CONSUME * company["treasury"])
-                        new_multiplier = company["revenue_multiplier"] * 2
-                        await set_company_level(conn, ctx.guild.id, company["stock_channel_id"],
-                                                 next_level, new_multiplier, consume)
-                        leveled_up = True
+                        if dividend_per_share > 0:
+                            shareholders = await get_shareholders(conn, ctx.guild.id, company["stock_channel_id"])
+                            for sh in shareholders:
+                                payout = dividend_per_share * sh["quantity"]
+                                await ensure_wallet(conn, ctx.guild.id, sh["user_id"])
+                                await update_wallet(conn, ctx.guild.id, sh["user_id"], payout)
+                                await add_transaction(conn, ctx.guild.id, sh["user_id"], payout, "dividend",
+                                                      f"Dividend from {company['name']}")
+                                dividends_paid += payout
 
-                    dilution = await process_dilution(conn, ctx.guild.id, company["stock_channel_id"],
-                                                      profit, company)
+                        treasury_delta = weekly_revenue - dividends_paid - cost
+                        treasury_after = company["treasury"] + treasury_delta
 
-            updated = await get_company(self.pool, ctx.guild.id, comp["stock_channel_id"])
-            embed = discord.Embed(title=f"{company['name']} - Financial Summary", color=discord.Color.blue())
-            embed.add_field(name="Weekly Revenue", value=f"{weekly_revenue}{MAIN_CURRENCY_EMOJI}", inline=True)
-            embed.add_field(name="Operating Cost (5%)", value=f"{cost}{MAIN_CURRENCY_EMOJI}", inline=True)
-            embed.add_field(name="Profit", value=f"{profit}{MAIN_CURRENCY_EMOJI}", inline=True)
-            embed.add_field(name="Dividend/Share", value=f"{dividend_per_share}{MAIN_CURRENCY_EMOJI}", inline=True)
-            embed.add_field(name="Total Dividends Paid", value=f"{dividends_paid}{MAIN_CURRENCY_EMOJI}", inline=True)
-            embed.add_field(name="Treasury", value=f"{updated['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
-            if dilution["new_shares"] > 0:
-                embed.add_field(
-                    name="Dilution",
-                    value=(
-                        f"+{dilution['new_shares']} shares @ {dilution['dilution_price']}{MAIN_CURRENCY_EMOJI} "
-                        f"({dilution['filled_via_orders']} filled, {dilution['ipo_pool_added']} to IPO pool)"
-                    ),
-                    inline=False,
+                        if treasury_after < 0:
+                            await refund_company_buy_orders(conn, ctx.guild.id, comp["stock_channel_id"])
+                            await delete_company(conn, ctx.guild.id, comp["stock_channel_id"])
+                            killed = True
+                            kill_reason = "Treasury depleted by operating costs. The company has gone bankrupt."
+                        else:
+                            await update_treasury(conn, ctx.guild.id, company["stock_channel_id"], treasury_delta)
+
+                            leveled_up = False
+                            next_level = company["company_level"] + 1
+                            threshold = LEVEL_BASE_THRESHOLD * (2 ** (next_level - 1))
+                            if treasury_after >= threshold:
+                                consume = int(LEVEL_UP_TREASURY_CONSUME * treasury_after)
+                                new_multiplier = company["revenue_multiplier"] * 2
+                                await set_company_level(conn, ctx.guild.id, company["stock_channel_id"],
+                                                         next_level, new_multiplier, consume)
+                                leveled_up = True
+
+                            dilution = await process_dilution(conn, ctx.guild.id, company["stock_channel_id"],
+                                                              profit, company)
+
+            if killed:
+                self._company_channels.pop(ctx.guild.id, None)
+                embed = discord.Embed(
+                    title=f"{comp['name']} - BANKRUPT",
+                    description=kill_reason,
+                    color=discord.Color.dark_red(),
                 )
-            if leveled_up:
-                embed.add_field(name="LEVEL UP!", value=f"Level {next_level} reached!", inline=False)
-            await ctx.send(embed=embed)
+                await ctx.send(embed=embed)
+            else:
+                updated = await get_company(self.pool, ctx.guild.id, comp["stock_channel_id"])
+                embed = discord.Embed(title=f"{company['name']} - Financial Summary", color=discord.Color.blue())
+                embed.add_field(name="Weekly Revenue", value=f"{weekly_revenue}{MAIN_CURRENCY_EMOJI}", inline=True)
+                embed.add_field(name=f"Operating Cost ({cost_rate * 100:.1f}%)", value=f"{cost}{MAIN_CURRENCY_EMOJI}", inline=True)
+                embed.add_field(name="Profit", value=f"{profit}{MAIN_CURRENCY_EMOJI}", inline=True)
+                embed.add_field(name="Dividend/Share", value=f"{dividend_per_share}{MAIN_CURRENCY_EMOJI}", inline=True)
+                embed.add_field(name="Total Dividends Paid", value=f"{dividends_paid}{MAIN_CURRENCY_EMOJI}", inline=True)
+                embed.add_field(name="Treasury", value=f"{updated['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
+                if dilution["new_shares"] > 0:
+                    embed.add_field(
+                        name="Dilution",
+                        value=(
+                            f"+{dilution['new_shares']} shares @ {dilution['dilution_price']}{MAIN_CURRENCY_EMOJI} "
+                            f"({dilution['filled_via_orders']} filled, {dilution['ipo_pool_added']} to IPO pool)"
+                        ),
+                        inline=False,
+                    )
+                if leveled_up:
+                    embed.add_field(name="LEVEL UP!", value=f"Level {next_level} reached!", inline=False)
+                await ctx.send(embed=embed)
 
     # ── Trading ──
 

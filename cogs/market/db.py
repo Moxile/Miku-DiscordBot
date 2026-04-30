@@ -346,6 +346,25 @@ async def reset_all_orders(conn: Conn, guild_id: int) -> tuple[int, int, int]:
     return len(buy_orders), sell_count, sum(refunds.values())
 
 
+async def refund_company_buy_orders(conn: Conn, guild_id: int, stock_channel_id: int) -> int:
+    """Refund escrowed gold from all open buy orders for one company. Returns total refunded."""
+    buy_orders = await conn.fetch(
+        "SELECT user_id, remaining, price FROM orders "
+        "WHERE guild_id = $1 AND stock_channel_id = $2 AND side = 'buy' AND remaining > 0",
+        guild_id, stock_channel_id,
+    )
+    refunds: dict[int, int] = {}
+    for order in buy_orders:
+        uid = order["user_id"]
+        refunds[uid] = refunds.get(uid, 0) + order["remaining"] * order["price"]
+    for uid, amount in refunds.items():
+        await conn.execute(
+            "UPDATE balances SET wallet = wallet + $3 WHERE guild_id = $1 AND user_id = $2",
+            guild_id, uid, amount,
+        )
+    return sum(refunds.values())
+
+
 async def remove_member_shares(conn: asyncpg.Connection, guild_id: int, user_id: int) -> list:
     """Cancel all open orders and return all portfolio shares to IPO for a leaving member.
 
