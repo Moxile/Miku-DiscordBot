@@ -1,4 +1,4 @@
-from .cog import Lichess
+from cogs.lichess.cog import Lichess
 
 
 async def setup(bot):
