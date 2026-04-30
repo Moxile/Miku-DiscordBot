@@ -10,6 +10,7 @@ import datetime
 import random
 
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, WORK_COOLDOWN
+from core.checks import require_channel, WrongChannel, invalidate
 
 PER_PAGE = 10
 
@@ -138,6 +139,7 @@ class Economy(commands.Cog):
             await ctx.send("Member not found. Please mention a valid member or provide a valid user ID.")
 
     @commands.command()
+    @require_channel("work_channel")
     async def work(self, ctx):
         """Work to earn some money"""
         cooldown = await self.pool.fetchval(
@@ -166,6 +168,31 @@ class Economy(commands.Cog):
         remaining = cooldown - datetime.datetime.now(datetime.timezone.utc)
         minutes, seconds = divmod(int(remaining.total_seconds()), 60)
         await ctx.send(f"You need to wait *{minutes}m {seconds}s* before you can work again.")
+
+    @work.error
+    async def work_error(self, ctx, error):
+        if isinstance(error, WrongChannel):
+            await ctx.send(str(error), ephemeral=True)
+
+    @commands.command()
+    @commands.is_owner()
+    async def setworkchannel(self, ctx, channel: discord.TextChannel = None):
+        """Admin: Set (or clear) the channel where .work is allowed."""
+        if channel is None:
+            await self.pool.execute(
+                "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'work_channel'",
+                ctx.guild.id,
+            )
+            invalidate(ctx.guild.id, "work_channel")
+            await ctx.send("Work channel restriction removed — `.work` allowed everywhere.")
+        else:
+            await self.pool.execute(
+                """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, 'work_channel', $2)
+                   ON CONFLICT (guild_id, key) DO UPDATE SET value = $2""",
+                ctx.guild.id, str(channel.id),
+            )
+            invalidate(ctx.guild.id, "work_channel")
+            await ctx.send(f"`.work` restricted to {channel.mention}.")
 
     @commands.command()
     async def gift(self, ctx, member: discord.Member, amount: str):
