@@ -649,18 +649,36 @@ class Market(commands.Cog):
         monday = (now - datetime.timedelta(days=now.weekday())).date()
         today = now.date()
         companies = await list_companies(self.pool, ctx.guild.id)
+        embed = discord.Embed(
+            title="Market Revenue Recap",
+            description=f"{monday.strftime('%b %d')} – {today.strftime('%b %d')}",
+            color=discord.Color.gold(),
+        )
         for company in companies:
             daily_records = await get_weekly_revenue(
                 self.pool, ctx.guild.id, company["stock_channel_id"], monday, today,
             )
+            days_so_far = len(daily_records)
             total_so_far = sum(r["revenue"] for r in daily_records)
-            lines = [f"  {r['revenue_date'].strftime('%A')}: {r['revenue']}{MAIN_CURRENCY_EMOJI}" for r in daily_records]
-            embed = discord.Embed(title=f"{company['name']} - Revenue Recap", color=discord.Color.gold())
-            embed.add_field(name="Daily Breakdown", value="\n".join(lines) or "No revenue yet", inline=False)
-            embed.add_field(name="Total So Far", value=f"{total_so_far}{MAIN_CURRENCY_EMOJI}", inline=True)
-            embed.add_field(name="Treasury", value=f"{company['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
-            embed.add_field(name="Level", value=str(company["company_level"]), inline=True)
+            expected = int(total_so_far / days_so_far * 5) if days_so_far else 0
+            projected_cost = max(5000, int(0.075 * company["treasury"]))
+            projected_profit = expected - projected_cost
+            projected_dps = int(DIVIDEND_PROFIT_SHARE * max(0, projected_profit)) // company["total_shares"]
+            projected_eps = projected_profit / company["total_shares"] if company["total_shares"] else 0
+            day_line = " | ".join(
+                f"{r['revenue_date'].strftime('%a')}: {r['revenue']}{MAIN_CURRENCY_EMOJI}"
+                for r in daily_records
+            )
+            field_value = "\n".join([
+                day_line or "No revenue yet",
+                f"So far: **{total_so_far}{MAIN_CURRENCY_EMOJI}** → Expected: **~{expected}{MAIN_CURRENCY_EMOJI}**",
+                f"DPS ~{projected_dps}{MAIN_CURRENCY_EMOJI} | EPS ~{projected_eps:.1f}{MAIN_CURRENCY_EMOJI} | Treasury: {company['treasury']}{MAIN_CURRENCY_EMOJI} | Lv{company['company_level']}",
+            ])
+            embed.add_field(name=company["name"], value=field_value, inline=False)
+        if embed.fields:
             await ctx.send(embed=embed)
+        else:
+            await ctx.send("No companies listed.")
 
     @commands.command()
     @commands.is_owner()
@@ -674,6 +692,8 @@ class Market(commands.Cog):
         monday = yesterday - datetime.timedelta(days=yesterday.weekday())
 
         companies = await list_companies(self.pool, ctx.guild.id)
+        results = []
+
         for comp in companies:
             killed = False
             kill_reason = ""
@@ -748,33 +768,54 @@ class Market(commands.Cog):
 
             if killed:
                 self._company_channels.pop(ctx.guild.id, None)
-                embed = discord.Embed(
-                    title=f"{comp['name']} - BANKRUPT",
-                    description=kill_reason,
-                    color=discord.Color.dark_red(),
-                )
-                await ctx.send(embed=embed)
+                results.append({"killed": True, "name": comp["name"], "reason": kill_reason})
             else:
                 updated = await get_company(self.pool, ctx.guild.id, comp["stock_channel_id"])
-                embed = discord.Embed(title=f"{company['name']} - Financial Summary", color=discord.Color.blue())
-                embed.add_field(name="Weekly Revenue", value=f"{weekly_revenue}{MAIN_CURRENCY_EMOJI}", inline=True)
-                embed.add_field(name=f"Operating Cost ({cost_rate * 100:.1f}%)", value=f"{cost}{MAIN_CURRENCY_EMOJI}", inline=True)
-                embed.add_field(name="Profit", value=f"{profit}{MAIN_CURRENCY_EMOJI}", inline=True)
-                embed.add_field(name="Dividend/Share", value=f"{dividend_per_share}{MAIN_CURRENCY_EMOJI}", inline=True)
-                embed.add_field(name="Total Dividends Paid", value=f"{dividends_paid}{MAIN_CURRENCY_EMOJI}", inline=True)
-                embed.add_field(name="Treasury", value=f"{updated['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
-                if dilution["new_shares"] > 0:
-                    embed.add_field(
-                        name="Dilution",
-                        value=(
-                            f"+{dilution['new_shares']} shares @ {dilution['dilution_price']}{MAIN_CURRENCY_EMOJI} "
-                            f"({dilution['filled_via_orders']} filled, {dilution['ipo_pool_added']} to IPO pool)"
-                        ),
-                        inline=False,
+                eps = profit / company["total_shares"] if company["total_shares"] else 0
+                results.append({
+                    "killed": False,
+                    "name": company["name"],
+                    "weekly_revenue": weekly_revenue,
+                    "cost": cost,
+                    "cost_rate": cost_rate,
+                    "profit": profit,
+                    "eps": eps,
+                    "dividend_per_share": dividend_per_share,
+                    "dividends_paid": dividends_paid,
+                    "treasury_before": company["treasury"],
+                    "treasury_after": updated["treasury"],
+                    "leveled_up": leveled_up,
+                    "next_level": next_level,
+                    "dilution": dilution,
+                    "company_level": updated["company_level"],
+                })
+
+        embed = discord.Embed(
+            title="Market Financial Summary",
+            description=f"{monday.strftime('%b %d')} – {yesterday.strftime('%b %d')}",
+            color=discord.Color.blue(),
+        )
+        for r in results:
+            if r["killed"]:
+                embed.add_field(name=f"💀 {r['name']}", value=r["reason"], inline=False)
+            else:
+                lines = [
+                    f"Rev: {r['weekly_revenue']}{MAIN_CURRENCY_EMOJI} | Cost ({r['cost_rate']*100:.1f}%): {r['cost']}{MAIN_CURRENCY_EMOJI} | Profit: {r['profit']}{MAIN_CURRENCY_EMOJI}",
+                    f"DPS: {r['dividend_per_share']}{MAIN_CURRENCY_EMOJI} | EPS: {r['eps']:.1f}{MAIN_CURRENCY_EMOJI} | Divs paid: {r['dividends_paid']}{MAIN_CURRENCY_EMOJI}",
+                    f"Treasury: {r['treasury_before']}{MAIN_CURRENCY_EMOJI} → {r['treasury_after']}{MAIN_CURRENCY_EMOJI} | Lv{r['company_level']}",
+                ]
+                if r["dilution"]["new_shares"] > 0:
+                    lines.append(
+                        f"+{r['dilution']['new_shares']} shares @ {r['dilution']['dilution_price']}{MAIN_CURRENCY_EMOJI} "
+                        f"({r['dilution']['filled_via_orders']} filled, {r['dilution']['ipo_pool_added']} to IPO)"
                     )
-                if leveled_up:
-                    embed.add_field(name="LEVEL UP!", value=f"Level {next_level} reached!", inline=False)
-                await ctx.send(embed=embed)
+                if r["leveled_up"]:
+                    lines.append(f"⬆️ Level Up: Lv{r['next_level']}!")
+                embed.add_field(name=r["name"], value="\n".join(lines), inline=False)
+        if embed.fields:
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send("No companies listed.")
 
     # ── Trading ──
 
