@@ -26,6 +26,7 @@ COG_COLORS = {
     "Utility": discord.Color.blurple(),
     "ReactionRoles": discord.Color.fuchsia(),
     "WolfRandom": discord.Color.dark_teal(),
+    "BotReactions": discord.Color.from_rgb(255, 165, 0),
 }
 
 EXTENSIONS = [
@@ -46,6 +47,7 @@ EXTENSIONS = [
     "cogs.counting",
     "cogs.lichess",
     "cogs.wolfrandom",
+    "cogs.bot_reactions",
 ]
 
 

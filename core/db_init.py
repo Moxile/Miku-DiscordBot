@@ -20,6 +20,7 @@ from cogs.waifu import schema as waifu_schema
 from cogs.reaction_roles import schema as reaction_roles_schema
 from cogs.counting import schema as counting_schema
 from cogs.lichess import schema as lichess_schema
+from cogs.bot_reactions import schema as bot_reactions_schema
 
 
 # Order matters: economy + market must run before features that reference balances/companies.
@@ -36,6 +37,7 @@ _FEATURE_MODULES = [
     reaction_roles_schema,
     counting_schema,
     lichess_schema,
+    bot_reactions_schema,
 ]
 
 

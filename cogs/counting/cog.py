@@ -128,6 +128,29 @@ def safe_eval(expr: str) -> int | None:
         return None
 
 
+def _reward(count: int) -> int:
+    if count >= 500:
+        return 10
+    if count >= 200:
+        return 7
+    if count >= 100:
+        return 5
+    if count >= 50:
+        return 4
+    if count >= 10:
+        return 3
+    return 2
+
+
+_MILESTONES = {
+    10:  "🎉 **Milestone 10 reached!** Double digits! +3 from now on!",
+    50:  "🎉 **Milestone 50 reached!** Halfway to the century! +4 from now on!",
+    100: "🎉 **Milestone 100 reached!** Triple digits achieved! +5 from now on!",
+    200: "🎉 **Milestone 200 reached!** Two hundred strong! +7 from now on!",
+    500: "🎉 **Milestone 500 reached!** Sky isn't the limit! +10 from now on!",
+}
+
+
 class Counting(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -245,9 +268,12 @@ class Counting(commands.Cog):
 
         await self._advance(guild_id, user_id, value)
         await message.add_reaction("✅")
+        reward = _reward(value)
         async with self.pool.acquire() as conn:
             await ensure_wallet(conn, guild_id, user_id)
-            await update_wallet(conn, guild_id, user_id, len(str(value))+2)
+            await update_wallet(conn, guild_id, user_id, reward)
             await add_transaction(
-                conn, guild_id, user_id, len(str(value))+2, "counting", f"Counted {value} correctly"
+                conn, guild_id, user_id, reward, "counting", f"Counted {value} correctly"
             )
+        if value in _MILESTONES:
+            await message.channel.send(_MILESTONES[value])
