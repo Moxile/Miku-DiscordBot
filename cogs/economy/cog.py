@@ -4,13 +4,14 @@ import discord
 from discord.ext import commands
 
 from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
+from cogs.market.db import remove_member_shares
 from core.money import parse_amount, AmountError
 
 import datetime
 import random
 
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, WORK_COOLDOWN
-from core.checks import require_channel, WrongChannel, invalidate
+from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked, invalidate_lock
 
 PER_PAGE = 10
 
@@ -73,7 +74,13 @@ class Economy(commands.Cog):
     def pool(self):
         return self.bot.pool
 
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, UserLocked):
+            return
+        raise error
+
     @commands.command(aliases=["dep", "d"])
+    @require_not_locked()
     async def deposit(self, ctx, amount: str):
         """Deposit money from you wallet into your banj account. You can specify and amount or use 'all' to deposit everything."""
         bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
@@ -96,6 +103,7 @@ class Economy(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["with", "w"])
+    @require_not_locked()
     async def withdraw(self, ctx, amount: str):
         """Withdraw money from your bank account into your wallet. You can specify and amount or use 'all' to withdraw everything."""
         bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
@@ -118,6 +126,7 @@ class Economy(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["bal", "b", "$"])
+    @require_not_locked()
     async def balance(self, ctx, member: discord.Member = None):
         """Check your balance or someone else's balance. You can mention a member to check their balance."""
         member = member or ctx.author
@@ -139,6 +148,7 @@ class Economy(commands.Cog):
             await ctx.send("Member not found. Please mention a valid member or provide a valid user ID.")
 
     @commands.command()
+    @require_not_locked()
     @require_channel("work_channel")
     async def work(self, ctx):
         """Work to earn some money"""
@@ -195,6 +205,7 @@ class Economy(commands.Cog):
             await ctx.send(f"`.work` restricted to {channel.mention}.")
 
     @commands.command()
+    @require_not_locked()
     async def gift(self, ctx, member: discord.Member, amount: str):
         """Gift money from your wallet to another user's wallet. You must mention the recipient and specify the amount."""
         bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
@@ -215,6 +226,7 @@ class Economy(commands.Cog):
         await ctx.send(f"You gifted {amount}{MAIN_CURRENCY_EMOJI} to {member.mention}!")
 
     @commands.command(aliases=["transactions", "txlog"])
+    @require_not_locked()
     async def curtrs(self, ctx, member: discord.Member = None):
         """Show your (or someone's) full transaction history with pagination.
         Usage: .curtrs [@member]"""
@@ -245,6 +257,44 @@ class Economy(commands.Cog):
         await ensure_wallet(self.pool, ctx.guild.id, member.id)
         await update_wallet(self.pool, ctx.guild.id, member.id, amount)
         await add_transaction(self.pool, ctx.guild.id, member.id, amount, "admin_add", f"Added by {ctx.author}")
+
+    @commands.command()
+    @commands.is_owner()
+    async def lockuser(self, ctx, member: discord.Member, *, flags: str = ""):
+        """Admin: Lock a user from using economy commands. Pass --delete to also zero their balance and return all shares to IPO."""
+        await self.pool.execute(
+            "INSERT INTO locked_users (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            ctx.guild.id, member.id,
+        )
+        invalidate_lock(ctx.guild.id, member.id)
+
+        wipe_msg = ""
+        if "--delete" in flags:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    returned = await remove_member_shares(conn, ctx.guild.id, member.id)
+                    await conn.execute(
+                        "UPDATE balances SET wallet = 0, bank = 0 WHERE guild_id = $1 AND user_id = $2",
+                        ctx.guild.id, member.id,
+                    )
+            share_lines = ", ".join(f"{h['quantity']}x {h['name']}" for h in returned) if returned else "none"
+            wipe_msg = f" Balance zeroed and shares returned to IPO ({share_lines})."
+
+        await ctx.send(f"**{member.display_name}** has been locked from the economy.{wipe_msg}")
+
+    @commands.command()
+    @commands.is_owner()
+    async def unlockuser(self, ctx, member: discord.Member):
+        """Admin: Unlock a user's access to economy commands."""
+        result = await self.pool.execute(
+            "DELETE FROM locked_users WHERE guild_id = $1 AND user_id = $2",
+            ctx.guild.id, member.id,
+        )
+        invalidate_lock(ctx.guild.id, member.id)
+        if result == "DELETE 0":
+            await ctx.send(f"**{member.display_name}** was not locked.")
+        else:
+            await ctx.send(f"**{member.display_name}** has been unlocked.")
 
     @commands.command()
     @commands.is_owner()

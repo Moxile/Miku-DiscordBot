@@ -1,4 +1,11 @@
 SCHEMA = """
+    CREATE TABLE IF NOT EXISTS locked_users (
+        guild_id  BIGINT NOT NULL,
+        user_id   BIGINT NOT NULL,
+        locked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (guild_id, user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS balances (
         guild_id    BIGINT NOT NULL,
         user_id     BIGINT NOT NULL,

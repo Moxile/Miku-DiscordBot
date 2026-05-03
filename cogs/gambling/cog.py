@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 
 from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
-from core.checks import require_channel, WrongChannel, invalidate
+from core.checks import require_channel, WrongChannel, invalidate, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, PREFIX
 
@@ -22,7 +22,14 @@ class Gambling(commands.Cog):
     def pool(self):
         return self.bot.pool
 
+    async def cog_check(self, ctx):
+        if ctx.guild and await user_is_locked(self.pool, ctx.guild.id, ctx.author.id):
+            raise UserLocked()
+        return True
+
     async def cog_command_error(self, ctx, error):
+        if isinstance(error, UserLocked):
+            return
         if isinstance(error, WrongChannel):
             await ctx.send(str(error), delete_after=10)
         else:

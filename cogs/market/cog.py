@@ -24,7 +24,7 @@ from cogs.market.db import (
     process_dilution,
     refund_company_buy_orders,
 )
-from core.checks import require_channel, WrongChannel, invalidate
+from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from config import (
     MAIN_CURRENCY_EMOJI,
@@ -63,6 +63,8 @@ class Market(commands.Cog):
         return self.bot.pool
 
     async def cog_command_error(self, ctx, error):
+        if isinstance(error, UserLocked):
+            return
         if isinstance(error, WrongChannel):
             await ctx.send(str(error), delete_after=10)
         else:
@@ -85,6 +87,8 @@ class Market(commands.Cog):
         if message.author.bot or not message.guild:
             return
         if message.channel.id not in await self._get_company_channels(message.guild.id):
+            return
+        if await user_is_locked(self.pool, message.guild.id, message.author.id):
             return
         char_count = len(message.content)
         if char_count == 0:
@@ -429,6 +433,7 @@ class Market(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['p', 'port'])
+    @require_not_locked()
     async def portfolio(self, ctx, member: discord.Member = None):
         """Show your current holdings as well as how those evolve. Use with a member mention to see others portfolio."""
         member = member or ctx.author
@@ -820,6 +825,7 @@ class Market(commands.Cog):
     # ── Trading ──
 
     @commands.command(aliases=['mb', 'mbuy'])
+    @require_not_locked()
     @require_channel("trading_channel")
     async def marketbuy(self, ctx, stock: discord.TextChannel, quantity: int = 1):
         """Buy shares immediately at the best available price. Mention the stock channel and specify the quantity."""
@@ -933,6 +939,7 @@ class Market(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['ms', 'msell'])
+    @require_not_locked()
     @require_channel("trading_channel")
     async def marketsell(self, ctx, stock: discord.TextChannel, quantity: int = 1):
         """Sell shares immediately at the best available price. Mention the stock channel and specify the quantity."""
@@ -1001,6 +1008,7 @@ class Market(commands.Cog):
     # ── Limit orders ──
 
     @commands.command(aliases=['bo', 'border'])
+    @require_not_locked()
     @require_channel("trading_channel")
     async def buyorder(self, ctx, stock: discord.TextChannel, quantity: int, price: str):
         """Place a limit buy order. The order will execute as soon as a matching sell order is placed at or below your specified price. Use by mentioning channel, then quantity and highest price you are paying."""
@@ -1107,6 +1115,7 @@ class Market(commands.Cog):
             await ctx.send(f"Buy order fully filled! Bought {filled}x **{company['name']}** for {spent}{MAIN_CURRENCY_EMOJI}.")
 
     @commands.command(aliases=['so', 'sorder'])
+    @require_not_locked()
     @require_channel("trading_channel")
     async def sellorder(self, ctx, stock: discord.TextChannel, quantity: int, price: str):
         """Place a limit sell order. The order will execute as soon as a matching buy order is placed at or above your specified price. Use by mentioning channel, then quantity and lowest price you are accepting."""
@@ -1176,6 +1185,7 @@ class Market(commands.Cog):
             await ctx.send(f"Sell order fully filled! Sold {filled}x **{company['name']}** for {revenue}{MAIN_CURRENCY_EMOJI}.")
 
     @commands.command(aliases=['gs', 'giftstock'])
+    @require_not_locked()
     @require_channel("trading_channel")
     async def giftstocks(self, ctx, member: discord.Member, stock: discord.TextChannel, quantity: int = 1):
         """Gift shares to another member for free. Usage: .giftstocks @member #stock-channel [quantity]"""
@@ -1221,6 +1231,7 @@ class Market(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['co', 'corder'])
+    @require_not_locked()
     @require_channel("trading_channel")
     async def cancelorder(self, ctx, order_id: int):
         """Cancel an open order by its ID. Use the `orderbook` command to see order IDs."""

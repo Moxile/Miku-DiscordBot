@@ -6,8 +6,16 @@ class WrongChannel(commands.CheckFailure):
     pass
 
 
+class UserLocked(commands.CheckFailure):
+    """Raised when a locked user attempts an economy command."""
+    pass
+
+
 # (guild_id, setting_key) -> channel_id
 _channel_cache: dict[tuple[int, str], int] = {}
+
+# (guild_id, user_id) -> is_locked
+_lock_cache: dict[tuple[int, int], bool] = {}
 
 
 def require_channel(setting_key: str):
@@ -37,3 +45,40 @@ def require_channel(setting_key: str):
 def invalidate(guild_id: int, setting_key: str) -> None:
     """Remove a cached channel entry (call after updating guild_settings)."""
     _channel_cache.pop((guild_id, setting_key), None)
+
+
+def require_not_locked():
+    """Check that the invoking user is not economy-locked. Raises UserLocked if they are."""
+    async def predicate(ctx) -> bool:
+        if not ctx.guild:
+            return True
+        key = (ctx.guild.id, ctx.author.id)
+        locked = _lock_cache.get(key)
+        if locked is None:
+            locked = await ctx.bot.pool.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM locked_users WHERE guild_id = $1 AND user_id = $2)",
+                ctx.guild.id, ctx.author.id,
+            )
+            _lock_cache[key] = locked
+        if locked:
+            raise UserLocked()
+        return True
+    return commands.check(predicate)
+
+
+async def user_is_locked(pool, guild_id: int, user_id: int) -> bool:
+    """Return True if the user is economy-locked. Shares the same cache as require_not_locked."""
+    key = (guild_id, user_id)
+    locked = _lock_cache.get(key)
+    if locked is None:
+        locked = await pool.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM locked_users WHERE guild_id = $1 AND user_id = $2)",
+            guild_id, user_id,
+        )
+        _lock_cache[key] = locked
+    return locked
+
+
+def invalidate_lock(guild_id: int, user_id: int) -> None:
+    """Clear the lock cache for a user (call after locking or unlocking)."""
+    _lock_cache.pop((guild_id, user_id), None)
