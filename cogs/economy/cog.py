@@ -268,19 +268,37 @@ class Economy(commands.Cog):
         )
         invalidate_lock(ctx.guild.id, member.id)
 
-        wipe_msg = ""
-        if "--delete" in flags:
-            async with self.pool.acquire() as conn:
-                async with conn.transaction():
+        returned = []
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                open_orders = await conn.fetch(
+                    "SELECT side, remaining, price FROM orders WHERE guild_id = $1 AND user_id = $2 AND remaining > 0",
+                    ctx.guild.id, member.id,
+                )
+                refund = sum(o["remaining"] * o["price"] for o in open_orders if o["side"] == "buy")
+                if refund > 0:
+                    await conn.execute(
+                        "UPDATE balances SET wallet = wallet + $3 WHERE guild_id = $1 AND user_id = $2",
+                        ctx.guild.id, member.id, refund,
+                    )
+                await conn.execute(
+                    "DELETE FROM orders WHERE guild_id = $1 AND user_id = $2",
+                    ctx.guild.id, member.id,
+                )
+                if "--delete" in flags:
                     returned = await remove_member_shares(conn, ctx.guild.id, member.id)
                     await conn.execute(
                         "UPDATE balances SET wallet = 0, bank = 0 WHERE guild_id = $1 AND user_id = $2",
                         ctx.guild.id, member.id,
                     )
-            share_lines = ", ".join(f"{h['quantity']}x {h['name']}" for h in returned) if returned else "none"
-            wipe_msg = f" Balance zeroed and shares returned to IPO ({share_lines})."
 
-        await ctx.send(f"**{member.display_name}** has been locked from the economy.{wipe_msg}")
+        parts = [f"**{member.display_name}** has been locked from the economy."]
+        if open_orders:
+            parts.append(f"{len(open_orders)} open order(s) cancelled" + (f", {refund}{MAIN_CURRENCY_EMOJI} escrowed gold refunded." if refund else "."))
+        if "--delete" in flags:
+            share_lines = ", ".join(f"{h['quantity']}x {h['name']}" for h in returned) if returned else "none"
+            parts.append(f"Balance zeroed, shares returned to IPO ({share_lines}).")
+        await ctx.send(" ".join(parts))
 
     @commands.command()
     @commands.is_owner()
