@@ -21,9 +21,8 @@ class Acro(commands.Cog):
 
     @commands.command()
     async def acro(self, ctx: commands.Context, bet: str = None):
-        """Start an Acro game. Everyone gets 60s to submit a phrase matching random letters.
-        Then 30s of voting. Winner takes the pot.
-        Usage: .acro [bet]"""
+        """Start an Acro game. A random acronym is generated; everyone has 60s to submit a matching phrase, then 30s of voting — highest votes wins the pot.
+        (example: .acro 100 — start a game with a 100 coin entry fee)"""
         if ctx.channel.id in self.games:
             await ctx.send("An Acro game is already running in this channel!")
             return
@@ -77,8 +76,13 @@ class Acro(commands.Cog):
             self.games.pop(channel_id, None)
             return
 
-        if len(game["participants"]) < 2:
-            await self._cancel_game(channel, game, "Not enough participants (need at least 2).")
+        if not game["participants"]:
+            await self._cancel_game(channel, game, "No one submitted a phrase.")
+            return
+
+        if len(game["participants"]) == 1:
+            self.games.pop(channel_id)
+            await self._resolve(channel, game)
             return
 
         game["phase"] = "voting"
@@ -124,10 +128,11 @@ class Acro(commands.Cog):
         for voter_id, idx in game["votes"].items():
             vote_counts[idx] += 1
 
-        players_who_voted = set(game["votes"].keys())
-        for i, uid in enumerate(order):
-            if uid in voters_who_are_players and uid not in players_who_voted:
-                vote_counts[i] -= 1
+        if num_submissions > 1:
+            players_who_voted = set(game["votes"].keys())
+            for i, uid in enumerate(order):
+                if uid in voters_who_are_players and uid not in players_who_voted:
+                    vote_counts[i] -= 1
 
         max_votes = max(vote_counts)
         winners = [order[i] for i in range(num_submissions) if vote_counts[i] == max_votes]
@@ -152,10 +157,13 @@ class Acro(commands.Cog):
             member = channel.guild.get_member(uid)
             name = member.display_name if member else f"User {uid}"
             marker = " 🏆" if uid in winners else ""
-            results_lines.append(
-                f"**{i + 1}.** {game['guesses'][uid]} — *{name}* "
-                f"({vote_counts[i]} vote{'s' if vote_counts[i] != 1 else ''}){marker}"
-            )
+            if num_submissions == 1:
+                results_lines.append(f"**1.** {game['guesses'][uid]} — *{name}*{marker}")
+            else:
+                results_lines.append(
+                    f"**{i + 1}.** {game['guesses'][uid]} — *{name}* "
+                    f"({vote_counts[i]} vote{'s' if vote_counts[i] != 1 else ''}){marker}"
+                )
         embed.add_field(name="Submissions", value="\n".join(results_lines), inline=False)
 
         if pot > 0 and winners:
