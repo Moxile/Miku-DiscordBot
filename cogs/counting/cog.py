@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from config import MAIN_CURRENCY_EMOJI, PREFIX
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
+from core.checks import user_is_locked
 
 _OPS = {
     ast.Add: operator.add,
@@ -268,12 +269,13 @@ class Counting(commands.Cog):
 
         await self._advance(guild_id, user_id, value)
         await message.add_reaction("✅")
-        reward = _reward(value)
-        async with self.pool.acquire() as conn:
-            await ensure_wallet(conn, guild_id, user_id)
-            await update_wallet(conn, guild_id, user_id, reward)
-            await add_transaction(
-                conn, guild_id, user_id, reward, "counting", f"Counted {value} correctly"
-            )
+        if not await user_is_locked(self.pool, guild_id, user_id):
+            reward = _reward(value)
+            async with self.pool.acquire() as conn:
+                await ensure_wallet(conn, guild_id, user_id)
+                await update_wallet(conn, guild_id, user_id, reward)
+                await add_transaction(
+                    conn, guild_id, user_id, reward, "counting", f"Counted {value} correctly"
+                )
         if value in _MILESTONES:
             await message.channel.send(_MILESTONES[value])

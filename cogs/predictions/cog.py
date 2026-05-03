@@ -8,6 +8,7 @@ from cogs.predictions.db import (
     close_prediction, resolve_prediction, get_winning_bets,
     get_active_predictions,
 )
+from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI
 
@@ -22,6 +23,11 @@ class Predictions(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
+
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, UserLocked):
+            return
+        raise error
 
     def can_create(self, ctx) -> bool:
         """Check if user is owner, admin, or has the predictor role."""
@@ -91,6 +97,7 @@ class Predictions(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command()
+    @require_not_locked()
     async def pbet(self, ctx, prediction_id: int, option: int, amount: str):
         """Bet on a prediction option. Usage: .pbet <id> <option#> <amount|all>"""
         pred = await get_prediction(self.pool, prediction_id)

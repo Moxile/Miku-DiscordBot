@@ -6,6 +6,7 @@ from cogs.shop.db import (
     create_item, delete_item, get_item_by_name, get_shop_items,
     get_inventory, add_to_inventory,
 )
+from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI
 
@@ -17,6 +18,11 @@ class Shop(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
+
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, UserLocked):
+            return
+        raise error
 
     @commands.command()
     async def shop(self, ctx):
@@ -41,6 +47,7 @@ class Shop(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command()
+    @require_not_locked()
     async def buy(self, ctx, *, name: str):
         """Buy an item from the shop by name."""
         item = await get_item_by_name(self.pool, ctx.guild.id, name)

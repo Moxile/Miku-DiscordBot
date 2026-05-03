@@ -6,6 +6,7 @@ from cogs.offers.db import (
     create_offer, get_offer, lock_offer, get_active_offers, get_offer_takes,
     add_offer_take, decrement_offer_pool, set_offer_status,
 )
+from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI
 
@@ -28,6 +29,11 @@ class Offers(commands.Cog):
     def pool_conn(self):
         return self.bot.pool
 
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, UserLocked):
+            return
+        raise error
+
     async def _can_create(self, ctx) -> bool:
         """Admin or the configured predictor role (shared with Predictions cog)."""
         if ctx.author.guild_permissions.administrator:
@@ -44,6 +50,7 @@ class Offers(commands.Cog):
     # ── Create ──
 
     @commands.command()
+    @require_not_locked()
     async def offer(self, ctx, *, args: str = ""):
         """Create a bookmaker offer. Two forms:
         .offer x<odds> <min> <max> <pool> <message>   — variable stake
@@ -145,6 +152,7 @@ class Offers(commands.Cog):
     # ── Accept ──
 
     @commands.command()
+    @require_not_locked()
     async def take(self, ctx, offer_id: int, stake: str):
         """Accept a host's offer with a given stake. Usage: .take <offer_id> <stake>"""
         try:

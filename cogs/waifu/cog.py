@@ -12,6 +12,7 @@ from cogs.waifu.db import (
     set_waifu_owner, set_engagement, set_marriage, dissolve_marriage,
     decay_waifu_values,
 )
+from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
 
 
@@ -65,9 +66,15 @@ class Waifu(commands.Cog):
             return "Engaged"
         return "None"
 
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, UserLocked):
+            return
+        raise error
+
     # ── Commands ──
 
     @commands.command(aliases=["wbuy"])
+    @require_not_locked()
     async def waifubuy(self, ctx: commands.Context, member: discord.Member, amount: str = None):
         """Buy a user as your waifu. Pay at least their current value.
         Usage: .waifubuy <@user> [amount]"""
@@ -230,6 +237,7 @@ class Waifu(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command()
+    @require_not_locked()
     async def propose(self, ctx: commands.Context, member: discord.Member):
         """Propose marriage to your engaged partner. Requires 7 days of mutual ownership.
         Usage: .propose <@member>"""
