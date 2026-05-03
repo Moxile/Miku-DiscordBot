@@ -1031,6 +1031,7 @@ class Market(commands.Cog):
 
                 filled = 0
                 spent = 0
+                company_locked = await lock_company(conn, ctx.guild.id, stock.id)
                 sell_orders = await get_open_orders_locked(conn, ctx.guild.id, stock.id, "sell")
                 for order in sell_orders:
                     if filled >= quantity:
@@ -1071,6 +1072,25 @@ class Market(commands.Cog):
                     await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, order["user_id"], fill_qty, order["price"], "limit")
                     await add_transaction(conn, ctx.guild.id, order["user_id"], fill_cost, "market_sell", f"Sold {fill_qty}x {company['name']} via limit")
 
+                    filled += fill_qty
+                    spent += fill_cost
+
+                # Fill remaining quantity from IPO if price allows
+                ipo_rem = company_locked["available_ipo_shares"]
+                ipo_price_val = company_locked["ipo_price"]
+                if filled < quantity and ipo_rem > 0 and ipo_price_val <= price:
+                    fill_qty = min(quantity - filled, ipo_rem)
+                    fill_cost = fill_qty * ipo_price_val
+                    refund = fill_qty * (price - ipo_price_val)
+                    if refund > 0:
+                        await update_wallet(conn, ctx.guild.id, ctx.author.id, refund)
+                    await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
+                    await conn.execute(
+                        "UPDATE companies SET available_ipo_shares = available_ipo_shares - $3 WHERE guild_id = $1 AND stock_channel_id = $2",
+                        ctx.guild.id, stock.id, fill_qty,
+                    )
+                    await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, None, fill_qty, ipo_price_val, "ipo")
+                    await update_treasury(conn, ctx.guild.id, stock.id, fill_cost)
                     filled += fill_qty
                     spent += fill_cost
 
