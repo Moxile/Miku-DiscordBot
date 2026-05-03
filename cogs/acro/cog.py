@@ -21,8 +21,7 @@ class Acro(commands.Cog):
 
     @commands.command()
     async def acro(self, ctx: commands.Context, bet: str = None):
-        """Start an Acro game. A random acronym is generated; everyone has 60s to submit a matching phrase, then 30s of voting — highest votes wins the pot.
-        (example: .acro 100 — start a game with a 100 coin entry fee)"""
+        """Start an Acro game. A random acronym is generated; everyone has 60s to submit a matching phrase, then 30s of voting — highest votes wins the pot. (example: .acro 100 — start a game with a 100 coin entry fee)"""
         if ctx.channel.id in self.games:
             await ctx.send("An Acro game is already running in this channel!")
             return
