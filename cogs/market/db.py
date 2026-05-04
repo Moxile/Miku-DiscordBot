@@ -4,6 +4,7 @@ import asyncpg
 
 from config import REVENUE_OUTER_EXP, DILUTION_MAX_RATE, DILUTION_PROFIT_SCALE, DILUTION_DISCOUNT
 from core.db import Conn
+from cogs.economy.db import add_transaction
 
 
 async def lock_company(conn: asyncpg.Connection, guild_id: int, stock_channel_id: int) -> asyncpg.Record:
@@ -440,6 +441,8 @@ async def process_dilution(conn: asyncpg.Connection, guild_id: int, stock_channe
             order["id"], guild_id, fill,
         )
         await add_trade(conn, guild_id, stock_channel_id, order["user_id"], None, fill, order["price"], "dilution")
+        await add_transaction(conn, guild_id, order["user_id"], -(fill * order["price"]), "market_buy",
+                              f"Bought {fill}x shares via dilution")
 
         treasury_gain += fill * order["price"]
         filled_via_orders += fill
