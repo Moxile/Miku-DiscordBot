@@ -288,7 +288,7 @@ class Gambling(commands.Cog):
             times = max(times, 1)
             if bet is not None:
                 times = bet  # !cf 10 means 10 fun flips
-            times = min(times, 50)
+            times = min(times, 10)
             if times == 1:
                 await ctx.send(f"**{random.choice(['Heads', 'Tails'])}!**")
                 return
@@ -303,7 +303,7 @@ class Gambling(commands.Cog):
             await ctx.send(f"You need to specify a bet amount. Usage: `{ctx.prefix}cf h 100`")
             return
 
-        times = min(max(times, 1), 50)
+        times = min(max(times, 1), 10)
         win_side = "H" if side == "h" else "T"
         side_name = "Heads" if side == "h" else "Tails"
 
