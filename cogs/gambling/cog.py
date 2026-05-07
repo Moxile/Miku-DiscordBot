@@ -52,7 +52,7 @@ class Gambling(commands.Cog):
         if tries <= 0:
             await ctx.send("Please enter a valid number of tries (positive amount).")
             return
-        tries = max(tries, 10)
+        tries = min(tries, 10)
         results = []
         for _ in range(tries):
             results.append("H" if random.random() < 0.5 else "T")
