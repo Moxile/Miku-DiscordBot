@@ -600,8 +600,8 @@ class Market(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def listcompany(self, ctx, stock: discord.TextChannel, name: str, ipo_price: str = "100", total_shares: int = 1000):
-        """Admin: list a new company on the market, associating it with a text channel. Optionally use IPO, total shares to adjust the default 100, 1000."""
+    async def listcompany(self, ctx, stock: discord.TextChannel, name: str, ipo_price: str = "100", total_shares: int = 10000):
+        """Admin: list a new company on the market, associating it with a text channel. Optionally use IPO, total shares to adjust the default 100, 10000."""
         try:
             ipo_price = parse_amount(ipo_price)
         except AmountError as e:

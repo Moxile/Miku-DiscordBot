@@ -30,7 +30,7 @@ async def list_companies(conn: Conn, guild_id: int):
 
 
 async def create_company(conn: Conn, guild_id: int, stock_channel_id: int, name: str, listed_by: int,
-                          total_shares: int = 100, ipo_price: int = 100):
+                          total_shares: int = 10000, ipo_price: int = 100):
     await conn.execute(
         """INSERT INTO companies (guild_id, stock_channel_id, name, total_shares, available_ipo_shares, ipo_price, base_ipo_price, listed_by)
            VALUES ($1, $2, $3, $4, $4, $5, $5, $6)""",
