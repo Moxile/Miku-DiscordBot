@@ -499,10 +499,11 @@ class Gambling(commands.Cog):
             await ctx.send(error)
             return
 
-        game = self.games.get(("russian_roulette", ctx.channel.id))
+        key = ("russian_roulette", ctx.guild.id, ctx.channel.id)
+        game = self.games.get(key)
 
         if not game:
-            self.games[("russian_roulette", ctx.channel.id)] = {
+            self.games[key] = {
                 "game": "russian_roulette",
                 "guild_id": ctx.guild.id,
                 "players": [],
@@ -510,7 +511,7 @@ class Gambling(commands.Cog):
                 "version": 0
             }
         else:
-            if ctx.author.id in self.games[("russian_roulette", ctx.channel.id)]["players"]:
+            if ctx.author.id in self.games[key]["players"]:
                 await ctx.send("You have already joined this round of Russian Roulette!")
                 return
 
@@ -520,8 +521,8 @@ class Gambling(commands.Cog):
 
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
 
-        self.games[("russian_roulette", ctx.channel.id)]["version"] += 1
-        self.games[("russian_roulette", ctx.channel.id)]["players"].append(ctx.author.id)
+        self.games[key]["version"] += 1
+        self.games[key]["players"].append(ctx.author.id)
 
         embed=discord.Embed(
             title="Russian Roulette",
@@ -529,11 +530,11 @@ class Gambling(commands.Cog):
             color=discord.Color.dark_red()
         )
         embed.add_field(name="Players Joined", value="\n".join(
-            f"- {ctx.guild.get_member(pid).display_name if ctx.guild.get_member(pid) else str(pid)}" for pid in self.games[("russian_roulette", ctx.channel.id)]["players"]
+            f"- {ctx.guild.get_member(pid).display_name if ctx.guild.get_member(pid) else str(pid)}" for pid in self.games[key]["players"]
         ), inline=False)
         await ctx.send(embed=embed)
 
-        asyncio.create_task(self.spin_russian_roulette(ctx.channel, ("russian_roulette", ctx.channel.id), self.games[("russian_roulette", ctx.channel.id)]["version"]))
+        asyncio.create_task(self.spin_russian_roulette(ctx.channel, key, self.games[key]["version"]))
 
     async def spin_russian_roulette(self, channel, key, version):
         await asyncio.sleep(30)
