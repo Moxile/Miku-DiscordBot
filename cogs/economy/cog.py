@@ -9,7 +9,7 @@ from core.money import parse_amount, AmountError
 from config import REVENUE_BASE_MULTIPLIER
 
 import datetime
-import random
+import secrets
 
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, WORK_COOLDOWN
 from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked, invalidate_lock
@@ -163,7 +163,7 @@ class Economy(commands.Cog):
                 )
 
         if cooldown is None:
-            earnings = random.randint(100, 300)
+            earnings = secrets.randbelow(201) + 100
             await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
             await update_wallet(self.pool, ctx.guild.id, ctx.author.id, earnings)
             await add_transaction(self.pool, ctx.guild.id, ctx.author.id, earnings, "work", "Earnings from work")

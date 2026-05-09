@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-import random
+import secrets
 from pathlib import Path
 
 import discord
@@ -119,7 +119,7 @@ class WolfRandom(commands.Cog):
             await ctx.send("No positions match the given eval bounds.")
             return
 
-        position = random.choice(position_set.positions)
+        position = secrets.choice(position_set.positions)
         await ctx.send(
             f"**{position_set.name()}** — {position_set.len()} position(s) available.\n"
             f"The following moves have been decided:\n```\n{position.pgn}\n```"

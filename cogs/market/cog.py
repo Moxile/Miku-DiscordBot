@@ -1,6 +1,6 @@
 import asyncio
 import datetime
-import random
+import secrets
 import time
 from collections import defaultdict
 
@@ -274,7 +274,7 @@ class Market(commands.Cog):
                                 conn, guild.id, company["stock_channel_id"], monday, saturday,
                             )
 
-                            cost_rate = random.uniform(0.05, 0.10)
+                            cost_rate = (0.05 + 0.05 * secrets.randbelow(1_000_001) / 1_000_000)
                             cost = max(5000, int(cost_rate * company["treasury"]))
                             profit = weekly_revenue - cost
                             dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
@@ -730,7 +730,7 @@ class Market(commands.Cog):
                             conn, ctx.guild.id, company["stock_channel_id"], monday, yesterday,
                         )
 
-                        cost_rate = random.uniform(0.05, 0.10)
+                        cost_rate = (0.05 + 0.05 * secrets.randbelow(1_000_001) / 1_000_000)
                         cost = max(5000, int(cost_rate * company["treasury"]))
                         profit = weekly_revenue - cost
                         dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)

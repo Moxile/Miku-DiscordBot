@@ -1,5 +1,5 @@
 import asyncio
-import random
+import secrets
 import string
 
 import discord
@@ -33,8 +33,8 @@ class Acro(commands.Cog):
                 await ctx.send(str(e))
                 return
 
-        letter_count = random.randint(3, 5)
-        letters = [random.choice(string.ascii_uppercase) for _ in range(letter_count)]
+        letter_count = secrets.randbelow(3) + 3
+        letters = [secrets.choice(string.ascii_uppercase) for _ in range(letter_count)]
 
         self.games[ctx.channel.id] = {
             "guild_id": ctx.guild.id,

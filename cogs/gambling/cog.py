@@ -1,5 +1,5 @@
 import asyncio
-import random
+import secrets
 
 import discord
 from discord.ext import commands
@@ -55,7 +55,7 @@ class Gambling(commands.Cog):
         tries = min(tries, 10)
         results = []
         for _ in range(tries):
-            results.append("H" if random.random() < 0.5 else "T")
+            results.append("H" if secrets.randbelow(2) == 0 else "T")
 
         embed = discord.Embed(title="Coin Flip Results", description="\n".join(results), color=discord.Color.blue())
         await ctx.send(embed=embed)
@@ -84,7 +84,7 @@ class Gambling(commands.Cog):
         results = []
         total = 0
         for _ in range(tries):
-            result = "H" if random.random() < 0.5 else "T"
+            result = "H" if secrets.randbelow(2) == 0 else "T"
 
             if result == choice.upper():
                 total += bet_per_try
@@ -107,7 +107,9 @@ class Gambling(commands.Cog):
         deck = [(value, suit) for suit in suits for value in values]
         if deckcount > 0:
             deck *= deckcount
-        random.shuffle(deck)
+        for i in range(len(deck) - 1, 0, -1):
+            j = secrets.randbelow(i + 1)
+            deck[i], deck[j] = deck[j], deck[i]
         return deck
 
     @staticmethod
@@ -441,7 +443,7 @@ class Gambling(commands.Cog):
             return
         self.games.pop(key)
 
-        result = random.randint(0, 36)
+        result = secrets.randbelow(37)
         color = "green" if result == 0 else ("red" if result in self.ROULETTE_RED else "black")
 
         embed = discord.Embed(
@@ -561,7 +563,7 @@ class Gambling(commands.Cog):
             round_num += 1
             for pid in alive.copy():
                 await asyncio.sleep(1)
-                if random.random() < chance_hit:
+                if secrets.randbelow(1_000_000) < int(chance_hit * 1_000_000):
                     alive.remove(pid)
                     member = channel.guild.get_member(pid)
                     name = member.display_name if member else str(pid)
