@@ -4,8 +4,9 @@ import discord
 from discord.ext import commands
 
 from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
-from cogs.market.db import remove_member_shares
+from cogs.market.db import remove_member_shares, create_company
 from core.money import parse_amount, AmountError
+from config import REVENUE_BASE_MULTIPLIER
 
 import datetime
 import random
@@ -17,11 +18,12 @@ PER_PAGE = 10
 
 
 class TransactionPaginator(discord.ui.View):
-    def __init__(self, rows: list, member: discord.Member, invoker_id: int, *, timeout=120):
+    def __init__(self, rows: list, member: discord.Member, invoker_id: int, *, counting_note: bool = False, timeout=120):
         super().__init__(timeout=timeout)
         self.rows = rows
         self.member = member
         self.invoker_id = invoker_id
+        self.counting_note = counting_note
         self.page = 0
         self.max_page = max(0, math.ceil(len(rows) / PER_PAGE) - 1)
         self._update_buttons()
@@ -44,7 +46,10 @@ class TransactionPaginator(discord.ui.View):
             desc = row["description"] or row["tx_type"]
             lines.append(f"`{date}` **{sign}{row['amount']:,}**{MAIN_CURRENCY_EMOJI} — {desc}")
         embed.description = "\n".join(lines) if lines else "No transactions."
-        embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1} — {len(self.rows)} total transactions")
+        footer = f"Page {self.page + 1}/{self.max_page + 1} — {len(self.rows)} total"
+        if self.counting_note:
+            footer += f" | counting collapsed — use `.curtrs counting` to expand"
+        embed.set_footer(text=footer)
         return embed
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -227,21 +232,72 @@ class Economy(commands.Cog):
 
     @commands.command(aliases=["transactions", "txlog"])
     @require_not_locked()
-    async def curtrs(self, ctx, member: discord.Member = None):
-        """Show your (or someone's) full transaction history with pagination.
-        Usage: .curtrs [@member]"""
-        member = member or ctx.author
-        rows = await self.pool.fetch(
+    async def curtrs(self, ctx, *, args: str = ""):
+        """Show your (or someone's) transaction history.
+        Usage: .curtrs [@member] [counting]
+        Pass 'counting' to see individual counting entries instead of the summary."""
+        member = ctx.author
+        show_counting_detail = False
+
+        parts = args.split()
+        member_parts = []
+        for part in parts:
+            if part.lower() == "counting":
+                show_counting_detail = True
+            else:
+                member_parts.append(part)
+
+        if member_parts:
+            try:
+                member = await commands.MemberConverter().convert(ctx, " ".join(member_parts))
+            except commands.MemberNotFound:
+                await ctx.send("Member not found.")
+                return
+
+        if show_counting_detail:
+            rows = await self.pool.fetch(
+                """SELECT amount, tx_type, description, created_at FROM transactions
+                   WHERE guild_id = $1 AND user_id = $2 AND tx_type = 'counting'
+                   ORDER BY created_at DESC""",
+                ctx.guild.id, member.id,
+            )
+            if not rows:
+                await ctx.send(f"{member.display_name} has no counting transactions.")
+                return
+            rows = [dict(r) for r in rows]
+            view = TransactionPaginator(rows, member, ctx.author.id)
+            await ctx.send(embed=view.build_embed(), view=view)
+            return
+
+        other_rows = await self.pool.fetch(
             """SELECT amount, tx_type, description, created_at FROM transactions
-               WHERE guild_id = $1 AND user_id = $2
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type != 'counting'
                ORDER BY created_at DESC""",
             ctx.guild.id, member.id,
         )
+        counting_agg = await self.pool.fetchrow(
+            """SELECT COALESCE(SUM(amount), 0) AS amount, COUNT(*) AS cnt, MAX(created_at) AS created_at
+               FROM transactions
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type = 'counting'""",
+            ctx.guild.id, member.id,
+        )
+
+        rows = [dict(r) for r in other_rows]
+        has_counting = counting_agg and counting_agg["cnt"] > 0
+        if has_counting:
+            rows.append({
+                "amount": counting_agg["amount"],
+                "tx_type": "counting",
+                "description": f"counting ×{counting_agg['cnt']}",
+                "created_at": counting_agg["created_at"],
+            })
+            rows.sort(key=lambda r: r["created_at"], reverse=True)
+
         if not rows:
             await ctx.send(f"{member.display_name} has no transactions.")
             return
 
-        view = TransactionPaginator(rows, member, ctx.author.id)
+        view = TransactionPaginator(rows, member, ctx.author.id, counting_note=has_counting)
         await ctx.send(embed=view.build_embed(), view=view)
 
     @commands.command()
@@ -313,6 +369,73 @@ class Economy(commands.Cog):
             await ctx.send(f"**{member.display_name}** was not locked.")
         else:
             await ctx.send(f"**{member.display_name}** has been unlocked.")
+
+    @commands.command()
+    @commands.is_owner()
+    async def reseteconomy(self, ctx):
+        """Admin: Wipe all balances, stock relations and recreate stocks at their original IPO settings."""
+        confirm_msg = await ctx.send(
+            "⚠️ This will zero **all wallets and banks**, delete all transactions and stock relations, "
+            "and recreate every stock at 100 shares / original IPO price.\n"
+            "Type `CONFIRM` within 30 seconds to proceed."
+        )
+
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel and m.content == "CONFIRM"
+
+        try:
+            await self.bot.wait_for("message", check=check, timeout=30.0)
+        except TimeoutError:
+            await confirm_msg.edit(content="Reset cancelled (timed out).")
+            return
+
+        async with self.pool.acquire() as conn:
+            companies = await conn.fetch(
+                "SELECT name, stock_channel_id, listed_by, base_ipo_price FROM companies WHERE guild_id = $1",
+                ctx.guild.id,
+            )
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM transactions WHERE guild_id = $1",
+                    ctx.guild.id,
+                )
+                await conn.execute(
+                    "UPDATE balances SET wallet = 0, bank = 0 WHERE guild_id = $1",
+                    ctx.guild.id,
+                )
+                await conn.execute(
+                    "DELETE FROM companies WHERE guild_id = $1",
+                    ctx.guild.id,
+                )
+                await conn.execute(
+                    "DELETE FROM locked_users WHERE guild_id = $1",
+                    ctx.guild.id,
+                )
+                for c in companies:
+                    await create_company(
+                        conn,
+                        guild_id=ctx.guild.id,
+                        stock_channel_id=c["stock_channel_id"],
+                        name=c["name"],
+                        listed_by=c["listed_by"],
+                        total_shares=100,
+                        ipo_price=c["base_ipo_price"],
+                    )
+                    await conn.execute(
+                        "UPDATE companies SET revenue_multiplier = $3 WHERE guild_id = $1 AND stock_channel_id = $2",
+                        ctx.guild.id, c["stock_channel_id"], REVENUE_BASE_MULTIPLIER,
+                    )
+
+        embed = discord.Embed(
+            title="Economy Reset",
+            color=discord.Color.red(),
+            description=(
+                f"All wallets, banks, and transaction history cleared.\n"
+                f"{len(companies)} stock(s) recreated at 100 shares / original IPO price.\n"
+                "All portfolios, orders, and trade history cleared."
+            ),
+        )
+        await ctx.send(embed=embed)
 
     @commands.command()
     @commands.is_owner()
