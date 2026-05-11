@@ -642,6 +642,13 @@ class Market(commands.Cog):
 
             lines = []
             async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM trade_history WHERE guild_id = $1", ctx.guild.id
+                )
+                await conn.execute(
+                    "DELETE FROM orders WHERE guild_id = $1", ctx.guild.id
+                )
+
                 for company in companies:
                     gid = ctx.guild.id
                     cid = company["stock_channel_id"]
