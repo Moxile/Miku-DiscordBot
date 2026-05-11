@@ -179,13 +179,13 @@ class Market(commands.Cog):
                     projected_dps = int(DIVIDEND_PROFIT_SHARE * max(0, projected_profit)) // company["total_shares"]
                     projected_eps = projected_profit / company["total_shares"] if company["total_shares"] else 0
                     day_line = " | ".join(
-                        f"{r['revenue_date'].strftime('%a')}: {r['revenue']}{MAIN_CURRENCY_EMOJI}"
+                        f"{r['revenue_date'].strftime('%a')}: {r['revenue']:,}{MAIN_CURRENCY_EMOJI}"
                         for r in daily_records
                     )
                     field_value = "\n".join([
                         day_line or "No revenue yet",
-                        f"So far: **{total_so_far}{MAIN_CURRENCY_EMOJI}** → Expected: **~{expected}{MAIN_CURRENCY_EMOJI}**",
-                        f"DPS ~{projected_dps}{MAIN_CURRENCY_EMOJI} | EPS ~{projected_eps:.1f}{MAIN_CURRENCY_EMOJI} | Treasury: {company['treasury']}{MAIN_CURRENCY_EMOJI} | Lv{company['company_level']}",
+                        f"So far: **{total_so_far:,}{MAIN_CURRENCY_EMOJI}** → Expected: **~{expected:,}{MAIN_CURRENCY_EMOJI}**",
+                        f"DPS ~{projected_dps:,}{MAIN_CURRENCY_EMOJI} | EPS ~{projected_eps:.1f}{MAIN_CURRENCY_EMOJI} | Treasury: {company['treasury']:,}{MAIN_CURRENCY_EMOJI} | Lv{company['company_level']}",
                     ])
                     embed.add_field(name=company["name"], value=field_value, inline=False)
                 if embed.fields:
@@ -206,16 +206,16 @@ class Market(commands.Cog):
                     projected_dps = int(DIVIDEND_PROFIT_SHARE * max(0, projected_profit)) // company["total_shares"]
                     projected_eps = projected_profit / company["total_shares"] if company["total_shares"] else 0
                     lines = [
-                        f"  {r['revenue_date'].strftime('%A')}: {r['revenue']}{MAIN_CURRENCY_EMOJI}"
+                        f"  {r['revenue_date'].strftime('%A')}: {r['revenue']:,}{MAIN_CURRENCY_EMOJI}"
                         for r in daily_records
                     ]
                     embed = discord.Embed(title=f"{company['name']} - Mid-Week Revenue Recap", color=discord.Color.gold())
                     embed.add_field(name="Daily Breakdown", value="\n".join(lines) or "No revenue yet", inline=False)
-                    embed.add_field(name="Total So Far", value=f"{total_so_far}{MAIN_CURRENCY_EMOJI}", inline=True)
-                    embed.add_field(name="Expected", value=f"~{expected}{MAIN_CURRENCY_EMOJI}", inline=True)
-                    embed.add_field(name="DPS (proj.)", value=f"~{projected_dps}{MAIN_CURRENCY_EMOJI}", inline=True)
+                    embed.add_field(name="Total So Far", value=f"{total_so_far:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+                    embed.add_field(name="Expected", value=f"~{expected:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+                    embed.add_field(name="DPS (proj.)", value=f"~{projected_dps:,}{MAIN_CURRENCY_EMOJI}", inline=True)
                     embed.add_field(name="EPS (proj.)", value=f"~{projected_eps:.1f}{MAIN_CURRENCY_EMOJI}", inline=True)
-                    embed.add_field(name="Treasury", value=f"{company['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
+                    embed.add_field(name="Treasury", value=f"{company['treasury']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
                     embed.add_field(name="Level", value=str(company["company_level"]), inline=True)
                     await channel.send(embed=embed)
 
@@ -357,14 +357,14 @@ class Market(commands.Cog):
                         embed.add_field(name=f"💀 {r['name']}", value=r["reason"], inline=False)
                     else:
                         lines = [
-                            f"Rev: {r['weekly_revenue']}{MAIN_CURRENCY_EMOJI} | Cost ({r['cost_rate']*100:.1f}%): {r['cost']}{MAIN_CURRENCY_EMOJI} | Profit: {r['profit']}{MAIN_CURRENCY_EMOJI}",
-                            f"DPS: {r['dividend_per_share']}{MAIN_CURRENCY_EMOJI} | EPS: {r['eps']:.1f}{MAIN_CURRENCY_EMOJI} | Divs paid: {r['dividends_paid']}{MAIN_CURRENCY_EMOJI}",
-                            f"Treasury: {r['treasury_before']}{MAIN_CURRENCY_EMOJI} → {r['treasury_after']}{MAIN_CURRENCY_EMOJI} | Lv{r['company_level']}",
+                            f"Rev: {r['weekly_revenue']:,}{MAIN_CURRENCY_EMOJI} | Cost ({r['cost_rate']*100:.1f}%): {r['cost']:,}{MAIN_CURRENCY_EMOJI} | Profit: {r['profit']:,}{MAIN_CURRENCY_EMOJI}",
+                            f"DPS: {r['dividend_per_share']:,}{MAIN_CURRENCY_EMOJI} | EPS: {r['eps']:.1f}{MAIN_CURRENCY_EMOJI} | Divs paid: {r['dividends_paid']:,}{MAIN_CURRENCY_EMOJI}",
+                            f"Treasury: {r['treasury_before']:,}{MAIN_CURRENCY_EMOJI} → {r['treasury_after']:,}{MAIN_CURRENCY_EMOJI} | Lv{r['company_level']}",
                         ]
                         if r["dilution"]["new_shares"] > 0:
                             lines.append(
-                                f"+{r['dilution']['new_shares']} shares @ {r['dilution']['dilution_price']}{MAIN_CURRENCY_EMOJI} "
-                                f"({r['dilution']['filled_via_orders']} filled, {r['dilution']['ipo_pool_added']} to IPO)"
+                                f"+{r['dilution']['new_shares']:,} shares @ {r['dilution']['dilution_price']:,}{MAIN_CURRENCY_EMOJI} "
+                                f"({r['dilution']['filled_via_orders']:,} filled, {r['dilution']['ipo_pool_added']:,} to IPO)"
                             )
                         if r["leveled_up"]:
                             lines.append(f"⬆️ Level Up: Lv{r['next_level']}!")
@@ -384,20 +384,20 @@ class Market(commands.Cog):
                         )
                     else:
                         embed = discord.Embed(title=f"{r['name']} - Weekly Financial Summary", color=discord.Color.blue())
-                        embed.add_field(name="Weekly Revenue", value=f"{r['weekly_revenue']}{MAIN_CURRENCY_EMOJI}", inline=True)
-                        embed.add_field(name=f"Operating Cost ({r['cost_rate'] * 100:.1f}%)", value=f"{r['cost']}{MAIN_CURRENCY_EMOJI}", inline=True)
-                        embed.add_field(name="Profit", value=f"{r['profit']}{MAIN_CURRENCY_EMOJI}", inline=True)
-                        embed.add_field(name="DPS", value=f"{r['dividend_per_share']}{MAIN_CURRENCY_EMOJI}", inline=True)
+                        embed.add_field(name="Weekly Revenue", value=f"{r['weekly_revenue']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+                        embed.add_field(name=f"Operating Cost ({r['cost_rate'] * 100:.1f}%)", value=f"{r['cost']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+                        embed.add_field(name="Profit", value=f"{r['profit']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+                        embed.add_field(name="DPS", value=f"{r['dividend_per_share']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
                         embed.add_field(name="EPS", value=f"{r['eps']:.1f}{MAIN_CURRENCY_EMOJI}", inline=True)
-                        embed.add_field(name="Total Dividends Paid", value=f"{r['dividends_paid']}{MAIN_CURRENCY_EMOJI}", inline=True)
-                        embed.add_field(name="Treasury", value=f"{r['treasury_before']} → {r['treasury_after']}{MAIN_CURRENCY_EMOJI}", inline=True)
+                        embed.add_field(name="Total Dividends Paid", value=f"{r['dividends_paid']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+                        embed.add_field(name="Treasury", value=f"{r['treasury_before']:,} → {r['treasury_after']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
                         embed.add_field(name="Level", value=str(r["company_level"]), inline=True)
                         if r["dilution"]["new_shares"] > 0:
                             embed.add_field(
                                 name="Dilution",
                                 value=(
-                                    f"+{r['dilution']['new_shares']} shares @ {r['dilution']['dilution_price']}{MAIN_CURRENCY_EMOJI} "
-                                    f"({r['dilution']['filled_via_orders']} filled, {r['dilution']['ipo_pool_added']} to IPO pool)"
+                                    f"+{r['dilution']['new_shares']:,} shares @ {r['dilution']['dilution_price']:,}{MAIN_CURRENCY_EMOJI} "
+                                    f"({r['dilution']['filled_via_orders']:,} filled, {r['dilution']['ipo_pool_added']:,} to IPO pool)"
                                 ),
                                 inline=False,
                             )
@@ -425,9 +425,9 @@ class Market(commands.Cog):
             name = channel.mention if channel else c["name"]
             buy_orders = await get_open_orders(self.pool, ctx.guild.id, c["stock_channel_id"], "buy")
             sell_orders = await get_open_orders(self.pool, ctx.guild.id, c["stock_channel_id"], "sell")
-            best_bid = f"{buy_orders[0]['price']}{MAIN_CURRENCY_EMOJI}" if buy_orders else "None"
-            best_ask = f"{sell_orders[0]['price']}{MAIN_CURRENCY_EMOJI}" if sell_orders else "None"
-            ipo_status = f" | IPO: {c['available_ipo_shares']}/{c['total_shares']} @ {c['ipo_price']}{MAIN_CURRENCY_EMOJI}" if c["available_ipo_shares"] > 0 else ""
+            best_bid = f"{buy_orders[0]['price']:,}{MAIN_CURRENCY_EMOJI}" if buy_orders else "None"
+            best_ask = f"{sell_orders[0]['price']:,}{MAIN_CURRENCY_EMOJI}" if sell_orders else "None"
+            ipo_status = f" | IPO: {c['available_ipo_shares']:,}/{c['total_shares']:,} @ {c['ipo_price']:,}{MAIN_CURRENCY_EMOJI}" if c["available_ipo_shares"] > 0 else ""
             embed.add_field(name=f"{c['name']} ({name})", value=f"Bid: {best_bid} / Ask: {best_ask}{ipo_status}", inline=False)
 
         await ctx.send(embed=embed)
@@ -458,7 +458,7 @@ class Market(commands.Cog):
             pl = value - cost_basis
             total_value += value
             total_cost += cost_basis
-            pl_str = f"+{pl}" if pl >= 0 else str(pl)
+            pl_str = f"+{pl:,}" if pl >= 0 else f"{pl:,}"
             div_row = await self.pool.fetchrow(
                 """SELECT COALESCE(SUM(amount), 0) AS total FROM transactions
                    WHERE guild_id = $1 AND user_id = $2 AND tx_type = 'dividend'
@@ -469,13 +469,13 @@ class Market(commands.Cog):
             total_divs += divs
             embed.add_field(
                 name=name,
-                value=f"{h['quantity']} shares @ {price}{MAIN_CURRENCY_EMOJI} = {value}{MAIN_CURRENCY_EMOJI}\n"
-                      f"Avg cost: {avg_cost}{MAIN_CURRENCY_EMOJI} | P/L: {pl_str}{MAIN_CURRENCY_EMOJI}\n"
-                      f"Dividends received: {divs}{MAIN_CURRENCY_EMOJI}",
+                value=f"{h['quantity']:,} shares @ {price:,}{MAIN_CURRENCY_EMOJI} = {value:,}{MAIN_CURRENCY_EMOJI}\n"
+                      f"Avg cost: {avg_cost:,}{MAIN_CURRENCY_EMOJI} | P/L: {pl_str}{MAIN_CURRENCY_EMOJI}\n"
+                      f"Dividends received: {divs:,}{MAIN_CURRENCY_EMOJI}",
                 inline=False,
             )
         total_pl = total_value - total_cost
-        total_pl_str = f"+{total_pl}" if total_pl >= 0 else str(total_pl)
+        total_pl_str = f"+{total_pl:,}" if total_pl >= 0 else f"{total_pl:,}"
 
         if orders:
             order_lines = []
@@ -483,10 +483,10 @@ class Market(commands.Cog):
                 company = await get_company(self.pool, ctx.guild.id, o["stock_channel_id"])
                 stock_name = company["name"] if company else str(o["stock_channel_id"])
                 side = "BUY" if o["side"] == "buy" else "SELL"
-                order_lines.append(f"#{o['id']} {side} {o['remaining']}x {stock_name} @ {o['price']}{MAIN_CURRENCY_EMOJI}")
+                order_lines.append(f"#{o['id']} {side} {o['remaining']:,}x {stock_name} @ {o['price']:,}{MAIN_CURRENCY_EMOJI}")
             embed.add_field(name="Open Orders", value="\n".join(order_lines), inline=False)
 
-        embed.set_footer(text=f"Total value: {total_value}{MAIN_CURRENCY_EMOJI} | Total P/L: {total_pl_str}{MAIN_CURRENCY_EMOJI} | Total dividends: {total_divs}{MAIN_CURRENCY_EMOJI}")
+        embed.set_footer(text=f"Total value: {total_value:,}{MAIN_CURRENCY_EMOJI} | Total P/L: {total_pl_str}{MAIN_CURRENCY_EMOJI} | Total dividends: {total_divs:,}{MAIN_CURRENCY_EMOJI}")
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['divhist', 'dh'])
@@ -533,8 +533,8 @@ class Market(commands.Cog):
         sell_orders = await get_open_orders(self.pool, ctx.guild.id, stock.id, "sell")
         shareholders = await get_shareholders(self.pool, ctx.guild.id, stock.id)
 
-        best_bid = f"{buy_orders[0]['price']}{MAIN_CURRENCY_EMOJI}" if buy_orders else "None"
-        best_ask = f"{sell_orders[0]['price']}{MAIN_CURRENCY_EMOJI}" if sell_orders else "None"
+        best_bid = f"{buy_orders[0]['price']:,}{MAIN_CURRENCY_EMOJI}" if buy_orders else "None"
+        best_ask = f"{sell_orders[0]['price']:,}{MAIN_CURRENCY_EMOJI}" if sell_orders else "None"
 
         total_shares = company["total_shares"]
         top_holders = sorted(shareholders, key=lambda r: r["quantity"], reverse=True)[:5]
@@ -544,19 +544,19 @@ class Market(commands.Cog):
                 member = ctx.guild.get_member(row["user_id"])
                 name = member.display_name if member else f"<@{row['user_id']}>"
                 pct = row["quantity"] / total_shares * 100
-                owners_lines.append(f"{name} — {row['quantity']} ({pct:.1f}%)")
+                owners_lines.append(f"{name} — {row['quantity']:,} ({pct:.1f}%)")
             owners_value = "\n".join(owners_lines)
         else:
             owners_value = "No shareholders yet"
 
         embed = discord.Embed(title=f"{company['name']} - Company Info", color=discord.Color.blue())
         embed.add_field(name="Channel", value=stock.mention, inline=True)
-        embed.add_field(name="Total Shares", value=str(total_shares), inline=True)
-        embed.add_field(name="IPO Price", value=f"{company['ipo_price']}{MAIN_CURRENCY_EMOJI}", inline=True)
-        embed.add_field(name="IPO Shares Left", value=str(company["available_ipo_shares"]), inline=True)
-        embed.add_field(name="Last Trade", value=f"{last_price}{MAIN_CURRENCY_EMOJI}" if last_price else "No trades yet", inline=True)
+        embed.add_field(name="Total Shares", value=f"{total_shares:,}", inline=True)
+        embed.add_field(name="IPO Price", value=f"{company['ipo_price']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="IPO Shares Left", value=f"{company['available_ipo_shares']:,}", inline=True)
+        embed.add_field(name="Last Trade", value=f"{last_price:,}{MAIN_CURRENCY_EMOJI}" if last_price else "No trades yet", inline=True)
         embed.add_field(name="Best Bid / Ask", value=f"{best_bid} / {best_ask}", inline=True)
-        embed.add_field(name="Treasury", value=f"{company['treasury']}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Treasury", value=f"{company['treasury']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
         embed.add_field(name="Level", value=str(company["company_level"]), inline=True)
         embed.add_field(name="Top Shareholders", value=owners_value, inline=False)
         await ctx.send(embed=embed)
@@ -576,12 +576,12 @@ class Market(commands.Cog):
 
         sell_lines = []
         if company["available_ipo_shares"] > 0:
-            sell_lines.append(f"{company['available_ipo_shares']}x @ {company['ipo_price']}{MAIN_CURRENCY_EMOJI} — IPO")
+            sell_lines.append(f"{company['available_ipo_shares']:,}x @ {company['ipo_price']:,}{MAIN_CURRENCY_EMOJI} — IPO")
         if sell_orders:
             for o in sell_orders[:10]:
                 member = ctx.guild.get_member(o["user_id"])
                 name = member.display_name if member else str(o["user_id"])
-                sell_lines.append(f"{o['remaining']}x @ {o['price']}{MAIN_CURRENCY_EMOJI} — {name}")
+                sell_lines.append(f"{o['remaining']:,}x @ {o['price']:,}{MAIN_CURRENCY_EMOJI} — {name}")
         embed.add_field(name="Sell Orders (Asks)", value="\n".join(sell_lines) if sell_lines else "None", inline=False)
 
         if buy_orders:
@@ -589,7 +589,7 @@ class Market(commands.Cog):
             for o in buy_orders[:10]:
                 member = ctx.guild.get_member(o["user_id"])
                 name = member.display_name if member else str(o["user_id"])
-                buy_lines.append(f"{o['remaining']}x @ {o['price']}{MAIN_CURRENCY_EMOJI} — {name}")
+                buy_lines.append(f"{o['remaining']:,}x @ {o['price']:,}{MAIN_CURRENCY_EMOJI} — {name}")
             embed.add_field(name="Buy Orders (Bids)", value="\n".join(buy_lines), inline=False)
         else:
             embed.add_field(name="Buy Orders (Bids)", value="None", inline=False)
@@ -615,7 +615,7 @@ class Market(commands.Cog):
 
         await create_company(self.pool, ctx.guild.id, stock.id, name, ctx.author.id, total_shares, ipo_price)
         self._company_channels.pop(ctx.guild.id, None)
-        await ctx.send(f"**{name}** has been listed! {total_shares} shares available at {ipo_price}{MAIN_CURRENCY_EMOJI} each via IPO.")
+        await ctx.send(f"**{name}** has been listed! {total_shares:,} shares available at {ipo_price:,}{MAIN_CURRENCY_EMOJI} each via IPO.")
 
     @commands.command(aliases=['delist'])
     @commands.is_owner()
@@ -643,7 +643,7 @@ class Market(commands.Cog):
                 self.pool, ctx.guild.id, company["stock_channel_id"],
                 today, company["revenue_multiplier"],
             )
-            results.append(f"**{company['name']}**: {rev}{MAIN_CURRENCY_EMOJI}")
+            results.append(f"**{company['name']}**: {rev:,}{MAIN_CURRENCY_EMOJI}")
         await ctx.send("Revenue calculated for today:\n" + "\n".join(results) if results else "No companies listed.")
 
     @commands.command()
@@ -671,13 +671,13 @@ class Market(commands.Cog):
             projected_dps = int(DIVIDEND_PROFIT_SHARE * max(0, projected_profit)) // company["total_shares"]
             projected_eps = projected_profit / company["total_shares"] if company["total_shares"] else 0
             day_line = " | ".join(
-                f"{r['revenue_date'].strftime('%a')}: {r['revenue']}{MAIN_CURRENCY_EMOJI}"
+                f"{r['revenue_date'].strftime('%a')}: {r['revenue']:,}{MAIN_CURRENCY_EMOJI}"
                 for r in daily_records
             )
             field_value = "\n".join([
                 day_line or "No revenue yet",
-                f"So far: **{total_so_far}{MAIN_CURRENCY_EMOJI}** → Expected: **~{expected}{MAIN_CURRENCY_EMOJI}**",
-                f"DPS ~{projected_dps}{MAIN_CURRENCY_EMOJI} | EPS ~{projected_eps:.1f}{MAIN_CURRENCY_EMOJI} | Treasury: {company['treasury']}{MAIN_CURRENCY_EMOJI} | Lv{company['company_level']}",
+                f"So far: **{total_so_far:,}{MAIN_CURRENCY_EMOJI}** → Expected: **~{expected:,}{MAIN_CURRENCY_EMOJI}**",
+                f"DPS ~{projected_dps:,}{MAIN_CURRENCY_EMOJI} | EPS ~{projected_eps:.1f}{MAIN_CURRENCY_EMOJI} | Treasury: {company['treasury']:,}{MAIN_CURRENCY_EMOJI} | Lv{company['company_level']}",
             ])
             embed.add_field(name=company["name"], value=field_value, inline=False)
         if embed.fields:
@@ -805,14 +805,14 @@ class Market(commands.Cog):
                 embed.add_field(name=f"💀 {r['name']}", value=r["reason"], inline=False)
             else:
                 lines = [
-                    f"Rev: {r['weekly_revenue']}{MAIN_CURRENCY_EMOJI} | Cost ({r['cost_rate']*100:.1f}%): {r['cost']}{MAIN_CURRENCY_EMOJI} | Profit: {r['profit']}{MAIN_CURRENCY_EMOJI}",
-                    f"DPS: {r['dividend_per_share']}{MAIN_CURRENCY_EMOJI} | EPS: {r['eps']:.1f}{MAIN_CURRENCY_EMOJI} | Divs paid: {r['dividends_paid']}{MAIN_CURRENCY_EMOJI}",
-                    f"Treasury: {r['treasury_before']}{MAIN_CURRENCY_EMOJI} → {r['treasury_after']}{MAIN_CURRENCY_EMOJI} | Lv{r['company_level']}",
+                    f"Rev: {r['weekly_revenue']:,}{MAIN_CURRENCY_EMOJI} | Cost ({r['cost_rate']*100:.1f}%): {r['cost']:,}{MAIN_CURRENCY_EMOJI} | Profit: {r['profit']:,}{MAIN_CURRENCY_EMOJI}",
+                    f"DPS: {r['dividend_per_share']:,}{MAIN_CURRENCY_EMOJI} | EPS: {r['eps']:.1f}{MAIN_CURRENCY_EMOJI} | Divs paid: {r['dividends_paid']:,}{MAIN_CURRENCY_EMOJI}",
+                    f"Treasury: {r['treasury_before']:,}{MAIN_CURRENCY_EMOJI} → {r['treasury_after']:,}{MAIN_CURRENCY_EMOJI} | Lv{r['company_level']}",
                 ]
                 if r["dilution"]["new_shares"] > 0:
                     lines.append(
-                        f"+{r['dilution']['new_shares']} shares @ {r['dilution']['dilution_price']}{MAIN_CURRENCY_EMOJI} "
-                        f"({r['dilution']['filled_via_orders']} filled, {r['dilution']['ipo_pool_added']} to IPO)"
+                        f"+{r['dilution']['new_shares']:,} shares @ {r['dilution']['dilution_price']:,}{MAIN_CURRENCY_EMOJI} "
+                        f"({r['dilution']['filled_via_orders']:,} filled, {r['dilution']['ipo_pool_added']:,} to IPO)"
                     )
                 if r["leveled_up"]:
                     lines.append(f"⬆️ Level Up: Lv{r['next_level']}!")
@@ -933,9 +933,9 @@ class Market(commands.Cog):
         avg_price = total_cost // bought
         embed = discord.Embed(title="Market Buy", color=discord.Color.green())
         embed.add_field(name="Stock", value=company["name"], inline=True)
-        embed.add_field(name="Bought", value=f"{bought}/{quantity}", inline=True)
-        embed.add_field(name="Avg Price", value=f"{avg_price}{MAIN_CURRENCY_EMOJI}", inline=True)
-        embed.add_field(name="Total Cost", value=f"{total_cost}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Bought", value=f"{bought:,}/{quantity:,}", inline=True)
+        embed.add_field(name="Avg Price", value=f"{avg_price:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Total Cost", value=f"{total_cost:,}{MAIN_CURRENCY_EMOJI}", inline=True)
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['ms', 'msell'])
@@ -958,7 +958,7 @@ class Market(commands.Cog):
                 escrowed = await get_escrowed_shares(conn, ctx.guild.id, ctx.author.id, stock.id)
                 available = holding - escrowed
                 if available < quantity:
-                    await ctx.send(f"You only have {available} available shares of **{company['name']}** ({holding} held, {escrowed} in open sell orders).")
+                    await ctx.send(f"You only have {available:,} available shares of **{company['name']}** ({holding:,} held, {escrowed:,} in open sell orders).")
                     return
 
                 sold = 0
@@ -1000,9 +1000,9 @@ class Market(commands.Cog):
         avg_price = total_revenue // sold
         embed = discord.Embed(title="Market Sell", color=discord.Color.red())
         embed.add_field(name="Stock", value=company["name"], inline=True)
-        embed.add_field(name="Sold", value=f"{sold}/{quantity}", inline=True)
-        embed.add_field(name="Avg Price", value=f"{avg_price}{MAIN_CURRENCY_EMOJI}", inline=True)
-        embed.add_field(name="Total Revenue", value=f"{total_revenue}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Sold", value=f"{sold:,}/{quantity:,}", inline=True)
+        embed.add_field(name="Avg Price", value=f"{avg_price:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Total Revenue", value=f"{total_revenue:,}{MAIN_CURRENCY_EMOJI}", inline=True)
         await ctx.send(embed=embed)
 
     # ── Limit orders ──
@@ -1032,7 +1032,7 @@ class Market(commands.Cog):
                 await ensure_wallet(conn, ctx.guild.id, ctx.author.id)
                 wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
                 if wallet["wallet"] < total_cost:
-                    await ctx.send(f"You need {total_cost}{MAIN_CURRENCY_EMOJI} to place this order but only have {wallet['wallet']}{MAIN_CURRENCY_EMOJI}.")
+                    await ctx.send(f"You need {total_cost:,}{MAIN_CURRENCY_EMOJI} to place this order but only have {wallet['wallet']:,}{MAIN_CURRENCY_EMOJI}.")
                     return
 
                 await update_wallet(conn, ctx.guild.id, ctx.author.id, -total_cost)
@@ -1109,10 +1109,10 @@ class Market(commands.Cog):
                     await add_transaction(conn, ctx.guild.id, ctx.author.id, -spent, "market_buy", f"Bought {filled}x {company['name']} via limit")
 
         if remaining > 0:
-            await ctx.send(f"Buy order placed: {remaining}x **{company['name']}** @ {price}{MAIN_CURRENCY_EMOJI} (Order #{row['id']})" +
-                           (f"\n{filled} shares filled immediately." if filled > 0 else ""))
+            await ctx.send(f"Buy order placed: {remaining:,}x **{company['name']}** @ {price:,}{MAIN_CURRENCY_EMOJI} (Order #{row['id']})" +
+                           (f"\n{filled:,} shares filled immediately." if filled > 0 else ""))
         else:
-            await ctx.send(f"Buy order fully filled! Bought {filled}x **{company['name']}** for {spent}{MAIN_CURRENCY_EMOJI}.")
+            await ctx.send(f"Buy order fully filled! Bought {filled:,}x **{company['name']}** for {spent:,}{MAIN_CURRENCY_EMOJI}.")
 
     @commands.command(aliases=['so', 'sorder'])
     @require_not_locked()
@@ -1139,7 +1139,7 @@ class Market(commands.Cog):
                 escrowed = await get_escrowed_shares(conn, ctx.guild.id, ctx.author.id, stock.id)
                 available = holding - escrowed
                 if available < quantity:
-                    await ctx.send(f"You only have {available} available shares of **{company['name']}** ({holding} held, {escrowed} in open sell orders).")
+                    await ctx.send(f"You only have {available:,} available shares of **{company['name']}** ({holding:,} held, {escrowed:,} in open sell orders).")
                     return
 
                 filled = 0
@@ -1179,10 +1179,10 @@ class Market(commands.Cog):
                     await add_transaction(conn, ctx.guild.id, ctx.author.id, revenue, "market_sell", f"Sold {filled}x {company['name']} via limit")
 
         if remaining > 0:
-            await ctx.send(f"Sell order placed: {remaining}x **{company['name']}** @ {price}{MAIN_CURRENCY_EMOJI} (Order #{row['id']})" +
-                           (f"\n{filled} shares filled immediately." if filled > 0 else ""))
+            await ctx.send(f"Sell order placed: {remaining:,}x **{company['name']}** @ {price:,}{MAIN_CURRENCY_EMOJI} (Order #{row['id']})" +
+                           (f"\n{filled:,} shares filled immediately." if filled > 0 else ""))
         else:
-            await ctx.send(f"Sell order fully filled! Sold {filled}x **{company['name']}** for {revenue}{MAIN_CURRENCY_EMOJI}.")
+            await ctx.send(f"Sell order fully filled! Sold {filled:,}x **{company['name']}** for {revenue:,}{MAIN_CURRENCY_EMOJI}.")
 
     @commands.command(aliases=['gs', 'giftstock'])
     @require_not_locked()
@@ -1211,8 +1211,8 @@ class Market(commands.Cog):
                 available = holding - escrowed
                 if available < quantity:
                     await ctx.send(
-                        f"You only have {available} available shares of **{company['name']}** "
-                        f"({holding} held, {escrowed} in open sell orders)."
+                        f"You only have {available:,} available shares of **{company['name']}** "
+                        f"({holding:,} held, {escrowed:,} in open sell orders)."
                     )
                     return
 
@@ -1247,7 +1247,7 @@ class Market(commands.Cog):
                     await update_wallet(conn, ctx.guild.id, ctx.author.id, refund)
 
         if order["side"] == "buy":
-            await ctx.send(f"Buy order #{order_id} cancelled. Refunded {refund}{MAIN_CURRENCY_EMOJI}.")
+            await ctx.send(f"Buy order #{order_id} cancelled. Refunded {refund:,}{MAIN_CURRENCY_EMOJI}.")
         else:
             await ctx.send(f"Sell order #{order_id} cancelled. {order['remaining']} shares are available again.")
 
@@ -1264,7 +1264,7 @@ class Market(commands.Cog):
         embed = discord.Embed(title="Orders Reset", color=discord.Color.orange())
         embed.add_field(name="Buy Orders Cancelled", value=str(buy_count), inline=True)
         embed.add_field(name="Sell Orders Cancelled", value=str(sell_count), inline=True)
-        embed.add_field(name="Funds Refunded", value=f"{refund_total}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Funds Refunded", value=f"{refund_total:,}{MAIN_CURRENCY_EMOJI}", inline=True)
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['fo'])
