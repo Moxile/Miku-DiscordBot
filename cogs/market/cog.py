@@ -632,6 +632,50 @@ class Market(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
+    async def fixmarket(self, ctx):
+        """Admin: Reset all companies to 10k shares, IPO price 100, treasury = sold shares * 100."""
+        async with self.pool.acquire() as conn:
+            companies = await list_companies(conn, ctx.guild.id)
+            if not companies:
+                await ctx.send("No companies listed.")
+                return
+
+            lines = []
+            async with conn.transaction():
+                for company in companies:
+                    gid = ctx.guild.id
+                    cid = company["stock_channel_id"]
+
+                    owned = await conn.fetchval(
+                        "SELECT COALESCE(SUM(quantity), 0) FROM portfolios WHERE guild_id = $1 AND stock_channel_id = $2",
+                        gid, cid,
+                    )
+                    available = 10000 - owned
+                    treasury = owned * 100
+
+                    await conn.execute(
+                        """UPDATE companies
+                           SET total_shares         = 10000,
+                               available_ipo_shares  = $3,
+                               ipo_price             = 100,
+                               base_ipo_price        = 100,
+                               treasury              = $4
+                           WHERE guild_id = $1 AND stock_channel_id = $2""",
+                        gid, cid, available, treasury,
+                    )
+                    lines.append(
+                        f"**{company['name']}**: {owned:,} owned → {available:,} IPO left, treasury {treasury:,}{MAIN_CURRENCY_EMOJI}"
+                    )
+
+        embed = discord.Embed(
+            title="Market Fixed",
+            description="\n".join(lines),
+            color=discord.Color.green(),
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command()
+    @commands.is_owner()
     async def calcrevenue(self, ctx):
         """Admin: Compute today's revenue for all companies."""
         await self.flush_char_buffer()
