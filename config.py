@@ -10,7 +10,7 @@ CURRENCY_NAME = "Flowers"
 WORK_COOLDOWN = 3600 # 1 hour in seconds
 
 # Market economy
-REVENUE_BASE_MULTIPLIER = 260  # starting multiplier for level-0 companies
+REVENUE_BASE_MULTIPLIER = 200  # starting multiplier for level-0 companies
 REVENUE_INNER_EXP       = 0.25   # per-user char-count exponent
 REVENUE_OUTER_EXP       = 0.75   # outer exponent — diminishing returns on user count
 LEVEL_BASE_THRESHOLD    = 1_000_000
