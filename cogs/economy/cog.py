@@ -376,7 +376,7 @@ class Economy(commands.Cog):
         """Admin: Wipe all balances, stock relations and recreate stocks at their original IPO settings."""
         confirm_msg = await ctx.send(
             "⚠️ This will zero **all wallets and banks**, delete all transactions and stock relations, "
-            "and recreate every stock at 100 shares / original IPO price.\n"
+            "and recreate every stock at 10,000 shares / original IPO price.\n"
             "Type `CONFIRM` within 30 seconds to proceed."
         )
 
@@ -418,7 +418,7 @@ class Economy(commands.Cog):
                         stock_channel_id=c["stock_channel_id"],
                         name=c["name"],
                         listed_by=c["listed_by"],
-                        total_shares=100,
+                        total_shares=10000,
                         ipo_price=c["base_ipo_price"],
                     )
                     await conn.execute(
@@ -431,7 +431,7 @@ class Economy(commands.Cog):
             color=discord.Color.red(),
             description=(
                 f"All wallets, banks, and transaction history cleared.\n"
-                f"{len(companies)} stock(s) recreated at 100 shares / original IPO price.\n"
+                f"{len(companies)} stock(s) recreated at 10,000 shares / original IPO price.\n"
                 "All portfolios, orders, and trade history cleared."
             ),
         )
