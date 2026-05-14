@@ -24,6 +24,13 @@ async def get_mission(conn: Conn, guild_id: int, mission_id: int) -> asyncpg.Rec
     )
 
 
+async def get_mission_by_name(conn: Conn, guild_id: int, name: str) -> asyncpg.Record | None:
+    return await conn.fetchrow(
+        "SELECT * FROM missions WHERE guild_id = $1 AND lower(name) = lower($2)",
+        guild_id, name,
+    )
+
+
 async def add_funding(conn: Conn, mission_id: int, guild_id: int, user_id: int, amount: int) -> asyncpg.Record:
     await conn.execute(
         "INSERT INTO mission_contributions (mission_id, guild_id, user_id, amount) VALUES ($1, $2, $3, $4)",

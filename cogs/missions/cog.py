@@ -5,7 +5,7 @@ from discord.ext import commands
 
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 from cogs.missions.db import (
-    create_mission, get_missions, get_mission,
+    create_mission, get_missions, get_mission, get_mission_by_name,
     add_funding, set_mission_status, delete_mission,
 )
 from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked
@@ -53,7 +53,7 @@ class MissionsPaginator(discord.ui.View):
         start = self.page * MISSIONS_PER_PAGE
         page_missions = self.missions[start:start + MISSIONS_PER_PAGE]
         embed = discord.Embed(title="Active Missions", color=discord.Color.from_rgb(255, 140, 0))
-        embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1} — {len(self.missions)} mission(s) | Use .fund <id> <amount> to contribute")
+        embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1} — {len(self.missions)} mission(s) | Use .fund <name> <amount> to contribute")
         for m in page_missions:
             name, value = _mission_field(m)
             embed.add_field(name=name, value=value, inline=False)
@@ -130,7 +130,7 @@ class Missions(commands.Cog):
         embed.add_field(name="Goal", value=f"{goal:,}{MAIN_CURRENCY_EMOJI}", inline=True)
         if description:
             embed.add_field(name="Description", value=description, inline=False)
-        embed.set_footer(text="Players can fund it with .fund <id> <amount>")
+        embed.set_footer(text="Players can fund it with .fund <name> <amount>")
         await ctx.send(embed=embed)
 
     @commands.command()
@@ -181,10 +181,17 @@ class Missions(commands.Cog):
     @commands.command()
     @require_not_locked()
     @require_channel("missions_channel")
-    async def fund(self, ctx, mission_id: int, amount: str):
-        """Fund a mission from your wallet. Usage: .fund <mission_id> <amount>"""
+    async def fund(self, ctx, *, args: str = ""):
+        """Fund a mission from your wallet. Usage: .fund <mission name> <amount>
+        Example: .fund Operation Aurora 5000"""
+        tokens = args.rsplit(None, 1)
+        if len(tokens) < 2:
+            await ctx.send("Usage: `.fund <mission name> <amount>`")
+            return
+
+        mission_name, amount_str = tokens
         try:
-            amount = parse_amount(amount)
+            amount = parse_amount(amount_str)
         except AmountError as e:
             await ctx.send(str(e))
             return
@@ -193,12 +200,12 @@ class Missions(commands.Cog):
             await ctx.send("Amount must be positive.")
             return
 
-        mission = await get_mission(self.pool, ctx.guild.id, mission_id)
+        mission = await get_mission_by_name(self.pool, ctx.guild.id, mission_name)
         if not mission:
-            await ctx.send(f"Mission #{mission_id} not found.")
+            await ctx.send(f"No mission named **{mission_name}** found.")
             return
         if mission["status"] != "active":
-            await ctx.send(f"Mission #{mission_id} is no longer active.")
+            await ctx.send(f"Mission **{mission['name']}** is no longer active.")
             return
 
         async with self.pool.acquire() as conn:
@@ -213,13 +220,13 @@ class Missions(commands.Cog):
                 await update_wallet(conn, ctx.guild.id, ctx.author.id, -amount)
                 await add_transaction(
                     conn, ctx.guild.id, ctx.author.id, -amount, "mission_fund",
-                    f"Funded mission #{mission_id}: {mission['name']}",
+                    f"Funded mission #{mission['id']}: {mission['name']}",
                 )
-                updated = await add_funding(conn, mission_id, ctx.guild.id, ctx.author.id, amount)
+                updated = await add_funding(conn, mission["id"], ctx.guild.id, ctx.author.id, amount)
 
                 completed = updated["funded"] >= updated["goal"]
                 if completed:
-                    await set_mission_status(conn, mission_id, "completed")
+                    await set_mission_status(conn, mission["id"], "completed")
 
         name, value = _mission_field(updated)
         embed = discord.Embed(
