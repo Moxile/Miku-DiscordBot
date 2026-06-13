@@ -6,6 +6,7 @@ from discord.ext import commands
 from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
 from cogs.market.db import remove_member_shares, create_company
 from core.money import parse_amount, AmountError
+from core.confirm import confirm
 from config import REVENUE_BASE_MULTIPLIER
 
 import datetime
@@ -310,14 +311,25 @@ class Economy(commands.Cog):
             await ctx.send(str(e))
             return
 
+        if not await confirm(ctx, f"⚠️ Add **{amount:,}**{MAIN_CURRENCY_EMOJI} to {member.mention}'s wallet?"):
+            return
+
         await ensure_wallet(self.pool, ctx.guild.id, member.id)
         await update_wallet(self.pool, ctx.guild.id, member.id, amount)
         await add_transaction(self.pool, ctx.guild.id, member.id, amount, "admin_add", f"Added by {ctx.author}")
+        await ctx.send(f"Added **{amount:,}**{MAIN_CURRENCY_EMOJI} to {member.mention}'s wallet.")
 
     @commands.command()
     @commands.is_owner()
     async def lockuser(self, ctx, member: discord.Member, *, flags: str = ""):
         """Admin: Lock a user from using economy commands. Pass --delete to also zero their balance and return all shares to IPO."""
+        if "--delete" in flags:
+            if not await confirm(
+                ctx,
+                f"⚠️ Lock **{member.display_name}**, **zero their balance**, and return all their shares to IPO?",
+            ):
+                return
+
         await self.pool.execute(
             "INSERT INTO locked_users (guild_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
             ctx.guild.id, member.id,
@@ -374,19 +386,11 @@ class Economy(commands.Cog):
     @commands.is_owner()
     async def reseteconomy(self, ctx):
         """Admin: Wipe all balances, stock relations and recreate stocks at their original IPO settings."""
-        confirm_msg = await ctx.send(
+        if not await confirm(
+            ctx,
             "⚠️ This will zero **all wallets and banks**, delete all transactions and stock relations, "
-            "and recreate every stock at 10,000 shares / original IPO price.\n"
-            "Type `CONFIRM` within 30 seconds to proceed."
-        )
-
-        def check(m):
-            return m.author == ctx.author and m.channel == ctx.channel and m.content == "CONFIRM"
-
-        try:
-            await self.bot.wait_for("message", check=check, timeout=30.0)
-        except TimeoutError:
-            await confirm_msg.edit(content="Reset cancelled (timed out).")
+            "and recreate every stock at 10,000 shares / original IPO price.",
+        ):
             return
 
         async with self.pool.acquire() as conn:
@@ -452,6 +456,14 @@ class Economy(commands.Cog):
             await ctx.send(f"{member.display_name} only has {bal['wallet'] + bal['bank']}{MAIN_CURRENCY_EMOJI} total.")
             return
 
+        if not await confirm(ctx, f"⚠️ Remove **{amount:,}**{MAIN_CURRENCY_EMOJI} from {member.mention}'s wallet/bank?"):
+            return
+
+        bal = await ensure_wallet(self.pool, ctx.guild.id, member.id)
+        if bal["wallet"] + bal["bank"] < amount:
+            await ctx.send(f"{member.display_name} only has {bal['wallet'] + bal['bank']}{MAIN_CURRENCY_EMOJI} total.")
+            return
+
         from_wallet = min(amount, bal["wallet"])
         from_bank = amount - from_wallet
 
@@ -460,3 +472,4 @@ class Economy(commands.Cog):
         if from_bank > 0:
             await update_bank(self.pool, ctx.guild.id, member.id, -from_bank)
         await add_transaction(self.pool, ctx.guild.id, member.id, -amount, "admin_remove", f"Removed by {ctx.author}")
+        await ctx.send(f"Removed **{amount:,}**{MAIN_CURRENCY_EMOJI} from {member.mention}'s wallet/bank.")

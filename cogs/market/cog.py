@@ -18,14 +18,13 @@ from cogs.market.db import (
     get_weekly_revenue, get_weekly_revenue_total,
     update_treasury, set_company_level, get_shareholders,
     get_avg_buy_price,
-    reset_all_orders,
-    fix_sell_orders,
     remove_member_shares,
     process_dilution,
     refund_company_buy_orders,
 )
 from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
+from core.confirm import confirm
 from config import (
     MAIN_CURRENCY_EMOJI,
     LEVEL_BASE_THRESHOLD,
@@ -626,60 +625,15 @@ class Market(commands.Cog):
             await ctx.send("This channel is not a listed company.")
             return
 
+        if not await confirm(
+            ctx,
+            f"⚠️ Delist **{company['name']}**? This deletes all its shares, orders, and trade history.",
+        ):
+            return
+
         deleted = await delete_company(self.pool, ctx.guild.id, stock.id)
         self._company_channels.pop(ctx.guild.id, None)
         await ctx.send(f"**{deleted['name']}** has been delisted. All shares, orders, and history have been removed.")
-
-    @commands.command()
-    @commands.is_owner()
-    async def fixmarket(self, ctx):
-        """Admin: Reset all companies to 10k shares, IPO price 100, treasury = sold shares * 100."""
-        async with self.pool.acquire() as conn:
-            companies = await list_companies(conn, ctx.guild.id)
-            if not companies:
-                await ctx.send("No companies listed.")
-                return
-
-            lines = []
-            async with conn.transaction():
-                await conn.execute(
-                    "DELETE FROM trade_history WHERE guild_id = $1", ctx.guild.id
-                )
-                await conn.execute(
-                    "DELETE FROM orders WHERE guild_id = $1", ctx.guild.id
-                )
-
-                for company in companies:
-                    gid = ctx.guild.id
-                    cid = company["stock_channel_id"]
-
-                    owned = await conn.fetchval(
-                        "SELECT COALESCE(SUM(quantity), 0) FROM portfolios WHERE guild_id = $1 AND stock_channel_id = $2",
-                        gid, cid,
-                    )
-                    available = 10000 - owned
-                    treasury = owned * 100
-
-                    await conn.execute(
-                        """UPDATE companies
-                           SET total_shares         = 10000,
-                               available_ipo_shares  = $3,
-                               ipo_price             = 100,
-                               base_ipo_price        = 100,
-                               treasury              = $4
-                           WHERE guild_id = $1 AND stock_channel_id = $2""",
-                        gid, cid, available, treasury,
-                    )
-                    lines.append(
-                        f"**{company['name']}**: {owned:,} owned → {available:,} IPO left, treasury {treasury:,}{MAIN_CURRENCY_EMOJI}"
-                    )
-
-        embed = discord.Embed(
-            title="Market Fixed",
-            description="\n".join(lines),
-            color=discord.Color.green(),
-        )
-        await ctx.send(embed=embed)
 
     @commands.command()
     @commands.is_owner()
@@ -740,9 +694,6 @@ class Market(commands.Cog):
     @commands.is_owner()
     async def forcefinancials(self, ctx):
         """Admin: trigger the weekly financial processing (treasury update, dividends, level-up)."""
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("You do not have permission to use this command.")
-            return
         now = datetime.datetime.now(datetime.timezone.utc)
         yesterday = (now - datetime.timedelta(days=1)).date()
         monday = yesterday - datetime.timedelta(days=yesterday.weekday())
@@ -1303,33 +1254,6 @@ class Market(commands.Cog):
             await ctx.send(f"Sell order #{order_id} cancelled. {order['remaining']} shares are available again.")
 
     # ── Channel admin ──
-
-    @commands.command(aliases=['ro'])
-    @commands.is_owner()
-    async def resetorders(self, ctx):
-        """Admin: Cancel all open buy/sell orders server-wide and refund escrowed funds to users."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                buy_count, sell_count, refund_total = await reset_all_orders(conn, ctx.guild.id)
-
-        embed = discord.Embed(title="Orders Reset", color=discord.Color.orange())
-        embed.add_field(name="Buy Orders Cancelled", value=str(buy_count), inline=True)
-        embed.add_field(name="Sell Orders Cancelled", value=str(sell_count), inline=True)
-        embed.add_field(name="Funds Refunded", value=f"{refund_total:,}{MAIN_CURRENCY_EMOJI}", inline=True)
-        await ctx.send(embed=embed)
-
-    @commands.command(aliases=['fo'])
-    @commands.is_owner()
-    async def fixorders(self, ctx):
-        """Admin: Trim or cancel sell orders that exceed seller portfolio holdings. Oldest orders are preserved first."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                cancelled, trimmed = await fix_sell_orders(conn, ctx.guild.id)
-
-        embed = discord.Embed(title="Orders Fixed", color=discord.Color.green())
-        embed.add_field(name="Cancelled", value=str(cancelled), inline=True)
-        embed.add_field(name="Trimmed", value=str(trimmed), inline=True)
-        await ctx.send(embed=embed)
 
     @commands.command()
     @commands.is_owner()
