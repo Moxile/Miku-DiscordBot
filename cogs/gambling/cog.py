@@ -284,6 +284,9 @@ class Gambling(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.games = {}
+        # Persistent blackjack shoes, keyed by (guild_id, user_id). A player's deck carries
+        # over between their games and is only reshuffled once it runs out (see _draw_card).
+        self.shoes = {}
 
     @property
     def pool(self):
@@ -458,6 +461,11 @@ class Gambling(commands.Cog):
 
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
 
+        shoe = self.shoes.get(key)
+        if not shoe:
+            shoe = self.create_deck()
+            self.shoes[key] = shoe
+
         self.games[key] = {
             "game": "blackjack",
             "bet": bet,
@@ -465,15 +473,15 @@ class Gambling(commands.Cog):
             "player_hands": [],
             "hand_bets": [],
             "dealer_cards": [],
-            "deck": self.create_deck(),
+            "deck": shoe,
             "state": "player_turn"
         }
         game = self.games[key]
 
-        player_cards = [game["deck"].pop()]
-        game["dealer_cards"].append(game["deck"].pop())
-        player_cards.append(game["deck"].pop())
-        game["dealer_cards"].append(game["deck"].pop())
+        player_cards = [self._draw_card(game)]
+        game["dealer_cards"].append(self._draw_card(game))
+        player_cards.append(self._draw_card(game))
+        game["dealer_cards"].append(self._draw_card(game))
         game["player_hands"].append(player_cards)
         game["hand_bets"].append(bet)
 
@@ -492,10 +500,17 @@ class Gambling(commands.Cog):
 
     # ── Blackjack actions (driven by BlackjackView buttons) ──
 
+    def _draw_card(self, game):
+        """Draw the top card of the shoe, shuffling in a fresh deck when it runs out."""
+        deck = game["deck"]
+        if not deck:
+            deck.extend(self.create_deck())
+        return deck.pop()
+
     def deal_to_current(self, game):
         """Draw one card to the current hand. Returns True if it busts."""
         hand = game["player_hands"][game["current_hand"]]
-        hand.append(game["deck"].pop())
+        hand.append(self._draw_card(game))
         return self.calculate_hand_value(hand) > 21
 
     async def double_current(self, key, game):
@@ -508,7 +523,7 @@ class Gambling(commands.Cog):
         await update_wallet(self.pool, guild_id, user_id, -game["bet"])
         game["hand_bets"][game["current_hand"]] *= 2
         hand = game["player_hands"][game["current_hand"]]
-        hand.append(game["deck"].pop())
+        hand.append(self._draw_card(game))
         return self.calculate_hand_value(hand) > 21
 
     async def split_current(self, key, game):
@@ -525,8 +540,8 @@ class Gambling(commands.Cog):
         card1, card2 = hand[0], hand[1]
         original_bet = game["hand_bets"][idx]
         game["player_hands"][idx:idx + 1] = [
-            [card1, game["deck"].pop()],
-            [card2, game["deck"].pop()],
+            [card1, self._draw_card(game)],
+            [card2, self._draw_card(game)],
         ]
         game["hand_bets"][idx:idx + 1] = [original_bet, original_bet]
         return True
@@ -551,7 +566,7 @@ class Gambling(commands.Cog):
         removes the game from the active set."""
         guild_id, user_id = key
         while self.calculate_hand_value(game["dealer_cards"]) < 17:
-            game["dealer_cards"].append(game["deck"].pop())
+            game["dealer_cards"].append(self._draw_card(game))
 
         dealer_value = self.calculate_hand_value(game["dealer_cards"])
         dealer_blackjack = dealer_value == 21 and len(game["dealer_cards"]) == 2
