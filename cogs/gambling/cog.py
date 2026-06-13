@@ -8,7 +8,7 @@ from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_trans
 from core.checks import require_channel, WrongChannel, invalidate, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, PREFIX
-from . import cards
+from . import cards, coins, wheel
 
 
 BLACKJACK_TIMEOUT = 120
@@ -226,12 +226,13 @@ class Gambling(commands.Cog):
             await ctx.send("Please choose 'h' for heads or 't' for tails.")
             return
 
+        choice_u = choice.upper()
         results = []
         total = 0
         for _ in range(tries):
             result = "H" if secrets.randbelow(2) == 0 else "T"
 
-            if result == choice.upper():
+            if result == choice_u:
                 total += bet_per_try
             else:
                 total -= bet_per_try
@@ -242,8 +243,17 @@ class Gambling(commands.Cog):
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, total)
         await add_transaction(self.pool, ctx.guild.id, ctx.author.id, total, "betflip", f"{tries} tries at {bet_per_try}{MAIN_CURRENCY_EMOJI} each")
 
-        embed = discord.Embed(title="Bet Flip Results", description="\n".join(results) + f"\nTotal outcome: {total}{MAIN_CURRENCY_EMOJI}", color=discord.Color.blue())
-        await ctx.send(embed=embed)
+        wins = results.count(choice_u)
+        losses = tries - wins
+        loop = asyncio.get_running_loop()
+        buf = await loop.run_in_executor(None, coins.render_coins, choice_u, results, wins, losses)
+        file = discord.File(buf, filename="coins.png")
+        color = discord.Color.green() if total > 0 else (discord.Color.red() if total < 0 else discord.Color.blurple())
+        embed = discord.Embed(title="Bet Flip Results", color=color)
+        embed.set_image(url="attachment://coins.png")
+        sign = "+" if total >= 0 else ""
+        embed.set_footer(text=f"Net: {sign}{total}{MAIN_CURRENCY_EMOJI} · {wins}W/{losses}L")
+        await ctx.send(embed=embed, file=file)
 
     @staticmethod
     def create_deck(deckcount=0):
@@ -531,7 +541,11 @@ class Gambling(commands.Cog):
             sign = "+" if net >= 0 else ""
             embed.add_field(name=name, value=f"{sign}{net}{MAIN_CURRENCY_EMOJI}", inline=True)
 
-        await channel.send(embed=embed)
+        loop = asyncio.get_running_loop()
+        buf = await loop.run_in_executor(None, wheel.render_wheel, result)
+        file = discord.File(buf, filename="wheel.png")
+        embed.set_image(url="attachment://wheel.png")
+        await channel.send(embed=embed, file=file)
 
     @staticmethod
     def resolve_roulette_bet(choice, bet, result, color):

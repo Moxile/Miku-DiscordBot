@@ -7,10 +7,11 @@ safe fallback to Pillow's built-in default font.
 from __future__ import annotations
 
 import io
-import os
 from functools import lru_cache
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
+
+from .render_utils import load_font as _font
 
 # ── Geometry (card faces are drawn at SS× then downscaled for antialiasing) ──
 SS = 2
@@ -36,30 +37,6 @@ TEXT_DIM = (200, 210, 205)
 HIGHLIGHT = (250, 205, 80)
 
 RED_SUITS = {"♥️", "♦️", "♥", "♦"}
-
-
-# ── Fonts ──
-_FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-    "/Library/Fonts/Arial Bold.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-]
-
-
-@lru_cache(maxsize=None)
-def _font(size: int) -> ImageFont.FreeTypeFont:
-    for path in _FONT_CANDIDATES:
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except OSError:
-                continue
-    try:
-        return ImageFont.load_default(size)
-    except TypeError:  # Pillow < 10.1 — unsized bitmap default
-        return ImageFont.load_default()
 
 
 def _suit_kind(suit: str) -> str:
