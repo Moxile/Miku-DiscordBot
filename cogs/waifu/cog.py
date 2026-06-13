@@ -226,14 +226,13 @@ class Waifu(commands.Cog):
             if row["spouse_id"] is not None:
                 await ctx.send(f"**{waifu.display_name}** is married — they cannot be gifted.")
                 return
-            new_value = int(row["value"] * WAIFU_VALUE_MULTIPLIER)
-            await set_waifu_owner(conn, ctx.guild.id, waifu.id, recipient.id, new_value)
+            await set_waifu_owner(conn, ctx.guild.id, waifu.id, recipient.id, row["value"])
 
         embed = discord.Embed(
             description=f"{ctx.author.mention} gifted **{waifu.display_name}** to {recipient.mention}! 🎁",
             color=discord.Color.from_rgb(255, 105, 180),
         )
-        embed.add_field(name="New Value", value=f"{MAIN_CURRENCY_EMOJI} {new_value:,}", inline=True)
+        embed.add_field(name="Value", value=f"{MAIN_CURRENCY_EMOJI} {row['value']:,}", inline=True)
         await ctx.send(embed=embed)
 
     @commands.command()
