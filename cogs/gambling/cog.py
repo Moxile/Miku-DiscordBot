@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+import time
 
 import discord
 from discord.ext import commands
@@ -8,7 +9,7 @@ from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_trans
 from core.checks import require_channel, WrongChannel, invalidate, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, PREFIX
-from . import cards, coins, wheel
+from . import cards, coins, wheel, board
 
 
 BLACKJACK_TIMEOUT = 120
@@ -153,6 +154,156 @@ class BlackjackView(discord.ui.View):
             await self.message.edit(attachments=[file], embed=embed, view=self)
         except discord.HTTPException:
             pass
+
+
+# ── Roulette ──
+
+ROULETTE_WINDOW = 30  # seconds; reset on each bet (discord.py resets View timeout per interaction)
+PRESET_AMOUNTS = [10, 50, 100, 250, 500, 1000, 5000]
+OUTSIDE_BETS = [
+    ("red", "Red"), ("black", "Black"), ("odd", "Odd"), ("even", "Even"),
+    ("low", "Low (1–18)"), ("high", "High (19–36)"),
+    ("dozen1", "1st Dozen (1–12)"), ("dozen2", "2nd Dozen (13–24)"), ("dozen3", "3rd Dozen (25–36)"),
+    ("col1", "Column 1"), ("col2", "Column 2"), ("col3", "Column 3"),
+]
+_OUTSIDE_LABELS = dict(OUTSIDE_BETS)
+
+
+def _bet_label(choice):
+    if choice.isdigit():
+        return f"Number {choice}"
+    return _OUTSIDE_LABELS.get(choice, choice.title())
+
+
+class AmountModal(discord.ui.Modal, title="Set your stake"):
+    amount = discord.ui.TextInput(label="Amount", placeholder="e.g. 250 or 'all'", max_length=20)
+
+    def __init__(self, view):
+        super().__init__()
+        self.view_ref = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.view_ref.set_amount_from_text(interaction, str(self.amount))
+
+
+class RouletteView(discord.ui.View):
+    """Shared per-channel betting table. Anyone may bet; only the opener may spin early.
+
+    The View timeout (reset by discord.py on every interaction) is the countdown — when it
+    finally lapses, `on_timeout` spins the wheel.
+    """
+
+    def __init__(self, cog, key, *, timeout=ROULETTE_WINDOW):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.key = key
+        self.message = None
+
+    @discord.ui.select(placeholder="① Choose your stake…", row=0,
+                       options=[discord.SelectOption(label=f"{a}{MAIN_CURRENCY_EMOJI}", value=str(a)) for a in PRESET_AMOUNTS])
+    async def amount_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await self._set_amount(interaction, int(select.values[0]))
+
+    @discord.ui.select(placeholder="② Outside bet…", row=1,
+                       options=[discord.SelectOption(label=lbl, value=val) for val, lbl in OUTSIDE_BETS])
+    async def outside_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await self._place(interaction, select.values[0])
+
+    @discord.ui.select(placeholder="② Straight up: 0–18…", row=2,
+                       options=[discord.SelectOption(label=str(n), value=str(n)) for n in range(0, 19)])
+    async def num_low_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await self._place(interaction, select.values[0])
+
+    @discord.ui.select(placeholder="② Straight up: 19–36…", row=3,
+                       options=[discord.SelectOption(label=str(n), value=str(n)) for n in range(19, 37)])
+    async def num_high_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await self._place(interaction, select.values[0])
+
+    @discord.ui.button(label="Custom amount", emoji="💰", style=discord.ButtonStyle.secondary, row=4)
+    async def custom_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self._closed():
+            await interaction.response.defer()
+            return
+        await interaction.response.send_modal(AmountModal(self))
+
+    @discord.ui.button(label="Spin Now", emoji="🎯", style=discord.ButtonStyle.success, row=4)
+    async def spin_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        game = self.cog.games.get(self.key)
+        if not game or game.get("spun"):
+            await interaction.response.defer()
+            return
+        if interaction.user.id != game["opener_id"]:
+            await interaction.response.send_message("Only the player who opened the table can spin early.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        await self.cog.do_spin(self.key)
+
+    @discord.ui.button(label="My bets", emoji="📋", style=discord.ButtonStyle.secondary, row=4)
+    async def mybets_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        game = self.cog.games.get(self.key)
+        bets = game["bets"].get(interaction.user.id, []) if game else []
+        if not bets:
+            await interaction.response.send_message("You haven't placed any bets yet.", ephemeral=True)
+            return
+        lines = [f"• {bet}{MAIN_CURRENCY_EMOJI} on {_bet_label(c)}" for c, bet in bets]
+        staked = sum(b for _, b in bets)
+        await interaction.response.send_message("\n".join(lines) + f"\n**Staked: {staked}{MAIN_CURRENCY_EMOJI}**", ephemeral=True)
+
+    def _closed(self):
+        game = self.cog.games.get(self.key)
+        return not game or game.get("spun")
+
+    async def _set_amount(self, interaction, amount):
+        if self._closed():
+            await interaction.response.defer()
+            return
+        self.cog.games[self.key]["amounts"][interaction.user.id] = amount
+        await interaction.response.send_message(
+            f"Your stake is now **{amount}{MAIN_CURRENCY_EMOJI}**. Pick a bet to place it.", ephemeral=True)
+
+    async def set_amount_from_text(self, interaction, text):
+        game = self.cog.games.get(self.key)
+        if not game or game.get("spun"):
+            await interaction.response.defer()
+            return
+        wallet = await ensure_wallet(self.cog.pool, game["guild_id"], interaction.user.id)
+        try:
+            amount = parse_amount(text, wallet_balance=wallet["wallet"])
+        except AmountError as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
+        if amount <= 0:
+            await interaction.response.send_message("Please enter a positive amount.", ephemeral=True)
+            return
+        game["amounts"][interaction.user.id] = amount
+        await interaction.response.send_message(
+            f"Your stake is now **{amount}{MAIN_CURRENCY_EMOJI}**. Pick a bet to place it.", ephemeral=True)
+
+    async def _place(self, interaction, choice):
+        game = self.cog.games.get(self.key)
+        if not game or game.get("spun"):
+            await interaction.response.defer()
+            return
+        uid = interaction.user.id
+        amount = game["amounts"].get(uid)
+        if not amount:
+            await interaction.response.send_message(
+                "Pick a stake first (① dropdown or 💰 Custom amount).", ephemeral=True)
+            return
+        wallet = await ensure_wallet(self.cog.pool, game["guild_id"], uid)
+        if wallet["wallet"] < amount:
+            await interaction.response.send_message(
+                f"You don't have enough {CURRENCY_NAME} for a {amount}{MAIN_CURRENCY_EMOJI} bet.", ephemeral=True)
+            return
+        await update_wallet(self.cog.pool, game["guild_id"], uid, -amount)
+        game["bets"].setdefault(uid, []).append((choice, amount))
+        embed = self.cog.build_roulette_embed(game, interaction.guild)
+        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.followup.send(
+            f"Placed **{amount}{MAIN_CURRENCY_EMOJI}** on **{_bet_label(choice)}**.", ephemeral=True)
+
+    async def on_timeout(self):
+        await self.cog.do_spin(self.key)
 
 
 class Gambling(commands.Cog):
@@ -466,53 +617,70 @@ class Gambling(commands.Cog):
 
     @commands.command()
     @require_channel("gambling_channel")
-    async def roulette(self, ctx, choice, bet: str):
-        """Play a game of roulette by placing a bet on a color, odd/even, or specific number. You can specify an amount or use 'all' to bet everything. (example: .roulette red 10 - bet 10 on red)"""
-        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-        try:
-            bet = parse_amount(bet, wallet_balance=wallet["wallet"])
-        except AmountError as e:
-            await ctx.send(str(e))
-            return
-        is_valid, error = await self.check_bet(ctx, bet)
-        if not is_valid:
-            await ctx.send(error)
-            return
-
-        choice = choice.lower()
-        valid_choices = ["red", "black", "odd", "even"] + [str(i) for i in range(37)]
-        if choice not in valid_choices:
-            await ctx.send("Invalid choice! Please choose 'red', 'black', 'odd', 'even', or a number between 0 and 36.")
-            return
-
-        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
-
+    async def roulette(self, ctx, amount: str = None):
+        """Open an interactive roulette table. Pick a stake and place bets on the board with the dropdowns; the table spins on a countdown, or the opener can spin early. Optionally pass a starting stake (e.g. .roulette 100)."""
         key = ("roulette", ctx.channel.id)
-        new_round = key not in self.games
-
-        if new_round:
-            self.games[key] = {
-                "game": "roulette",
-                "guild_id": ctx.guild.id,
-                "bets": {},
-                "version": 0
-            }
-
-        game = self.games[key]
-        user_bets = game["bets"].setdefault(ctx.author.id, [])
-        user_bets.append((choice, bet))
-        game["version"] += 1
-
-        await ctx.send(f"{ctx.author.display_name} bet {bet}{MAIN_CURRENCY_EMOJI} on **{choice}**! Spinning in **15 seconds**...")
-        asyncio.create_task(self.spin_roulette(ctx.channel, key, game["version"]))
-
-    async def spin_roulette(self, channel, key, version):
-        await asyncio.sleep(15)
-
-        game = self.games.get(key)
-        if not game or game["version"] != version:
+        existing = self.games.get(key)
+        if existing and not existing.get("spun"):
+            msg = existing.get("message")
+            where = msg.jump_url if msg else "above"
+            await ctx.send(f"A roulette table is already open in this channel — place your bets there: {where}")
             return
-        self.games.pop(key)
+
+        game = {
+            "game": "roulette",
+            "guild_id": ctx.guild.id,
+            "opener_id": ctx.author.id,
+            "bets": {},
+            "amounts": {},
+            "message": None,
+            "view": None,
+            "spun": False,
+        }
+        self.games[key] = game
+
+        if amount is not None:
+            wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+            try:
+                game["amounts"][ctx.author.id] = parse_amount(amount, wallet_balance=wallet["wallet"])
+            except AmountError as e:
+                await ctx.send(str(e))
+
+        view = RouletteView(self, key)
+        game["view"] = view
+        embed = self.build_roulette_embed(game, ctx.guild)
+        file = discord.File(board.render_board(), filename="board.png")
+        message = await ctx.send(embed=embed, file=file, view=view)
+        game["message"] = message
+        view.message = message
+
+    def build_roulette_embed(self, game, guild):
+        embed = discord.Embed(title="🎡 Roulette — place your bets!", color=discord.Color.dark_green())
+        deadline = int(time.time()) + ROULETTE_WINDOW
+        embed.description = (
+            f"Spinning <t:{deadline}:R> — or the opener can press 🎯 **Spin Now**.\n"
+            f"① pick a stake · ② choose a bet from the dropdowns."
+        )
+        if any(game["bets"].values()):
+            lines = []
+            for uid, bets in game["bets"].items():
+                member = guild.get_member(uid) if guild else None
+                name = member.display_name if member else str(uid)
+                staked = sum(b for _, b in bets)
+                summary = ", ".join(f"{bet}{MAIN_CURRENCY_EMOJI} {_bet_label(c)}" for c, bet in bets)
+                lines.append(f"**{name}** — {summary}  *(staked {staked}{MAIN_CURRENCY_EMOJI})*")
+            embed.add_field(name="Current bets", value="\n".join(lines)[:1024], inline=False)
+        embed.set_image(url="attachment://board.png")
+        return embed
+
+    async def do_spin(self, key):
+        game = self.games.get(key)
+        if not game or game.get("spun"):
+            return
+        game["spun"] = True
+        view = game.get("view")
+        message = game.get("message")
+        guild = self.bot.get_guild(game["guild_id"])
 
         result = secrets.randbelow(37)
         color = "green" if result == 0 else ("red" if result in self.ROULETTE_RED else "black")
@@ -525,8 +693,7 @@ class Gambling(commands.Cog):
         for user_id, bets in game["bets"].items():
             total_result = 0
             for choice, bet in bets:
-                winnings = self.resolve_roulette_bet(choice, bet, result, color)
-                total_result += winnings
+                total_result += self.resolve_roulette_bet(choice, bet, result, color)
 
             if total_result > 0:
                 await update_wallet(self.pool, game["guild_id"], user_id, total_result)
@@ -536,31 +703,66 @@ class Gambling(commands.Cog):
                 tx_type = "roulette_win" if net > 0 else "roulette_loss"
                 await add_transaction(self.pool, game["guild_id"], user_id, net, tx_type)
 
-            member = channel.guild.get_member(user_id)
+            member = guild.get_member(user_id) if guild else None
             name = member.display_name if member else str(user_id)
             sign = "+" if net >= 0 else ""
             embed.add_field(name=name, value=f"{sign}{net}{MAIN_CURRENCY_EMOJI}", inline=True)
 
+        if not any(game["bets"].values()):
+            embed.description = "No bets were placed."
+
         loop = asyncio.get_running_loop()
         buf = await loop.run_in_executor(None, wheel.render_wheel, result)
-        file = discord.File(buf, filename="wheel.png")
         embed.set_image(url="attachment://wheel.png")
-        await channel.send(embed=embed, file=file)
+
+        if view:
+            view.stop()
+        self.games.pop(key, None)
+
+        if message is None:
+            return
+        try:
+            await message.edit(embed=embed, attachments=[discord.File(buf, filename="wheel.png")], view=None)
+        except discord.HTTPException:
+            buf.seek(0)
+            await message.channel.send(embed=embed, file=discord.File(buf, filename="wheel.png"))
 
     @staticmethod
     def resolve_roulette_bet(choice, bet, result, color):
         """Returns the payout (0 if lost, includes original bet if won)."""
-        if choice == "red" and color == "red":
-            return bet * 2
-        elif choice == "black" and color == "black":
-            return bet * 2
-        elif choice == "odd" and result != 0 and result % 2 == 1:
-            return bet * 2
-        elif choice == "even" and result != 0 and result % 2 == 0:
-            return bet * 2
-        elif choice.isdigit() and int(choice) == result:
-            return bet * 36
-        return 0
+        if choice.isdigit():
+            return bet * 36 if int(choice) == result else 0
+
+        if choice == "red":
+            won = color == "red"
+        elif choice == "black":
+            won = color == "black"
+        elif choice == "odd":
+            won = result != 0 and result % 2 == 1
+        elif choice == "even":
+            won = result != 0 and result % 2 == 0
+        elif choice == "low":
+            won = 1 <= result <= 18
+        elif choice == "high":
+            won = 19 <= result <= 36
+        elif choice == "dozen1":
+            won = 1 <= result <= 12
+        elif choice == "dozen2":
+            won = 13 <= result <= 24
+        elif choice == "dozen3":
+            won = 25 <= result <= 36
+        elif choice == "col1":
+            won = result != 0 and result % 3 == 1
+        elif choice == "col2":
+            won = result != 0 and result % 3 == 2
+        elif choice == "col3":
+            won = result != 0 and result % 3 == 0
+        else:
+            return 0
+
+        if not won:
+            return 0
+        return bet * 3 if choice in ("dozen1", "dozen2", "dozen3", "col1", "col2", "col3") else bet * 2
 
     @commands.command(aliases=["rr"])
     async def russian_roulette(self, ctx, bet: str):
