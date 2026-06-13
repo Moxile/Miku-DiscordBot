@@ -8,6 +8,151 @@ from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_trans
 from core.checks import require_channel, WrongChannel, invalidate, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, PREFIX
+from . import cards
+
+
+BLACKJACK_TIMEOUT = 120
+
+
+def _card_value(rank):
+    return 10 if rank in ("10", "J", "Q", "K") else rank
+
+
+def _is_pair(hand):
+    return len(hand) == 2 and _card_value(hand[0][0]) == _card_value(hand[1][0])
+
+
+def _result_meta(net):
+    """Map a net outcome to an embed title + color."""
+    if net > 0:
+        return "Win", discord.Color.green()
+    if net < 0:
+        return "Loss", discord.Color.red()
+    return "Push", discord.Color.dark_gray()
+
+
+class BlackjackView(discord.ui.View):
+    """Button-driven controls for a single blackjack game.
+
+    Holds only a reference to the cog and the game key; all state lives in
+    ``cog.games[key]`` and all money/rendering goes through cog helpers.
+    """
+
+    def __init__(self, cog, key, *, timeout=BLACKJACK_TIMEOUT):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.key = key
+        self.player_id = key[1]
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            return False
+        return True
+
+    async def _sync_buttons(self, game):
+        """Grey out Double/Split when the action isn't available."""
+        wallet = await ensure_wallet(self.cog.pool, *self.key)
+        balance = wallet["wallet"]
+        hand = game["player_hands"][game["current_hand"]]
+        two_cards = len(hand) == 2
+        self.double_btn.disabled = not (two_cards and balance >= game["bet"])
+        self.split_btn.disabled = not (two_cards and _is_pair(hand) and balance >= game["bet"])
+
+    async def _show_turn(self, interaction, title, color):
+        game = self.cog.games[self.key]
+        await self._sync_buttons(game)
+        file, embed = await self.cog.build_state(game, title=title, color=color, hide_dealer=True)
+        await interaction.response.edit_message(attachments=[file], embed=embed, view=self)
+
+    async def _finish(self, interaction, game, net):
+        for child in self.children:
+            child.disabled = True
+        title, color = _result_meta(net)
+        file, embed = await self.cog.build_state(game, title=title, color=color, hide_dealer=False, result=net)
+        await interaction.response.edit_message(attachments=[file], embed=embed, view=self)
+        self.stop()
+
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.success)
+    async def hit_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        game = self.cog.games.get(self.key)
+        if game is None or game["state"] != "player_turn":
+            await interaction.response.defer()
+            return
+        busted = self.cog.deal_to_current(game)
+        if not busted:
+            await self._show_turn(interaction, "Hit", discord.Color.green())
+            return
+        phase, net = await self.cog.advance_hand(self.key, game)
+        if phase == "continue":
+            await self._show_turn(interaction, "Busted — next hand", discord.Color.orange())
+        else:
+            await self._finish(interaction, game, net)
+
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.danger)
+    async def stand_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        game = self.cog.games.get(self.key)
+        if game is None or game["state"] != "player_turn":
+            await interaction.response.defer()
+            return
+        if game["current_hand"] < len(game["player_hands"]) - 1:
+            game["current_hand"] += 1
+            await self._show_turn(interaction, f"Stand — Hand {game['current_hand'] + 1}", discord.Color.blue())
+            return
+        game["state"] = "dealer_turn"
+        net = await self.cog.settle(self.key, game)
+        await self._finish(interaction, game, net)
+
+    @discord.ui.button(label="Double", style=discord.ButtonStyle.primary)
+    async def double_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        game = self.cog.games.get(self.key)
+        if game is None or game["state"] != "player_turn":
+            await interaction.response.defer()
+            return
+        if len(game["player_hands"][game["current_hand"]]) != 2:
+            await interaction.response.defer()
+            return
+        busted = await self.cog.double_current(self.key, game)
+        if busted is None:
+            await interaction.response.send_message(f"You don't have enough {CURRENCY_NAME} to double.", ephemeral=True)
+            return
+        phase, net = await self.cog.advance_hand(self.key, game)
+        if phase == "continue":
+            await self._show_turn(interaction, "Double Down — next hand", discord.Color.orange())
+        else:
+            await self._finish(interaction, game, net)
+
+    @discord.ui.button(label="Split", style=discord.ButtonStyle.secondary)
+    async def split_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        game = self.cog.games.get(self.key)
+        if game is None or game["state"] != "player_turn":
+            await interaction.response.defer()
+            return
+        ok = await self.cog.split_current(self.key, game)
+        if not ok:
+            await interaction.response.send_message(
+                f"You can't split that hand (need a matching pair and enough {CURRENCY_NAME}).", ephemeral=True
+            )
+            return
+        await self._show_turn(interaction, "Split — Hand 1", discord.Color.blue())
+
+    async def on_timeout(self):
+        game = self.cog.games.get(self.key)
+        if game is None or self.message is None:
+            return
+        game["state"] = "dealer_turn"
+        net = await self.cog.settle(self.key, game)
+        for child in self.children:
+            child.disabled = True
+        title, color = _result_meta(net)
+        file, embed = await self.cog.build_state(
+            game, title=f"Timed out — {title}", color=color, hide_dealer=False, result=net
+        )
+        try:
+            await self.message.edit(attachments=[file], embed=embed, view=self)
+        except discord.HTTPException:
+            pass
 
 
 class Gambling(commands.Cog):
@@ -132,29 +277,37 @@ class Gambling(commands.Cog):
 
         return value
 
-    def format_hand(self, cards, hide_second=False):
-        if hide_second:
-            first = f"{cards[0][0]}{cards[0][1]}"
-            return f"{first} ??"
-        display = " ".join(f"{rank}{suit}" for rank, suit in cards)
-        return f"{display} ({self.calculate_hand_value(cards)})"
+    def _render_buf(self, game, hide_dealer):
+        return cards.render_table(
+            game["dealer_cards"],
+            game["player_hands"],
+            current_hand=game["current_hand"],
+            hide_dealer=hide_dealer,
+            deck_left=len(game["deck"]),
+        )
 
-    def build_game_embed(self, game, title, color, hide_dealer=True, result=None):
-        embed = discord.Embed(title=f"Blackjack - {title}", color=color)
-        embed.add_field(name="Dealer Hand", value=self.format_hand(game["dealer_cards"], hide_second=hide_dealer), inline=False)
-        embed.add_field(name="Your Hand", value=self.format_hand(game["player_hands"][game["current_hand"]]), inline=False)
+    async def build_state(self, game, *, title, color, hide_dealer, result=None):
+        """Render the table to an image and wrap it in a (File, Embed) pair.
+
+        The Pillow rendering is offloaded to an executor so it never blocks the loop.
+        """
+        loop = asyncio.get_running_loop()
+        buf = await loop.run_in_executor(None, self._render_buf, game, hide_dealer)
+        file = discord.File(buf, filename="table.png")
+        embed = discord.Embed(title=f"Blackjack — {title}", color=color)
+        embed.set_image(url="attachment://table.png")
         if result is not None:
             sign = "+" if result >= 0 else ""
             embed.set_footer(text=f"{sign}{result}{MAIN_CURRENCY_EMOJI}")
         else:
             hand_bet = game["hand_bets"][game["current_hand"]]
             embed.set_footer(text=f"Bet: {hand_bet}{MAIN_CURRENCY_EMOJI}")
-        return embed
+        return file, embed
 
     @commands.command(aliases=["bj"])
     @require_channel("gambling_channel")
     async def blackjack(self, ctx, bet: str):
-        """Start a game of blackjack by placing a bet. You can specify an amount or use 'all' to bet everything. During the game, use .hit, .stand, .double, or .split."""
+        """Start a game of blackjack by placing a bet, then play with the Hit / Stand / Double / Split buttons. You can specify an amount or use 'all' to bet everything."""
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         try:
             bet = parse_amount(bet, wallet_balance=wallet["wallet"])
@@ -166,13 +319,14 @@ class Gambling(commands.Cog):
             await ctx.send(error)
             return
 
-        if (ctx.guild.id, ctx.author.id) in self.games:
+        key = (ctx.guild.id, ctx.author.id)
+        if key in self.games:
             await ctx.send("You already have an active game! Please finish it before starting a new one.")
             return
 
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
 
-        self.games[(ctx.guild.id, ctx.author.id)] = {
+        self.games[key] = {
             "game": "blackjack",
             "bet": bet,
             "current_hand": 0,
@@ -182,34 +336,94 @@ class Gambling(commands.Cog):
             "deck": self.create_deck(),
             "state": "player_turn"
         }
+        game = self.games[key]
 
-        game = self.games[(ctx.guild.id, ctx.author.id)]
-
-        player_cards = []
-        player_cards.append(game["deck"].pop())
+        player_cards = [game["deck"].pop()]
         game["dealer_cards"].append(game["deck"].pop())
         player_cards.append(game["deck"].pop())
         game["dealer_cards"].append(game["deck"].pop())
-
         game["player_hands"].append(player_cards)
         game["hand_bets"].append(bet)
-        player_value = self.calculate_hand_value(game["player_hands"][0])
 
-        if player_value == 21:
+        if self.calculate_hand_value(player_cards) == 21:
             game["state"] = "dealer_turn"
-            await self.dealer_turn(ctx, game)
+            net = await self.settle(key, game)
+            title, color = _result_meta(net)
+            file, embed = await self.build_state(game, title=title, color=color, hide_dealer=False, result=net)
+            await ctx.send(embed=embed, file=file)
             return
-        embed = self.build_game_embed(game, "Game Started", discord.Color.blue())
-        await ctx.send(embed=embed)
 
-    async def dealer_turn(self, ctx, game):
+        view = BlackjackView(self, key)
+        await view._sync_buttons(game)
+        file, embed = await self.build_state(game, title="Game Started", color=discord.Color.blue(), hide_dealer=True)
+        view.message = await ctx.send(embed=embed, file=file, view=view)
+
+    # ── Blackjack actions (driven by BlackjackView buttons) ──
+
+    def deal_to_current(self, game):
+        """Draw one card to the current hand. Returns True if it busts."""
+        hand = game["player_hands"][game["current_hand"]]
+        hand.append(game["deck"].pop())
+        return self.calculate_hand_value(hand) > 21
+
+    async def double_current(self, key, game):
+        """Double the current hand's bet and draw one card. Returns True if bust,
+        False otherwise, or None if the player can't afford it."""
+        guild_id, user_id = key
+        wallet = await ensure_wallet(self.pool, guild_id, user_id)
+        if wallet["wallet"] < game["bet"]:
+            return None
+        await update_wallet(self.pool, guild_id, user_id, -game["bet"])
+        game["hand_bets"][game["current_hand"]] *= 2
+        hand = game["player_hands"][game["current_hand"]]
+        hand.append(game["deck"].pop())
+        return self.calculate_hand_value(hand) > 21
+
+    async def split_current(self, key, game):
+        """Split the current pair into two hands. Returns False if not allowed."""
+        guild_id, user_id = key
+        idx = game["current_hand"]
+        hand = game["player_hands"][idx]
+        if not _is_pair(hand):
+            return False
+        wallet = await ensure_wallet(self.pool, guild_id, user_id)
+        if wallet["wallet"] < game["bet"]:
+            return False
+        await update_wallet(self.pool, guild_id, user_id, -game["bet"])
+        card1, card2 = hand[0], hand[1]
+        original_bet = game["hand_bets"][idx]
+        game["player_hands"][idx:idx + 1] = [
+            [card1, game["deck"].pop()],
+            [card2, game["deck"].pop()],
+        ]
+        game["hand_bets"][idx:idx + 1] = [original_bet, original_bet]
+        return True
+
+    async def advance_hand(self, key, game):
+        """Move past a finished hand. Returns ("continue", None) if another hand is
+        still to be played, else ("done", net) after resolving the game."""
+        game["current_hand"] += 1
+        if game["current_hand"] < len(game["player_hands"]):
+            return "continue", None
+        if all(self.calculate_hand_value(h) > 21 for h in game["player_hands"]):
+            net = -sum(game["hand_bets"])
+            await add_transaction(self.pool, key[0], key[1], net, "blackjack_loss")
+            self.games.pop(key, None)
+            return "done", net
+        game["state"] = "dealer_turn"
+        net = await self.settle(key, game)
+        return "done", net
+
+    async def settle(self, key, game):
+        """Play out the dealer and settle every hand. Returns the net result and
+        removes the game from the active set."""
+        guild_id, user_id = key
         while self.calculate_hand_value(game["dealer_cards"]) < 17:
             game["dealer_cards"].append(game["deck"].pop())
 
         dealer_value = self.calculate_hand_value(game["dealer_cards"])
         dealer_blackjack = dealer_value == 21 and len(game["dealer_cards"]) == 2
         total_result = 0
-        game["current_hand"] = 0
 
         for i, hand in enumerate(game["player_hands"]):
             hand_bet = game["hand_bets"][i]
@@ -223,175 +437,22 @@ class Gambling(commands.Cog):
                 total_result -= hand_bet
             elif player_blackjack and not dealer_blackjack:
                 winnings = int(hand_bet * 2.5)
-                await update_wallet(self.pool, ctx.guild.id, ctx.author.id, winnings)
+                await update_wallet(self.pool, guild_id, user_id, winnings)
                 total_result += winnings - hand_bet
             elif dealer_value > 21 or player_value > dealer_value:
-                await update_wallet(self.pool, ctx.guild.id, ctx.author.id, 2 * hand_bet)
+                await update_wallet(self.pool, guild_id, user_id, 2 * hand_bet)
                 total_result += hand_bet
             elif player_value < dealer_value:
                 total_result -= hand_bet
             else:
-                await update_wallet(self.pool, ctx.guild.id, ctx.author.id, hand_bet)
-
-        if total_result > 0:
-            embed = self.build_game_embed(game, "Win", discord.Color.green(), hide_dealer=False, result=total_result)
-        elif total_result < 0:
-            embed = self.build_game_embed(game, "Loss", discord.Color.red(), hide_dealer=False, result=total_result)
-        else:
-            embed = self.build_game_embed(game, "Push", discord.Color.dark_gray(), hide_dealer=False, result=0)
+                await update_wallet(self.pool, guild_id, user_id, hand_bet)
 
         if total_result != 0:
             tx_type = "blackjack_win" if total_result > 0 else "blackjack_loss"
-            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, total_result, tx_type)
+            await add_transaction(self.pool, guild_id, user_id, total_result, tx_type)
 
-        await ctx.send(embed=embed)
-        del self.games[(ctx.guild.id, ctx.author.id)]
-
-    @commands.command()
-    @require_channel("gambling_channel")
-    async def hit(self, ctx):
-        """Take a hit and get another card. Only works during your turn in an active blackjack game."""
-        if (ctx.guild.id, ctx.author.id) not in self.games or self.games[(ctx.guild.id, ctx.author.id)]["game"] != "blackjack":
-            return
-
-        game = self.games[(ctx.guild.id, ctx.author.id)]
-
-        if game["state"] == "player_turn":
-            game["player_hands"][game["current_hand"]].append(game["deck"].pop())
-            player_value = self.calculate_hand_value(game["player_hands"][game["current_hand"]])
-            if player_value > 21:
-                hand_bet = game["hand_bets"][game["current_hand"]]
-                embed = self.build_game_embed(game, "Busted", discord.Color.red(), hide_dealer=False, result=-hand_bet)
-                await ctx.send(embed=embed)
-                game["current_hand"] += 1
-
-                if game["current_hand"] >= len(game["player_hands"]):
-                    all_busted = all(
-                        self.calculate_hand_value(h) > 21 for h in game["player_hands"]
-                    )
-                    if all_busted:
-                        total_loss = -sum(game["hand_bets"])
-                        await add_transaction(self.pool, ctx.guild.id, ctx.author.id, total_loss, "blackjack_loss")
-                        del self.games[(ctx.guild.id, ctx.author.id)]
-                    else:
-                        game["state"] = "dealer_turn"
-                        await self.dealer_turn(ctx, game)
-            else:
-                embed = self.build_game_embed(game, "Hit", discord.Color.green())
-                await ctx.send(embed=embed)
-
-    @commands.command()
-    @require_channel("gambling_channel")
-    async def stand(self, ctx):
-        """Stand and end your turn. Only works during your turn in an active blackjack game."""
-        if (ctx.guild.id, ctx.author.id) not in self.games or self.games[(ctx.guild.id, ctx.author.id)]["game"] != "blackjack":
-            return
-
-        game = self.games[(ctx.guild.id, ctx.author.id)]
-
-        if game["state"] == "player_turn":
-            if game["current_hand"] < len(game["player_hands"]) - 1:
-                game["current_hand"] += 1
-                embed = self.build_game_embed(game, f"Stand - Hand {game['current_hand'] + 1}", discord.Color.blue())
-                await ctx.send(embed=embed)
-                return
-
-            game["state"] = "dealer_turn"
-            await self.dealer_turn(ctx, game)
-
-    @commands.command()
-    @require_channel("gambling_channel")
-    async def split(self, ctx):
-        """Split your hand into two separate hands if you have a pair. Only works during your turn in an active blackjack game."""
-        if (ctx.guild.id, ctx.author.id) not in self.games or self.games[(ctx.guild.id, ctx.author.id)]["game"] != "blackjack":
-            return
-
-        game = self.games[(ctx.guild.id, ctx.author.id)]
-
-        current_hand = game["player_hands"][game["current_hand"]]
-
-        if len(current_hand) != 2:
-            return
-
-        def card_value(rank):
-            return 10 if rank in ("10", "J", "Q", "K") else rank
-
-        if card_value(current_hand[0][0]) != card_value(current_hand[1][0]):
-            return
-
-        is_valid, error = await self.check_bet(ctx, game["bet"])
-        if not is_valid:
-            await ctx.send(error)
-            return
-
-        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -game["bet"])
-
-        card1 = current_hand[0]
-        card2 = current_hand[1]
-        idx = game["current_hand"]
-        original_bet = game["hand_bets"][idx]
-        game["player_hands"][idx:idx+1] = [
-            [card1, game["deck"].pop()],
-            [card2, game["deck"].pop()],
-        ]
-        game["hand_bets"][idx:idx+1] = [original_bet, original_bet]
-        game["current_hand"] = idx
-
-        embed = self.build_game_embed(game, "Split - Hand 1", discord.Color.blue())
-        await ctx.send(embed=embed)
-
-    @commands.command()
-    @require_channel("gambling_channel")
-    async def double(self, ctx):
-        """Double your bet and take exactly one more card. Only works during your turn in an active blackjack game and only if you have exactly 2 cards in your hand."""
-        if (ctx.guild.id, ctx.author.id) not in self.games or self.games[(ctx.guild.id, ctx.author.id)]["game"] != "blackjack":
-            return
-
-        if self.games[(ctx.guild.id, ctx.author.id)]["state"] != "player_turn":
-            return
-
-        game = self.games[(ctx.guild.id, ctx.author.id)]
-
-        if len(game["player_hands"][game["current_hand"]]) != 2:
-            return
-
-        is_valid, error = await self.check_bet(ctx, game["bet"])
-        if not is_valid:
-            await ctx.send(error)
-            return
-
-        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -game["bet"])
-        game["hand_bets"][game["current_hand"]] *= 2
-
-        game["player_hands"][game["current_hand"]].append(game["deck"].pop())
-        player_value = self.calculate_hand_value(game["player_hands"][game["current_hand"]])
-        hand_bet = game["hand_bets"][game["current_hand"]]
-
-        if player_value > 21:
-            embed = self.build_game_embed(game, "Double Down - Busted", discord.Color.red(), hide_dealer=False, result=-hand_bet)
-            await ctx.send(embed=embed)
-
-            game["current_hand"] += 1
-            if game["current_hand"] >= len(game["player_hands"]):
-                all_busted = all(
-                    self.calculate_hand_value(h) > 21 for h in game["player_hands"]
-                )
-                if all_busted:
-                    total_loss = -sum(game["hand_bets"])
-                    await add_transaction(self.pool, ctx.guild.id, ctx.author.id, total_loss, "blackjack_loss")
-                    del self.games[(ctx.guild.id, ctx.author.id)]
-                else:
-                    game["state"] = "dealer_turn"
-                    await self.dealer_turn(ctx, game)
-            return
-
-        embed = self.build_game_embed(game, "Double Down", discord.Color.orange())
-        await ctx.send(embed=embed)
-
-        game["current_hand"] += 1
-        if game["current_hand"] >= len(game["player_hands"]):
-            game["state"] = "dealer_turn"
-            await self.dealer_turn(ctx, game)
+        self.games.pop(key, None)
+        return total_result
 
     @commands.command()
     @require_channel("gambling_channel")
