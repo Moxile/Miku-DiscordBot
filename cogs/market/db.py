@@ -188,6 +188,33 @@ async def get_price_history(conn: Conn, guild_id: int, stock_channel_id: int,
     return list(reversed(rows))
 
 
+WINDOW_HISTORY_LIMIT = 250
+
+
+async def get_price_history_since(conn: Conn, guild_id: int, stock_channel_id: int,
+                                  since, limit: int = WINDOW_HISTORY_LIMIT):
+    """Return trades on/after `since` as (price, traded_at), oldest first (capped at `limit` most recent)."""
+    rows = await conn.fetch(
+        """SELECT price, traded_at FROM trade_history
+           WHERE guild_id = $1 AND stock_channel_id = $2 AND traded_at >= $3
+           ORDER BY traded_at DESC, id DESC
+           LIMIT $4""",
+        guild_id, stock_channel_id, since, limit,
+    )
+    return list(reversed(rows))
+
+
+async def get_last_trade_price_before(conn: Conn, guild_id: int, stock_channel_id: int, before):
+    """Price of the most recent trade strictly before `before`, or None — used to anchor a windowed chart."""
+    row = await conn.fetchrow(
+        """SELECT price FROM trade_history
+           WHERE guild_id = $1 AND stock_channel_id = $2 AND traded_at < $3
+           ORDER BY traded_at DESC, id DESC LIMIT 1""",
+        guild_id, stock_channel_id, before,
+    )
+    return row["price"] if row else None
+
+
 async def upsert_char_count(conn: Conn, guild_id: int, stock_channel_id: int,
                             user_id: int, activity_date, char_count: int):
     """Increment character count for a user in a company channel for a given date."""

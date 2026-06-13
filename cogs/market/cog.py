@@ -16,6 +16,7 @@ from cogs.market.db import (
     get_portfolio, lock_holding, update_holding,
     get_open_orders, get_open_orders_locked, get_user_orders, create_order, cancel_order, get_escrowed_shares,
     add_trade, get_last_trade_price, get_price_history, PRICE_HISTORY_LIMIT,
+    get_price_history_since, get_last_trade_price_before,
     lock_company,
     upsert_char_count, compute_daily_revenue,
     get_weekly_revenue, get_weekly_revenue_total,
@@ -34,6 +35,74 @@ from config import (
     DIVIDEND_PROFIT_SHARE,
     LEVEL_UP_TREASURY_CONSUME,
 )
+
+
+# Time windows offered by the price-chart buttons: key -> (button label, chart subtitle, days)
+CHART_WINDOWS = {
+    "daily": ("Daily", "Past 24 hours", 1),
+    "weekly": ("Weekly", "Past 7 days", 7),
+    "monthly": ("Monthly", "Past 30 days", 30),
+}
+
+
+class StockChartView(discord.ui.View):
+    """Buttons to switch a company's price chart between daily / weekly / monthly / all-time.
+
+    Re-renders the chart and swaps the embed image on each press; all rendering goes through
+    ``cog._render_window``. Anyone may toggle the view — it shows only public market data.
+    """
+
+    def __init__(self, cog, guild_id, channel, company, embed, *, current="all", timeout=180):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.channel = channel
+        self.company = company
+        self.embed = embed
+        self.current = current
+        self.message = None
+        self._sync_buttons()
+
+    def _sync_buttons(self):
+        self.daily_btn.disabled = self.current == "daily"
+        self.weekly_btn.disabled = self.current == "weekly"
+        self.monthly_btn.disabled = self.current == "monthly"
+        self.all_btn.disabled = self.current == "all"
+
+    async def _switch(self, interaction: discord.Interaction, key: str):
+        self.current = key
+        self._sync_buttons()
+        file = await self.cog._render_window(self.guild_id, self.channel, self.company, key)
+        if file is None:  # nothing to draw for this window
+            await interaction.response.defer()
+            return
+        self.embed.set_image(url=f"attachment://price_{key}.png")
+        await interaction.response.edit_message(attachments=[file], embed=self.embed, view=self)
+
+    @discord.ui.button(label="Daily", style=discord.ButtonStyle.secondary)
+    async def daily_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch(interaction, "daily")
+
+    @discord.ui.button(label="Weekly", style=discord.ButtonStyle.secondary)
+    async def weekly_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch(interaction, "weekly")
+
+    @discord.ui.button(label="Monthly", style=discord.ButtonStyle.secondary)
+    async def monthly_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch(interaction, "monthly")
+
+    @discord.ui.button(label="All", style=discord.ButtonStyle.primary)
+    async def all_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch(interaction, "all")
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class Market(commands.Cog):
@@ -522,6 +591,37 @@ class Market(commands.Cog):
         embed.set_footer(text=f"Total dividends received: {total:,}{MAIN_CURRENCY_EMOJI}")
         await ctx.send(embed=embed)
 
+    async def _render_window(self, guild_id, channel, company, key):
+        """Render the price chart for a window key ('daily'/'weekly'/'monthly'/'all').
+
+        Returns a discord.File named ``price_<key>.png``, or None when there is nothing to draw.
+        Windowed views anchor the line at the last price before the window (falling back to the
+        IPO price) so the chart spans the whole period even with few or no recent trades.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if key == "all":
+            history = await get_price_history(self.pool, guild_id, channel.id)
+            if not history:
+                return None
+            points = [(r["traded_at"], r["price"]) for r in history]
+            if len(history) < PRICE_HISTORY_LIMIT:
+                points.insert(0, (company["listed_at"], company["base_ipo_price"]))
+            period_label = "All time"
+        else:
+            _label, period_label, days = CHART_WINDOWS[key]
+            cutoff = max(now - datetime.timedelta(days=days), company["listed_at"])
+            rows = await get_price_history_since(self.pool, guild_id, channel.id, cutoff)
+            anchor = await get_last_trade_price_before(self.pool, guild_id, channel.id, cutoff)
+            if anchor is None:
+                anchor = company["base_ipo_price"]
+            points = [(cutoff, anchor)] + [(r["traded_at"], r["price"]) for r in rows]
+            if len(points) == 1:  # no trades in the window — draw a flat line across it
+                points.append((now, anchor))
+
+        loop = asyncio.get_running_loop()
+        buf = await loop.run_in_executor(None, render_price_chart, company["name"], points, period_label)
+        return discord.File(buf, filename=f"price_{key}.png")
+
     @commands.command(aliases=['ci', 'cinfo'])
     async def companyinfo(self, ctx, stock: discord.TextChannel):
         """Show detailed info about a company. Use with mentioning a stock channel."""
@@ -562,20 +662,15 @@ class Market(commands.Cog):
         embed.add_field(name="Level", value=str(company["company_level"]), inline=True)
         embed.add_field(name="Top Shareholders", value=owners_value, inline=False)
 
-        # Price-history chart from past trades, with the IPO price as the origin point
-        # (only when we have the company's full trade history, not just a recent window).
-        history = await get_price_history(self.pool, ctx.guild.id, stock.id)
-        file = None
-        if history:
-            points = [(r["traded_at"], r["price"]) for r in history]
-            if len(history) < PRICE_HISTORY_LIMIT:
-                points.insert(0, (company["listed_at"], company["base_ipo_price"]))
-            loop = asyncio.get_running_loop()
-            buf = await loop.run_in_executor(None, render_price_chart, company["name"], points)
-            file = discord.File(buf, filename="price.png")
-            embed.set_image(url="attachment://price.png")
+        # Price-history chart with daily / weekly / monthly / all-time toggle buttons.
+        file = await self._render_window(ctx.guild.id, stock, company, "all")
+        if file is None:  # never traded — nothing to chart yet
+            await ctx.send(embed=embed)
+            return
 
-        await ctx.send(embed=embed, file=file)
+        embed.set_image(url="attachment://price_all.png")
+        view = StockChartView(self, ctx.guild.id, stock, company, embed, current="all")
+        view.message = await ctx.send(embed=embed, file=file, view=view)
 
     @commands.command(aliases=['ob'])
     async def orderbook(self, ctx, stock: discord.TextChannel):

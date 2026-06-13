@@ -22,11 +22,12 @@ DOWN = (224, 84, 84)
 MARKER_RING = (255, 255, 255)
 
 
-def render_price_chart(name: str, points) -> io.BytesIO:
+def render_price_chart(name: str, points, period_label: str | None = None) -> io.BytesIO:
     """Render a price line chart to a PNG BytesIO.
 
     `points` is a chronological list of (datetime, price). The line is drawn green when the
-    latest price is at or above the first, red otherwise.
+    latest price is at or above the first, red otherwise. `period_label` (e.g. "Past 7 days")
+    is drawn as a small subtitle under the company name when provided.
     """
     w, h = WIDTH * SS, HEIGHT * SS
     ml, mr, mt, mb = ML * SS, MR * SS, MT * SS, MB * SS
@@ -93,7 +94,9 @@ def render_price_chart(name: str, points) -> io.BytesIO:
     # title (truncated if long) + current price / change on the right
     font_title = load_font(25 * SS)
     title = name if len(name) <= 26 else name[:25] + "…"
-    d.text((ml, 18 * SS), title, font=font_title, fill=TEXT)
+    d.text((ml, 14 * SS), title, font=font_title, fill=TEXT)
+    if period_label:
+        d.text((ml, 41 * SS), period_label, font=load_font(14 * SS), fill=SUBTEXT)
 
     chg = prices[-1] - prices[0]
     pct = (chg / prices[0] * 100) if prices[0] else 0
