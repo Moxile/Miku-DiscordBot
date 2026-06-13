@@ -13,6 +13,7 @@ from . import cards, coins, wheel, board
 
 
 BLACKJACK_TIMEOUT = 120
+BLACKJACK_SHOE_DECKS = 6  # number of 52-card decks in each guild's shared shoe
 
 
 def _card_value(rank):
@@ -284,8 +285,8 @@ class Gambling(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.games = {}
-        # Persistent blackjack shoes, keyed by (guild_id, user_id). A player's deck carries
-        # over between their games and is only reshuffled once it runs out (see _draw_card).
+        # One shared blackjack shoe per guild, keyed by guild_id. It carries over between
+        # games and across players and is only reshuffled once it runs out (see _draw_card).
         self.shoes = {}
 
     @property
@@ -461,10 +462,10 @@ class Gambling(commands.Cog):
 
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
 
-        shoe = self.shoes.get(key)
+        shoe = self.shoes.get(ctx.guild.id)
         if not shoe:
-            shoe = self.create_deck()
-            self.shoes[key] = shoe
+            shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
+            self.shoes[ctx.guild.id] = shoe
 
         self.games[key] = {
             "game": "blackjack",
@@ -504,7 +505,7 @@ class Gambling(commands.Cog):
         """Draw the top card of the shoe, shuffling in a fresh deck when it runs out."""
         deck = game["deck"]
         if not deck:
-            deck.extend(self.create_deck())
+            deck.extend(self.create_deck(BLACKJACK_SHOE_DECKS))
         return deck.pop()
 
     def deal_to_current(self, game):
