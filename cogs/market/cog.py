@@ -757,15 +757,20 @@ class Market(commands.Cog):
                 await ctx.send("The target yield must be greater than 0%.")
                 return
 
+        timed_out = False
         try:
-            # Step 1: small fixed sample → chars/message mean + std (≤ 2 API calls, always fast).
+            # Step 1: small fixed sample → chars/message mean + std + oldest timestamp (≤ 2 API calls).
             char_lengths: list[int] = []
+            sample_user_ids: set[int] = set()
+            oldest_ts = None
             async for message in channel.history(limit=100):
                 if message.author.bot:
                     continue
                 length = len(message.content)
                 if length > 0:
                     char_lengths.append(length)
+                    sample_user_ids.add(message.author.id)
+                    oldest_ts = message.created_at  # history() is newest-first, so last assigned = oldest
 
             if not char_lengths:
                 await ctx.send(
@@ -781,7 +786,9 @@ class Market(commands.Cog):
             cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
             msg_count = 0
             user_ids: set[int] = set()
-            async with ctx.typing():
+
+            async def _count_window():
+                nonlocal msg_count
                 async for message in channel.history(after=cutoff, limit=None):
                     if message.author.bot:
                         continue
@@ -789,6 +796,18 @@ class Market(commands.Cog):
                         continue
                     msg_count += 1
                     user_ids.add(message.author.id)
+
+            try:
+                async with ctx.typing():
+                    await asyncio.wait_for(_count_window(), timeout=30.0)
+            except asyncio.TimeoutError:
+                timed_out = True
+                # Fall back to estimating volume from the step-1 sample.
+                now = datetime.datetime.now(datetime.timezone.utc)
+                sample_span = max(1.0, (now - oldest_ts).total_seconds() / 86400)
+                msg_count = len(char_lengths)
+                user_ids = sample_user_ids
+                days = sample_span  # rescale denominator to match what we actually measured
 
         except discord.Forbidden:
             await ctx.send(f"I don't have permission to read history in {channel.mention}.")
@@ -810,10 +829,15 @@ class Market(commands.Cog):
         dps = rec["dps"]
 
         embed = discord.Embed(title=f"IPO recommendation — {channel.name}", color=discord.Color.gold())
+        if timed_out:
+            embed.description = (
+                "⚠️ Full window scan timed out — fell back to the sample of the last 100 messages. "
+                "Results may be less accurate; try a shorter time span for a full count."
+            )
         embed.add_field(
             name="Measured activity",
             value=(
-                f"{msg_count:,} messages · {users} user(s) · last {days} day(s)\n"
+                f"{msg_count:,} messages · {users} user(s) · last {days:.1f} day(s)\n"
                 f"~{msgs_per_user_per_day:.1f} msg/user/day · ~{mean_chars:.0f} chars/msg avg "
                 f"→ ~{mean:,.0f} chars/user/day"
             ),
