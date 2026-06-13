@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import secrets
+import statistics
 import time
 from collections import defaultdict
 
@@ -9,6 +10,7 @@ from discord.ext import commands, tasks
 
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction, lock_wallet
 from cogs.market.chart import render_price_chart
+from cogs.market.sim import recommend_ipo
 from cogs.market.db import (
     get_company, list_companies, create_company, delete_company,
     get_portfolio, lock_holding, update_holding,
@@ -630,6 +632,116 @@ class Market(commands.Cog):
         await create_company(self.pool, ctx.guild.id, stock.id, name, ctx.author.id, total_shares, ipo_price)
         self._company_channels.pop(ctx.guild.id, None)
         await ctx.send(f"**{name}** has been listed! {total_shares:,} shares available at {ipo_price:,}{MAIN_CURRENCY_EMOJI} each via IPO.")
+
+    @commands.command(aliases=['ipo'])
+    @commands.is_owner()
+    async def ipohelper(self, ctx, channel: discord.TextChannel, days: int = 14,
+                        total_shares: int = 10000, wish_pct: str = None):
+        """Admin: recommend an IPO price for a channel from its recent activity.
+
+        Reads the channel's last `days` days of messages, projects the weekly
+        dividend-per-share, and suggests IPO prices for several weekly dividend yields.
+        Optionally pass a target yield % as the final argument to highlight one price,
+        e.g. `.ipohelper #chan 14 10000 8` (8% weekly yield)."""
+        if not 1 <= days <= 90:
+            await ctx.send("`days` must be between 1 and 90.")
+            return
+        if total_shares <= 0:
+            await ctx.send("`total_shares` must be positive.")
+            return
+
+        wish = None
+        if wish_pct is not None:
+            try:
+                wish = float(wish_pct.strip().rstrip("%")) / 100
+            except ValueError:
+                await ctx.send(f"Couldn't read `{wish_pct}` as a percentage. Try e.g. `8` or `8%`.")
+                return
+            if wish <= 0:
+                await ctx.send("The target yield must be greater than 0%.")
+                return
+
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+        counts: dict[tuple, int] = defaultdict(int)
+        try:
+            async with ctx.typing():
+                async for message in channel.history(after=cutoff, limit=None):
+                    if message.author.bot:
+                        continue
+                    length = len(message.content)
+                    if length == 0:
+                        continue
+                    counts[(message.author.id, message.created_at.date())] += length
+        except discord.Forbidden:
+            await ctx.send(f"I don't have permission to read history in {channel.mention}.")
+            return
+
+        if not counts:
+            await ctx.send(
+                f"No measurable activity in {channel.mention} over the last {days} day(s) — "
+                f"can't estimate an IPO. Try a longer window or a busier channel."
+            )
+            return
+
+        # Activity profile for the simulator: average distinct posters per calendar day
+        # (dead days included, so inactivity is discounted) and the per-poster daily char totals.
+        daily_totals = list(counts.values())
+        active_days = len({d for (_uid, d) in counts})
+        users = max(1, round(len(counts) / days))
+        mean = statistics.fmean(daily_totals)
+        std = statistics.pstdev(daily_totals) if len(daily_totals) > 1 else 0.0
+
+        rec = recommend_ipo(users, mean, std, total_shares=total_shares)
+        dps = rec["dps"]
+
+        embed = discord.Embed(title=f"IPO recommendation — {channel.name}", color=discord.Color.gold())
+        embed.add_field(
+            name="Measured activity",
+            value=(
+                f"~{users} active user(s)/day · ~{mean:,.0f} chars/poster/day\n"
+                f"Active {active_days}/{days} day(s) in the lookback window"
+            ),
+            inline=False,
+        )
+
+        if dps <= 0:
+            embed.description = (
+                "Projected dividends are **0** at these settings — this activity wouldn't cover "
+                "weekly operating costs, so no IPO price yields income. Try a busier channel, a "
+                "longer lookback, or fewer total shares."
+            )
+            await ctx.send(embed=embed)
+            return
+
+        embed.add_field(
+            name="Projected dividend / share",
+            value=f"~{dps:,}{MAIN_CURRENCY_EMOJI} per week  (total_shares = {total_shares:,})",
+            inline=False,
+        )
+
+        table = ["```", f"{'Yield':>6}  {'IPO price':>11}  {'Payback':>9}"]
+        for row in rec["rows"]:
+            table.append(
+                f"{row['yield'] * 100:>5.0f}%  {row['ipo_price']:>11,}  {row['payback']:>4} wks"
+            )
+        table.append("```")
+        embed.add_field(
+            name=f"Weekly dividend yield → IPO price ({MAIN_CURRENCY_EMOJI})",
+            value="\n".join(table),
+            inline=False,
+        )
+
+        if wish is not None:
+            price = round(dps / wish)
+            payback = round(price / dps)
+            embed.add_field(
+                name=f"→ Your target {wish * 100:g}%",
+                value=f"List at **{price:,}{MAIN_CURRENCY_EMOJI}** / share  (~{payback} wks payback)",
+                inline=False,
+            )
+
+        embed.set_footer(text="Yield is dividend income only — capital gains from trading are not included.")
+        await ctx.send(embed=embed)
 
     @commands.command(aliases=['delist'])
     @commands.is_owner()

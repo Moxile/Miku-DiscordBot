@@ -14,7 +14,9 @@ REVENUE_BASE_MULTIPLIER = 800  # starting multiplier for level-0 companies
 REVENUE_INNER_EXP       = 0.25   # per-user char-count exponent
 REVENUE_OUTER_EXP       = 0.75   # outer exponent — diminishing returns on user count
 LEVEL_BASE_THRESHOLD    = 1_000_000
-COST_FACTOR             = 0.05
+COST_FACTOR             = 0.05    # lower bound of the weekly operating-cost rate
+COST_FACTOR_MEAN        = 0.075   # mean of the live 5–10% range; used by the simulator
+COST_FLOOR              = 5000    # minimum weekly operating cost
 DIVIDEND_PROFIT_SHARE   = Decimal("0.40")
 LEVEL_UP_TREASURY_CONSUME = 0.80
 
