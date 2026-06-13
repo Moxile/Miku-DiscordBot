@@ -217,6 +217,9 @@ class Waifu(commands.Cog):
         if recipient == ctx.author:
             await ctx.send("Just keep them yourself then!")
             return
+        if waifu == recipient:
+            await ctx.send("You can't gift someone to themselves.")
+            return
 
         async with self.pool.acquire() as conn:
             row = await get_waifu(conn, ctx.guild.id, waifu.id)
