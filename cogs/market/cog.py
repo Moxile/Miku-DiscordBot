@@ -734,10 +734,10 @@ class Market(commands.Cog):
                         total_shares: int = 10000, wish_pct: str = None):
         """Admin: recommend an IPO price for a channel from its recent activity.
 
-        Samples the last 200 messages to estimate activity (fast — always 2 API calls).
-        The `days` argument controls how far back the sample may span for rate estimation.
-        Suggests IPO prices for several weekly dividend yields. Optionally pass a target
-        yield % as the final argument to highlight one price,
+        Step 1: samples the last 100 messages for a representative chars/message mean (fast).
+        Step 2: counts all messages + distinct users in the last `days` days for accurate volume.
+        Combines both to project DPS and suggest IPO prices for several weekly dividend yields.
+        Optionally pass a target yield % last to highlight one price,
         e.g. `.ipohelper #chan 14 10000 8` (8% weekly yield)."""
         if not 1 <= days <= 90:
             await ctx.send("`days` must be between 1 and 90.")
@@ -757,47 +757,52 @@ class Market(commands.Cog):
                 await ctx.send("The target yield must be greater than 0%.")
                 return
 
-        # Sample the last SAMPLE_LIMIT messages (≤ 2 API calls, always fast).
-        # We derive chars/message mean+std from the sample, then scale to per-user-per-day
-        # by estimating how many messages a user posts per day over the lookback window.
-        SAMPLE_LIMIT = 200
-        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
-        char_lengths: list[int] = []
-        user_ids: set[int] = set()
-        oldest_ts = None
         try:
-            async for message in channel.history(limit=SAMPLE_LIMIT):
+            # Step 1: small fixed sample → chars/message mean + std (≤ 2 API calls, always fast).
+            char_lengths: list[int] = []
+            async for message in channel.history(limit=100):
                 if message.author.bot:
                     continue
                 length = len(message.content)
-                if length == 0:
-                    continue
-                char_lengths.append(length)
-                user_ids.add(message.author.id)
-                oldest_ts = message.created_at
+                if length > 0:
+                    char_lengths.append(length)
+
+            if not char_lengths:
+                await ctx.send(
+                    f"No measurable activity in {channel.mention} — "
+                    f"can't estimate an IPO. Try a busier channel."
+                )
+                return
+
+            mean_chars = statistics.fmean(char_lengths)
+            std_chars = statistics.pstdev(char_lengths) if len(char_lengths) > 1 else 0.0
+
+            # Step 2: full window → message count + distinct users (may be slow for busy channels).
+            cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+            msg_count = 0
+            user_ids: set[int] = set()
+            async with ctx.typing():
+                async for message in channel.history(after=cutoff, limit=None):
+                    if message.author.bot:
+                        continue
+                    if len(message.content) == 0:
+                        continue
+                    msg_count += 1
+                    user_ids.add(message.author.id)
+
         except discord.Forbidden:
             await ctx.send(f"I don't have permission to read history in {channel.mention}.")
             return
 
-        if not char_lengths:
+        if msg_count == 0:
             await ctx.send(
-                f"No measurable activity in {channel.mention} — "
-                f"can't estimate an IPO. Try a busier channel."
+                f"No messages found in {channel.mention} over the last {days} day(s) — "
+                f"try a longer window or a busier channel."
             )
             return
 
-        # Scale message rate to the lookback window.
-        # sample_span: how many days the sample actually covers (at least 1).
-        now = datetime.datetime.now(datetime.timezone.utc)
-        sample_span = max(1.0, (now - oldest_ts).total_seconds() / 86400)
-        msgs_per_day = len(char_lengths) / sample_span        # total messages/day across all users
         users = max(1, len(user_ids))
-        msgs_per_user_per_day = msgs_per_day / users          # average per active user
-
-        mean_chars = statistics.fmean(char_lengths)
-        std_chars = statistics.pstdev(char_lengths) if len(char_lengths) > 1 else 0.0
-
-        # The simulator expects chars per user per day, not per message — scale up.
+        msgs_per_user_per_day = msg_count / days / users
         mean = mean_chars * msgs_per_user_per_day
         std = std_chars * msgs_per_user_per_day
 
@@ -808,9 +813,9 @@ class Market(commands.Cog):
         embed.add_field(
             name="Measured activity",
             value=(
-                f"Sample: {len(char_lengths)} messages from {users} user(s) "
-                f"over ~{sample_span:.1f} day(s)\n"
-                f"~{msgs_per_user_per_day:.1f} msg/user/day · ~{mean:,.0f} chars/user/day"
+                f"{msg_count:,} messages · {users} user(s) · last {days} day(s)\n"
+                f"~{msgs_per_user_per_day:.1f} msg/user/day · ~{mean_chars:.0f} chars/msg avg "
+                f"→ ~{mean:,.0f} chars/user/day"
             ),
             inline=False,
         )
