@@ -172,6 +172,22 @@ async def get_last_trade_price(conn: Conn, guild_id: int, stock_channel_id: int)
     return row["price"] if row else None
 
 
+PRICE_HISTORY_LIMIT = 60
+
+
+async def get_price_history(conn: Conn, guild_id: int, stock_channel_id: int,
+                            limit: int = PRICE_HISTORY_LIMIT):
+    """Return up to `limit` most recent trades as (price, traded_at), oldest first."""
+    rows = await conn.fetch(
+        """SELECT price, traded_at FROM trade_history
+           WHERE guild_id = $1 AND stock_channel_id = $2
+           ORDER BY traded_at DESC, id DESC
+           LIMIT $3""",
+        guild_id, stock_channel_id, limit,
+    )
+    return list(reversed(rows))
+
+
 async def upsert_char_count(conn: Conn, guild_id: int, stock_channel_id: int,
                             user_id: int, activity_date, char_count: int):
     """Increment character count for a user in a company channel for a given date."""

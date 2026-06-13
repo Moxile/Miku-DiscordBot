@@ -8,11 +8,12 @@ import discord
 from discord.ext import commands, tasks
 
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction, lock_wallet
+from cogs.market.chart import render_price_chart
 from cogs.market.db import (
     get_company, list_companies, create_company, delete_company,
     get_portfolio, lock_holding, update_holding,
     get_open_orders, get_open_orders_locked, get_user_orders, create_order, cancel_order, get_escrowed_shares,
-    add_trade, get_last_trade_price,
+    add_trade, get_last_trade_price, get_price_history, PRICE_HISTORY_LIMIT,
     lock_company,
     upsert_char_count, compute_daily_revenue,
     get_weekly_revenue, get_weekly_revenue_total,
@@ -558,7 +559,21 @@ class Market(commands.Cog):
         embed.add_field(name="Treasury", value=f"{company['treasury']:,}{MAIN_CURRENCY_EMOJI}", inline=True)
         embed.add_field(name="Level", value=str(company["company_level"]), inline=True)
         embed.add_field(name="Top Shareholders", value=owners_value, inline=False)
-        await ctx.send(embed=embed)
+
+        # Price-history chart from past trades, with the IPO price as the origin point
+        # (only when we have the company's full trade history, not just a recent window).
+        history = await get_price_history(self.pool, ctx.guild.id, stock.id)
+        file = None
+        if history:
+            points = [(r["traded_at"], r["price"]) for r in history]
+            if len(history) < PRICE_HISTORY_LIMIT:
+                points.insert(0, (company["listed_at"], company["base_ipo_price"]))
+            loop = asyncio.get_running_loop()
+            buf = await loop.run_in_executor(None, render_price_chart, company["name"], points)
+            file = discord.File(buf, filename="price.png")
+            embed.set_image(url="attachment://price.png")
+
+        await ctx.send(embed=embed, file=file)
 
     @commands.command(aliases=['ob'])
     async def orderbook(self, ctx, stock: discord.TextChannel):
