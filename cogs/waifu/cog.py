@@ -10,7 +10,7 @@ from cogs.economy.db import ensure_wallet, lock_wallet, update_wallet, add_trans
 from cogs.waifu.db import (
     ensure_waifu, get_waifu, get_harem,
     set_waifu_owner, set_engagement, set_marriage, dissolve_marriage,
-    decay_waifu_values,
+    decay_waifu_values, remove_member_waifus,
 )
 from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
@@ -44,6 +44,13 @@ class Waifu(commands.Cog):
         if target <= now:
             target += timedelta(days=1)
         await discord.utils.sleep_until(target)
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Release/clean up waifu data when a member leaves, is kicked, or is banned."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await remove_member_waifus(conn, member.guild.id, member.id)
 
     # ── Helpers ──
 

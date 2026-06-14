@@ -6,7 +6,7 @@ from cogs.predictions.db import (
     create_prediction, get_prediction, get_prediction_options,
     get_option_totals, place_prediction_bet,
     close_prediction, resolve_prediction, get_winning_bets,
-    get_active_predictions,
+    get_active_predictions, remove_member_data,
 )
 from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
@@ -28,6 +28,13 @@ class Predictions(commands.Cog):
         if isinstance(error, UserLocked):
             return
         raise error
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Clean up prediction bets when a member leaves, is kicked, or is banned."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await remove_member_data(conn, member.guild.id, member.id)
 
     def can_create(self, ctx) -> bool:
         """Check if user is owner, admin, or has the predictor role."""

@@ -58,3 +58,17 @@ async def set_offer_status(conn: Conn, offer_id: int, status: str):
         "UPDATE offers SET status = $2, closed_at = NOW() WHERE id = $1",
         offer_id, status,
     )
+
+
+async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
+    """Delete a member's offer takes when they leave/are removed from the guild.
+
+    offer_takes has no guild_id, so scope through the parent offer. Offers they hosted
+    (offers.host_id) are left intact since other members may have taken them.
+    """
+    await conn.execute(
+        """DELETE FROM offer_takes
+           WHERE user_id = $2
+             AND offer_id IN (SELECT id FROM offers WHERE guild_id = $1)""",
+        guild_id, user_id,
+    )

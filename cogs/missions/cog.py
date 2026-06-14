@@ -6,7 +6,7 @@ from discord.ext import commands
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 from cogs.missions.db import (
     create_mission, get_missions, get_mission, get_mission_by_name,
-    add_funding, set_mission_status, delete_mission,
+    add_funding, set_mission_status, delete_mission, remove_member_data,
 )
 from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
@@ -93,6 +93,13 @@ class Missions(commands.Cog):
             return
         else:
             raise error
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Clean up mission contributions when a member leaves, is kicked, or is banned."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await remove_member_data(conn, member.guild.id, member.id)
 
     # ── Owner: manage missions ──
 

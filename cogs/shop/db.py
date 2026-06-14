@@ -56,3 +56,11 @@ async def add_to_inventory(conn: Conn, guild_id: int, user_id: int, item_id: int
            DO UPDATE SET quantity = inventory.quantity + $4""",
         guild_id, user_id, item_id, quantity,
     )
+
+
+async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
+    """Delete a member's inventory when they leave/are removed from the guild."""
+    await conn.execute(
+        "DELETE FROM inventory WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )

@@ -4,7 +4,7 @@ from discord.ext import commands
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 from cogs.shop.db import (
     create_item, delete_item, get_item_by_name, get_shop_items,
-    get_inventory, add_to_inventory,
+    get_inventory, add_to_inventory, remove_member_data,
 )
 from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
@@ -23,6 +23,13 @@ class Shop(commands.Cog):
         if isinstance(error, UserLocked):
             return
         raise error
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Clean up shop inventory when a member leaves, is kicked, or is banned."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await remove_member_data(conn, member.guild.id, member.id)
 
     @commands.command()
     async def shop(self, ctx):

@@ -34,6 +34,25 @@ SCHEMA = """
     );
 """
 
+MIGRATIONS = [
+    # Recreate the transactions -> balances FK with ON DELETE CASCADE so that deleting a
+    # member's balance also clears their transaction log. Without the cascade, the member
+    # cleanup in on_member_remove fails with an FK violation (any active member has rows
+    # in transactions), rolling back the whole cleanup and leaving them on the leaderboard.
+    # The original FK's name is auto-generated, so drop whatever FK is on the table by name.
+    """DO $$
+    DECLARE cname text;
+    BEGIN
+        SELECT conname INTO cname FROM pg_constraint
+        WHERE conrelid = 'transactions'::regclass AND contype = 'f';
+        IF cname IS NOT NULL THEN
+            EXECUTE 'ALTER TABLE transactions DROP CONSTRAINT ' || quote_ident(cname);
+        END IF;
+    END $$;""",
+    "ALTER TABLE transactions ADD CONSTRAINT transactions_balances_fkey "
+    "FOREIGN KEY (guild_id, user_id) REFERENCES balances(guild_id, user_id) ON DELETE CASCADE",
+]
+
 CONSTRAINTS = [
     "ALTER TABLE balances ADD CONSTRAINT wallet_non_negative CHECK (wallet >= 0)",
     "ALTER TABLE balances ADD CONSTRAINT bank_non_negative CHECK (bank >= 0)",

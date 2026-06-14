@@ -38,6 +38,25 @@ async def add_transaction(conn: Conn, guild_id: int, user_id: int, amount: int, 
     )
 
 
+async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
+    """Delete all economy data for a member who left/was removed from the guild.
+
+    Deleting the balance cascades to transactions (see economy.schema MIGRATIONS).
+    """
+    await conn.execute(
+        "DELETE FROM locked_users WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )
+    await conn.execute(
+        "DELETE FROM cooldowns WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )
+    await conn.execute(
+        "DELETE FROM balances WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )
+
+
 async def lock_wallet(conn: asyncpg.Connection, guild_id: int, user_id: int) -> asyncpg.Record:
     """Lock and return the user's balance row. Must be called within a transaction."""
     return await conn.fetchrow(

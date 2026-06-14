@@ -3,7 +3,7 @@ import math
 import discord
 from discord.ext import commands
 
-from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
+from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction, remove_member_data
 from cogs.market.db import remove_member_shares, create_company
 from core.money import parse_amount, AmountError
 from core.confirm import confirm
@@ -84,6 +84,13 @@ class Economy(commands.Cog):
         if isinstance(error, UserLocked):
             return
         raise error
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Clean up economy data when a member leaves, is kicked, or is banned."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await remove_member_data(conn, member.guild.id, member.id)
 
     @commands.command(aliases=["dep", "d"])
     @require_not_locked()

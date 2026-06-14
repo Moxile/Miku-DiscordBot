@@ -80,3 +80,15 @@ async def get_active_predictions(conn: Conn, guild_id: int):
         "SELECT * FROM predictions WHERE guild_id = $1 AND status IN ('open', 'closed') ORDER BY id",
         guild_id,
     )
+
+
+async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
+    """Delete a member's prediction bets when they leave/are removed from the guild.
+
+    Predictions they created (predictions.creator_id) are left intact since other members
+    may have bet on them.
+    """
+    await conn.execute(
+        "DELETE FROM prediction_bets WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )

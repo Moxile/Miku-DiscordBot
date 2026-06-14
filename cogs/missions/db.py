@@ -54,3 +54,11 @@ async def delete_mission(conn: Conn, guild_id: int, mission_id: int) -> str:
         "DELETE FROM missions WHERE id = $1 AND guild_id = $2",
         mission_id, guild_id,
     )
+
+
+async def remove_member_data(conn: Conn, guild_id: int, user_id: int) -> None:
+    """Delete a member's mission contributions when they leave/are removed from the guild."""
+    await conn.execute(
+        "DELETE FROM mission_contributions WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )

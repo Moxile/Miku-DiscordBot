@@ -4,7 +4,7 @@ from discord.ext import commands
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction, lock_wallet
 from cogs.offers.db import (
     create_offer, get_offer, lock_offer, get_active_offers, get_offer_takes,
-    add_offer_take, decrement_offer_pool, set_offer_status,
+    add_offer_take, decrement_offer_pool, set_offer_status, remove_member_data,
 )
 from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
@@ -33,6 +33,13 @@ class Offers(commands.Cog):
         if isinstance(error, UserLocked):
             return
         raise error
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Clean up offer takes when a member leaves, is kicked, or is banned."""
+        async with self.pool_conn.acquire() as conn:
+            async with conn.transaction():
+                await remove_member_data(conn, member.guild.id, member.id)
 
     async def _can_create(self, ctx) -> bool:
         """Admin or the configured predictor role (shared with Predictions cog)."""

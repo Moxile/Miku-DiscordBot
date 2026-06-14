@@ -171,13 +171,14 @@ class Market(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
+        # Balances/transactions cleanup is owned by the Economy cog's own listener.
         guild_id = member.guild.id
         user_id = member.id
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await remove_member_shares(conn, guild_id, user_id)
                 await conn.execute(
-                    "DELETE FROM balances WHERE guild_id = $1 AND user_id = $2",
+                    "DELETE FROM channel_activity WHERE guild_id = $1 AND user_id = $2",
                     guild_id, user_id,
                 )
 

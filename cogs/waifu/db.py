@@ -67,6 +67,28 @@ async def dissolve_marriage(conn: Conn, guild_id: int, user_a: int, user_b: int)
         )
 
 
+async def remove_member_waifus(conn: Conn, guild_id: int, user_id: int):
+    """Clean up waifu data when a member leaves/is removed from the guild.
+
+    Releases the waifus they owned (so they leave the harem leaderboard and become
+    claimable again), dissolves any marriage they were in, then deletes the row
+    representing them as a claimable waifu.
+    """
+    await conn.execute(
+        "UPDATE waifus SET owner_id = NULL WHERE guild_id = $1 AND owner_id = $2",
+        guild_id, user_id,
+    )
+    await conn.execute(
+        "UPDATE waifus SET spouse_id = NULL, engaged_since = NULL "
+        "WHERE guild_id = $1 AND spouse_id = $2",
+        guild_id, user_id,
+    )
+    await conn.execute(
+        "DELETE FROM waifus WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )
+
+
 async def decay_waifu_values(conn: Conn, base_value: int, decay_rate: float):
     """Decay all waifu values above base toward base by decay_rate percent of the excess."""
     await conn.execute(
