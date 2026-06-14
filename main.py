@@ -13,6 +13,7 @@ from core.help import Help
 load_dotenv()
 
 EXTENSIONS = [
+    "cogs.management",
     "cogs.moderation",
     "cogs.economy",
     "cogs.gambling",
@@ -43,6 +44,22 @@ class MikuBot(commands.Bot):
         super().__init__(command_prefix=PREFIX, intents=intents)
         self.pool: asyncpg.Pool | None = None
         self.oauth_runner: web.AppRunner | None = None
+        self._disabled_cogs_cache: dict[int, set[str]] = {}
+
+    async def _is_cog_disabled(self, guild_id: int, cog_name: str) -> bool:
+        if guild_id not in self._disabled_cogs_cache:
+            rows = await self.pool.fetch(
+                "SELECT cog_name FROM disabled_cogs WHERE guild_id = $1", guild_id
+            )
+            self._disabled_cogs_cache[guild_id] = {row["cog_name"] for row in rows}
+        return cog_name in self._disabled_cogs_cache[guild_id]
+
+    async def invoke(self, ctx: commands.Context):
+        if ctx.command and ctx.cog and ctx.guild:
+            cog_name = ctx.cog.__class__.__name__
+            if cog_name != "Management" and await self._is_cog_disabled(ctx.guild.id, cog_name):
+                return
+        await super().invoke(ctx)
 
     async def setup_hook(self):
         self.pool = await asyncpg.create_pool(
