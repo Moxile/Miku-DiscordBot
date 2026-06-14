@@ -159,7 +159,7 @@ class BlackjackView(discord.ui.View):
 
 # ── Roulette ──
 
-ROULETTE_WINDOW = 30  # seconds until the wheel spins; each new bet pushes the deadline back
+ROULETTE_WINDOW = 10  # seconds until the wheel spins; each new bet pushes the deadline back
 OUTSIDE_BETS = [
     ("red", "Red"), ("black", "Black"), ("odd", "Odd"), ("even", "Even"),
     ("low", "Low (1–18)"), ("high", "High (19–36)"),
@@ -168,114 +168,11 @@ OUTSIDE_BETS = [
 ]
 _OUTSIDE_LABELS = dict(OUTSIDE_BETS)
 
-# Which row each outside-bet button sits on in a player's panel, and its button colour.
-_BET_ROWS = {
-    "red": 0, "black": 0, "odd": 0, "even": 0,
-    "low": 1, "high": 1,
-    "dozen1": 2, "dozen2": 2, "dozen3": 2,
-    "col1": 3, "col2": 3, "col3": 3,
-}
-_BET_STYLES = {
-    "red": discord.ButtonStyle.danger,
-    "black": discord.ButtonStyle.secondary,
-}
-
 
 def _bet_label(choice):
     if choice.isdigit():
         return f"Number {choice}"
     return _OUTSIDE_LABELS.get(choice, choice.title())
-
-
-class RouletteBetModal(discord.ui.Modal):
-    """Asks the stake for a single outside bet, then places it."""
-    amount = discord.ui.TextInput(label="Amount", placeholder="e.g. 250 or 'all'", max_length=20)
-
-    def __init__(self, cog, key, choice):
-        super().__init__(title=f"Bet on {_bet_label(choice)}"[:45])
-        self.cog = cog
-        self.key = key
-        self.choice = choice
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await self.cog.place_roulette_bet(interaction, self.key, self.choice, str(self.amount))
-
-
-class RouletteNumberModal(discord.ui.Modal, title="Straight-up number bet"):
-    """Asks for a single number (0–36) and the stake, then places the bet."""
-    number = discord.ui.TextInput(label="Number (0–36)", placeholder="e.g. 17", max_length=2)
-    amount = discord.ui.TextInput(label="Amount", placeholder="e.g. 250 or 'all'", max_length=20)
-
-    def __init__(self, cog, key):
-        super().__init__()
-        self.cog = cog
-        self.key = key
-
-    async def on_submit(self, interaction: discord.Interaction):
-        raw = str(self.number).strip()
-        if not raw.isdigit() or not (0 <= int(raw) <= 36):
-            await interaction.response.send_message("Please enter a whole number from 0 to 36.", ephemeral=True)
-            return
-        await self.cog.place_roulette_bet(interaction, self.key, str(int(raw)), str(self.amount))
-
-
-class _OutsideBetButton(discord.ui.Button):
-    def __init__(self, cog, key, choice, label):
-        super().__init__(label=label, row=_BET_ROWS[choice],
-                         style=_BET_STYLES.get(choice, discord.ButtonStyle.primary))
-        self.cog = cog
-        self.key = key
-        self.choice = choice
-
-    async def callback(self, interaction: discord.Interaction):
-        if self.cog.roulette_closed(self.key):
-            await interaction.response.send_message("This roulette table has already closed.", ephemeral=True)
-            return
-        await interaction.response.send_modal(RouletteBetModal(self.cog, self.key, self.choice))
-
-
-class _NumberBetButton(discord.ui.Button):
-    def __init__(self, cog, key):
-        super().__init__(label="Number…", emoji="🔢", style=discord.ButtonStyle.primary, row=4)
-        self.cog = cog
-        self.key = key
-
-    async def callback(self, interaction: discord.Interaction):
-        if self.cog.roulette_closed(self.key):
-            await interaction.response.send_message("This roulette table has already closed.", ephemeral=True)
-            return
-        await interaction.response.send_modal(RouletteNumberModal(self.cog, self.key))
-
-
-class RoulettePanelView(discord.ui.View):
-    """A player's private (ephemeral) betting panel: one button per outside bet plus a
-    number button. Each press opens a modal that asks for the stake."""
-
-    def __init__(self, cog, key):
-        super().__init__(timeout=None)
-        for choice, label in OUTSIDE_BETS:
-            self.add_item(_OutsideBetButton(cog, key, choice, label))
-        self.add_item(_NumberBetButton(cog, key))
-
-
-class RouletteBoardView(discord.ui.View):
-    """The public table: the board image plus a single button each player presses to open
-    their own private betting panel. Anyone in the channel may bet."""
-
-    def __init__(self, cog, key):
-        super().__init__(timeout=None)
-        self.cog = cog
-        self.key = key
-        self.message = None
-
-    @discord.ui.button(label="Place bets", emoji="🎰", style=discord.ButtonStyle.success)
-    async def place_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.cog.roulette_closed(self.key):
-            await interaction.response.send_message("This roulette table has already closed.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            "Pick a bet below — you'll be asked for the amount each time.",
-            view=RoulettePanelView(self.cog, self.key), ephemeral=True)
 
 
 class Gambling(commands.Cog):
@@ -604,44 +501,73 @@ class Gambling(commands.Cog):
 
     @commands.command()
     @require_channel("gambling_channel")
-    async def roulette(self, ctx):
-        """Open an interactive roulette table. A public board appears with a 🎰 Place bets button — press it for your own private panel, pick a bet, and enter a stake. The wheel spins on a countdown that each new bet pushes back."""
+    async def roulette(self, ctx, option: str, bet: str):
+        """Place a bet on the roulette table. Usage: .roulette <option> <amount>. Options: red, black, odd, even, low, high, dozen1-3, col1-3, or a number 0–36. The wheel spins 10 seconds after the last bet."""
+        _valid_outside = {k for k, _ in OUTSIDE_BETS}
+        if option.isdigit():
+            n = int(option)
+            if not (0 <= n <= 36):
+                await ctx.send("Number must be between 0 and 36.")
+                return
+            choice = str(n)
+        elif option in _valid_outside:
+            choice = option
+        else:
+            outside_list = ", ".join(k for k, _ in OUTSIDE_BETS)
+            await ctx.send(f"Invalid option. Choose from: {outside_list}, or a number 0–36.")
+            return
+
+        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        try:
+            amount = parse_amount(bet, wallet_balance=wallet["wallet"])
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
+        if amount <= 0:
+            await ctx.send("Please enter a positive amount.")
+            return
+        if wallet["wallet"] < amount:
+            await ctx.send(f"You don't have enough {CURRENCY_NAME} for a {amount}{MAIN_CURRENCY_EMOJI} bet.")
+            return
+
         key = ("roulette", ctx.channel.id)
         existing = self.games.get(key)
         if existing and not existing.get("spun"):
-            msg = existing.get("message")
-            where = msg.jump_url if msg else "above"
-            await ctx.send(f"A roulette table is already open in this channel — press 🎰 **Place bets** there: {where}")
-            return
+            game = existing
+        else:
+            game = {
+                "game": "roulette",
+                "guild_id": ctx.guild.id,
+                "channel_id": ctx.channel.id,
+                "opener_id": ctx.author.id,
+                "bets": {},
+                "message": None,
+                "spun": False,
+                "deadline": time.time() + ROULETTE_WINDOW,
+            }
+            self.games[key] = game
+            embed = self.build_roulette_embed(game, ctx.guild)
+            file = discord.File(board.render_board(), filename="board.png")
+            message = await ctx.send(embed=embed, file=file)
+            game["message"] = message
+            game["timer"] = asyncio.create_task(self._roulette_timer(key))
 
-        game = {
-            "game": "roulette",
-            "guild_id": ctx.guild.id,
-            "channel_id": ctx.channel.id,
-            "opener_id": ctx.author.id,
-            "bets": {},
-            "message": None,
-            "view": None,
-            "spun": False,
-            "deadline": time.time() + ROULETTE_WINDOW,
-        }
-        self.games[key] = game
-
-        view = RouletteBoardView(self, key)
-        game["view"] = view
-        embed = self.build_roulette_embed(game, ctx.guild)
-        file = discord.File(board.render_board(), filename="board.png")
-        message = await ctx.send(embed=embed, file=file, view=view)
-        game["message"] = message
-        view.message = message
-        game["timer"] = asyncio.create_task(self._roulette_timer(key))
+        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -amount)
+        game["bets"].setdefault(ctx.author.id, []).append((choice, amount))
+        game["deadline"] = time.time() + ROULETTE_WINDOW
+        await self._refresh_roulette_board(game)
+        await ctx.send(
+            f"Placed **{amount}{MAIN_CURRENCY_EMOJI}** on **{_bet_label(choice)}**. "
+            f"Spinning <t:{int(game['deadline'])}:R>.",
+            delete_after=8,
+        )
 
     def build_roulette_embed(self, game, guild):
         embed = discord.Embed(title="🎡 Roulette — place your bets!", color=discord.Color.dark_green())
         deadline = int(game["deadline"])
         embed.description = (
             f"Spinning <t:{deadline}:R> — each new bet pushes the timer back.\n"
-            f"Press 🎰 **Place bets** to open your private betting panel."
+            f"Use `.roulette <option> <amount>` to place a bet."
         )
         if any(game["bets"].values()):
             lines = []
@@ -655,38 +581,6 @@ class Gambling(commands.Cog):
         embed.set_image(url="attachment://board.png")
         return embed
 
-    def roulette_closed(self, key):
-        game = self.games.get(key)
-        return not game or game.get("spun")
-
-    async def place_roulette_bet(self, interaction, key, choice, amount_text):
-        game = self.games.get(key)
-        if not game or game.get("spun"):
-            await interaction.response.send_message("This roulette table has already closed.", ephemeral=True)
-            return
-        uid = interaction.user.id
-        guild_id = game["guild_id"]
-        wallet = await ensure_wallet(self.pool, guild_id, uid)
-        try:
-            amount = parse_amount(amount_text, wallet_balance=wallet["wallet"])
-        except AmountError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-            return
-        if amount <= 0:
-            await interaction.response.send_message("Please enter a positive amount.", ephemeral=True)
-            return
-        if wallet["wallet"] < amount:
-            await interaction.response.send_message(
-                f"You don't have enough {CURRENCY_NAME} for a {amount}{MAIN_CURRENCY_EMOJI} bet.", ephemeral=True)
-            return
-        await update_wallet(self.pool, guild_id, uid, -amount)
-        game["bets"].setdefault(uid, []).append((choice, amount))
-        game["deadline"] = time.time() + ROULETTE_WINDOW
-        await self._refresh_roulette_board(game)
-        await interaction.response.send_message(
-            f"Placed **{amount}{MAIN_CURRENCY_EMOJI}** on **{_bet_label(choice)}**. "
-            f"Spinning <t:{int(game['deadline'])}:R>.", ephemeral=True)
-
     async def _refresh_roulette_board(self, game):
         message = game.get("message")
         if message is None:
@@ -694,7 +588,7 @@ class Gambling(commands.Cog):
         guild = self.bot.get_guild(game["guild_id"])
         embed = self.build_roulette_embed(game, guild)
         try:
-            await message.edit(embed=embed, view=game.get("view"))
+            await message.edit(embed=embed)
         except discord.HTTPException:
             pass
 
@@ -715,7 +609,6 @@ class Gambling(commands.Cog):
         if not game or game.get("spun"):
             return
         game["spun"] = True
-        view = game.get("view")
         message = game.get("message")
         guild = self.bot.get_guild(game["guild_id"])
 
@@ -752,14 +645,12 @@ class Gambling(commands.Cog):
         buf = await loop.run_in_executor(None, wheel.render_wheel, result)
         embed.set_image(url="attachment://wheel.png")
 
-        if view:
-            view.stop()
         self.games.pop(key, None)
 
         if message is None:
             return
         try:
-            await message.edit(embed=embed, attachments=[discord.File(buf, filename="wheel.png")], view=None)
+            await message.edit(embed=embed, attachments=[discord.File(buf, filename="wheel.png")])
         except discord.HTTPException:
             buf.seek(0)
             await message.channel.send(embed=embed, file=discord.File(buf, filename="wheel.png"))
