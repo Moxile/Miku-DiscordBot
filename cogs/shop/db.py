@@ -28,6 +28,14 @@ async def get_item_by_name(conn: Conn, guild_id: int, name: str):
     )
 
 
+async def get_item_by_id(conn: Conn, guild_id: int, item_id: int):
+    """Get an available shop item by id (used to re-validate before a button purchase)."""
+    return await conn.fetchrow(
+        "SELECT * FROM items WHERE guild_id = $1 AND id = $2 AND is_available = TRUE",
+        guild_id, item_id,
+    )
+
+
 async def get_shop_items(conn: Conn, guild_id: int):
     """Get all available shop items for a guild."""
     return await conn.fetch(

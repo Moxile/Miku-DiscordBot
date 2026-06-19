@@ -1,19 +1,153 @@
+import math
+
 import discord
 from discord.ext import commands, tasks
 
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 from cogs.shop.db import (
-    create_item, delete_item, get_item_by_name, get_shop_items,
+    create_item, delete_item, get_item_by_name, get_item_by_id, get_shop_items,
     get_inventory, add_to_inventory, remove_member_data,
     grant_temp_role, get_expired_temp_roles, delete_temp_role,
 )
-from core.checks import require_not_locked, UserLocked
+from core.checks import require_not_locked, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from core.time_utils import parse_duration, humanize_duration
 from config import MAIN_CURRENCY_EMOJI
 
 SHOP_COLOR = discord.Color.from_rgb(57, 197, 187)  # Miku teal
 MIN_TEMP_ROLE_SECONDS = 60
+SHOP_ITEMS_PER_PAGE = 5  # one row of buy buttons per page (Discord caps a row at 5)
+
+
+def _is_role_item(item) -> bool:
+    return item["item_type"] == "role" and bool(item["role_given"])
+
+
+def _item_field(guild: discord.Guild, item):
+    """Build the (name, value) for one shop item's embed field."""
+    emoji = "🎭" if _is_role_item(item) else "📦"
+    name = f"{emoji} {item['name']} — {item['price']:,}{MAIN_CURRENCY_EMOJI}"
+
+    lines = []
+    if _is_role_item(item):
+        role = guild.get_role(item["role_given"])
+        meta = [f"Grants {role.mention}"] if role else []
+        meta.append(
+            f"⏳ {humanize_duration(item['role_duration'], short=True)}"
+            if item["role_duration"] else "Permanent"
+        )
+        lines.append(" · ".join(meta))
+    if item["description"]:
+        lines.append(item["description"])
+    return name, "\n".join(lines) or "No description"
+
+
+class ShopView(discord.ui.View):
+    """Interactive store: a buy button per item on the current page, plus
+    Previous/Next pagination. Anyone can use it — buying replies privately to
+    the clicker; paging updates the shared message."""
+
+    def __init__(self, cog: "Shop", guild: discord.Guild, items, *,
+                 per_page: int = SHOP_ITEMS_PER_PAGE, timeout: float = 180):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.guild = guild
+        self.items = items
+        self.per_page = per_page
+        self.page = 0
+        self.message: discord.Message | None = None
+        self._render()
+
+    @property
+    def total_pages(self) -> int:
+        return max(1, math.ceil(len(self.items) / self.per_page))
+
+    def _page_items(self):
+        start = self.page * self.per_page
+        return self.items[start:start + self.per_page]
+
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"🌸 {self.guild.name} Shop",
+            description="Click a button below to buy, or use `.buy <name>`.",
+            color=SHOP_COLOR,
+        )
+        if self.guild.icon:
+            embed.set_thumbnail(url=self.guild.icon.url)
+        for item in self._page_items():
+            field_name, field_value = _item_field(self.guild, item)
+            embed.add_field(name=field_name, value=field_value, inline=False)
+        footer = "Use .buy <name> to purchase"
+        if self.total_pages > 1:
+            footer = f"Page {self.page + 1}/{self.total_pages} • {footer}"
+        embed.set_footer(text=footer)
+        return embed
+
+    def _render(self) -> None:
+        """Rebuild the buttons for the current page."""
+        self.clear_items()
+        page_items = self._page_items()
+        for idx, item in enumerate(page_items):
+            price = f" · {item['price']:,}"
+            label = item["name"][:80 - len(price)] + price
+            btn = discord.ui.Button(
+                label=label,
+                emoji="🎭" if _is_role_item(item) else "📦",
+                style=discord.ButtonStyle.success,
+                row=idx // 5,
+                custom_id=f"shop_buy:{item['id']}",
+            )
+            btn.callback = self._make_buy_callback(item["id"])
+            self.add_item(btn)
+
+        if self.total_pages > 1:
+            nav_row = (self.per_page - 1) // 5 + 1
+            prev_btn = discord.ui.Button(
+                label="Previous", emoji="◀", style=discord.ButtonStyle.secondary,
+                row=nav_row, disabled=self.page == 0, custom_id="shop_prev",
+            )
+            next_btn = discord.ui.Button(
+                label="Next", emoji="▶", style=discord.ButtonStyle.secondary,
+                row=nav_row, disabled=self.page >= self.total_pages - 1, custom_id="shop_next",
+            )
+            prev_btn.callback = self._prev
+            next_btn.callback = self._next
+            self.add_item(prev_btn)
+            self.add_item(next_btn)
+
+    def _make_buy_callback(self, item_id: int):
+        async def callback(interaction: discord.Interaction):
+            item = await get_item_by_id(self.cog.pool, self.guild.id, item_id)
+            if not item:
+                await interaction.response.send_message(
+                    "That item is no longer available.", ephemeral=True)
+                return
+            if await user_is_locked(self.cog.pool, self.guild.id, interaction.user.id):
+                await interaction.response.send_message(
+                    "You're locked out of the economy.", ephemeral=True)
+                return
+            _, message = await self.cog._purchase(self.guild, interaction.user, item)
+            await interaction.response.send_message(message, ephemeral=True)
+        return callback
+
+    async def _prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._render()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _next(self, interaction: discord.Interaction):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._render()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class Shop(commands.Cog):
@@ -62,24 +196,40 @@ class Shop(commands.Cog):
             async with conn.transaction():
                 await remove_member_data(conn, member.guild.id, member.id)
 
-    def _item_field(self, ctx, item):
-        """Build the (name, value) for one shop item's embed field."""
-        is_role = item["item_type"] == "role" and item["role_given"]
-        emoji = "🎭" if is_role else "📦"
-        name = f"{emoji} {item['name']} — {item['price']:,}{MAIN_CURRENCY_EMOJI}"
+    async def _purchase(self, guild: discord.Guild, member: discord.Member, item):
+        """Run a purchase for `member`. Returns (success, message).
 
-        lines = []
-        if is_role:
-            role = ctx.guild.get_role(item["role_given"])
-            meta = [f"Grants {role.mention}"] if role else []
+        Shared by the `.buy` command and the shop buy buttons. For role items the
+        role is assigned before charging, so a failed grant never costs Flowers.
+        """
+        wallet = await ensure_wallet(self.pool, guild.id, member.id)
+        if wallet["wallet"] < item["price"]:
+            return False, f"You don't have enough! You need {item['price']:,}{MAIN_CURRENCY_EMOJI}."
+
+        if item["item_type"] == "role" and item["role_given"]:
+            role = guild.get_role(item["role_given"])
+            if not role:
+                return False, "The role for this item no longer exists."
+            # Permanent role items keep the original "already owned" guard.
+            # Temporary roles can always be re-bought to extend the timer.
+            if not item["role_duration"] and role in member.roles:
+                return False, "You already have this role!"
+            try:
+                await member.add_roles(role, reason="Shop purchase")
+            except discord.Forbidden:
+                return False, "I couldn't assign that role — check my permissions and role position."
+            await update_wallet(self.pool, guild.id, member.id, -item["price"])
+            await add_transaction(self.pool, guild.id, member.id, -item["price"], "shop_buy", f"Bought {item['name']}")
             if item["role_duration"]:
-                meta.append(f"⏳ {humanize_duration(item['role_duration'], short=True)}")
-            else:
-                meta.append("Permanent")
-            lines.append(" · ".join(meta))
-        if item["description"]:
-            lines.append(item["description"])
-        return name, "\n".join(lines) or "No description"
+                expires = await grant_temp_role(self.pool, guild.id, member.id, role.id, item["role_duration"])
+                return True, (f"You bought **{item['name']}** — you have {role.mention} until "
+                              f"<t:{int(expires.timestamp())}:R>.")
+            return True, f"You bought **{item['name']}** and received the {role.mention} role!"
+
+        await update_wallet(self.pool, guild.id, member.id, -item["price"])
+        await add_transaction(self.pool, guild.id, member.id, -item["price"], "shop_buy", f"Bought {item['name']}")
+        await add_to_inventory(self.pool, guild.id, member.id, item["id"])
+        return True, f"You bought **{item['name']}** for {item['price']:,}{MAIN_CURRENCY_EMOJI}!"
 
     @commands.command()
     async def shop(self, ctx):
@@ -89,18 +239,12 @@ class Shop(commands.Cog):
             await ctx.send("The shop is empty!")
             return
 
-        # Roles first, then other goods; each item gets its own field.
-        roles = [i for i in items if i["item_type"] == "role" and i["role_given"]]
-        goods = [i for i in items if i not in roles]
+        # Roles first, then other goods, so the interactive store lists them grouped.
+        roles = [i for i in items if _is_role_item(i)]
+        goods = [i for i in items if not _is_role_item(i)]
 
-        embed = discord.Embed(title=f"🌸 {ctx.guild.name} Shop", color=SHOP_COLOR)
-        if ctx.guild.icon:
-            embed.set_thumbnail(url=ctx.guild.icon.url)
-        for item in roles + goods:
-            field_name, field_value = self._item_field(ctx, item)
-            embed.add_field(name=field_name, value=field_value, inline=False)
-        embed.set_footer(text="Use .buy <name> to purchase")
-        await ctx.send(embed=embed)
+        view = ShopView(self, ctx.guild, roles + goods)
+        view.message = await ctx.send(embed=view.build_embed(), view=view)
 
     @commands.command()
     @require_not_locked()
@@ -110,41 +254,8 @@ class Shop(commands.Cog):
         if not item:
             await ctx.send("Item not found in the shop.")
             return
-
-        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-        if wallet["wallet"] < item["price"]:
-            await ctx.send(f"You don't have enough! You need {item['price']}{MAIN_CURRENCY_EMOJI}.")
-            return
-
-        if item["item_type"] == "role" and item["role_given"]:
-            role = ctx.guild.get_role(item["role_given"])
-            if not role:
-                await ctx.send("The role for this item no longer exists.")
-                return
-            # Permanent role items keep the original "already owned" guard.
-            # Temporary roles can always be re-bought to extend the timer.
-            if not item["role_duration"] and role in ctx.author.roles:
-                await ctx.send("You already have this role!")
-                return
-            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -item["price"])
-            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, -item["price"], "shop_buy", f"Bought {item['name']}")
-            await ctx.author.add_roles(role)
-            if item["role_duration"]:
-                expires = await grant_temp_role(
-                    self.pool, ctx.guild.id, ctx.author.id, role.id, item["role_duration"],
-                )
-                await ctx.send(
-                    f"You bought **{item['name']}** — you have {role.mention} until "
-                    f"<t:{int(expires.timestamp())}:R>."
-                )
-            else:
-                await ctx.send(f"You bought **{item['name']}** and received the {role.mention} role!")
-            return
-
-        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -item["price"])
-        await add_transaction(self.pool, ctx.guild.id, ctx.author.id, -item["price"], "shop_buy", f"Bought {item['name']}")
-        await add_to_inventory(self.pool, ctx.guild.id, ctx.author.id, item["id"])
-        await ctx.send(f"You bought **{item['name']}** for {item['price']}{MAIN_CURRENCY_EMOJI}!")
+        _, message = await self._purchase(ctx.guild, ctx.author, item)
+        await ctx.send(message)
 
     @commands.command(aliases=["inv"])
     async def inventory(self, ctx, member: discord.Member = None):
