@@ -62,19 +62,24 @@ class Shop(commands.Cog):
             async with conn.transaction():
                 await remove_member_data(conn, member.guild.id, member.id)
 
-    def _shop_line(self, ctx, item) -> str:
-        """Format one shop item as a markdown line for the grouped shop embed."""
-        parts = [f"**{item['name']}** · {item['price']:,}{MAIN_CURRENCY_EMOJI}"]
-        if item["item_type"] == "role" and item["role_given"]:
+    def _item_field(self, ctx, item):
+        """Build the (name, value) for one shop item's embed field."""
+        is_role = item["item_type"] == "role" and item["role_given"]
+        emoji = "🎭" if is_role else "📦"
+        name = f"{emoji} {item['name']} — {item['price']:,}{MAIN_CURRENCY_EMOJI}"
+
+        lines = []
+        if is_role:
             role = ctx.guild.get_role(item["role_given"])
-            if role:
-                parts.append(role.mention)
+            meta = [f"Grants {role.mention}"] if role else []
             if item["role_duration"]:
-                parts.append(f"⏳ {humanize_duration(item['role_duration'], short=True)}")
-        line = " · ".join(parts)
+                meta.append(f"⏳ {humanize_duration(item['role_duration'], short=True)}")
+            else:
+                meta.append("Permanent")
+            lines.append(" · ".join(meta))
         if item["description"]:
-            line += f"\n   {item['description']}"
-        return line
+            lines.append(item["description"])
+        return name, "\n".join(lines) or "No description"
 
     @commands.command()
     async def shop(self, ctx):
@@ -84,22 +89,16 @@ class Shop(commands.Cog):
             await ctx.send("The shop is empty!")
             return
 
+        # Roles first, then other goods; each item gets its own field.
         roles = [i for i in items if i["item_type"] == "role" and i["role_given"]]
         goods = [i for i in items if i not in roles]
 
-        sections = []
-        if roles:
-            sections.append("🎭 **Roles**\n" + "\n".join(self._shop_line(ctx, i) for i in roles))
-        if goods:
-            sections.append("📦 **Items**\n" + "\n".join(self._shop_line(ctx, i) for i in goods))
-
-        embed = discord.Embed(
-            title=f"🌸 {ctx.guild.name} Shop",
-            description="\n\n".join(sections),
-            color=SHOP_COLOR,
-        )
+        embed = discord.Embed(title=f"🌸 {ctx.guild.name} Shop", color=SHOP_COLOR)
         if ctx.guild.icon:
             embed.set_thumbnail(url=ctx.guild.icon.url)
+        for item in roles + goods:
+            field_name, field_value = self._item_field(ctx, item)
+            embed.add_field(name=field_name, value=field_value, inline=False)
         embed.set_footer(text="Use .buy <name> to purchase")
         await ctx.send(embed=embed)
 
