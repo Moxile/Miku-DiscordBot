@@ -23,29 +23,31 @@ def _is_role_item(item) -> bool:
     return item["item_type"] == "role" and bool(item["role_given"])
 
 
-def _item_field(guild: discord.Guild, item):
-    """Build the (name, value) for one shop item's embed field."""
-    emoji = "🎭" if _is_role_item(item) else "📦"
-    name = f"{emoji} {item['name']} — {item['price']:,}{MAIN_CURRENCY_EMOJI}"
-
-    lines = []
+def _item_text(guild: discord.Guild, item) -> str:
+    """Markdown body for one item's card (the left side of a Section)."""
     if _is_role_item(item):
         role = guild.get_role(item["role_given"])
-        meta = [f"Grants {role.mention}"] if role else []
-        meta.append(
-            f"⏳ {humanize_duration(item['role_duration'], short=True)}"
+        bits = [f"🎭 **{item['name']}**"]
+        if role:
+            bits.append(role.mention)
+        bits.append(
+            f"⏳ {humanize_duration(item['role_duration'])}"
             if item["role_duration"] else "Permanent"
         )
-        lines.append(" · ".join(meta))
-    if item["description"]:
-        lines.append(item["description"])
-    return name, "\n".join(lines) or "No description"
+        head = " · ".join(bits)
+    else:
+        head = f"📦 **{item['name']}**"
+    desc = item["description"] or "No description"
+    return f"{head}\n-# {desc}"
 
 
-class ShopView(discord.ui.View):
-    """Interactive store: a buy button per item on the current page, plus
-    Previous/Next pagination. Anyone can use it — buying replies privately to
-    the clicker; paging updates the shared message."""
+class ShopView(discord.ui.LayoutView):
+    """Interactive store rendered with Components V2: each item is a card
+    (Section) with its Buy button as a side accessory, all wrapped in a colored
+    Container, with Previous/Next pagination at the bottom.
+
+    Anyone can use it — buying replies privately to the clicker; paging updates
+    the shared message."""
 
     def __init__(self, cog: "Shop", guild: discord.Guild, items, *,
                  per_page: int = SHOP_ITEMS_PER_PAGE, timeout: float = 180):
@@ -56,7 +58,7 @@ class ShopView(discord.ui.View):
         self.per_page = per_page
         self.page = 0
         self.message: discord.Message | None = None
-        self._render()
+        self._build()
 
     @property
     def total_pages(self) -> int:
@@ -66,54 +68,47 @@ class ShopView(discord.ui.View):
         start = self.page * self.per_page
         return self.items[start:start + self.per_page]
 
-    def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(
-            title=f"🌸 {self.guild.name} Shop",
-            description="Click a button below to buy, or use `.buy <name>`.",
-            color=SHOP_COLOR,
-        )
-        if self.guild.icon:
-            embed.set_thumbnail(url=self.guild.icon.url)
-        for item in self._page_items():
-            field_name, field_value = _item_field(self.guild, item)
-            embed.add_field(name=field_name, value=field_value, inline=False)
-        footer = "Use .buy <name> to purchase"
-        if self.total_pages > 1:
-            footer = f"Page {self.page + 1}/{self.total_pages} • {footer}"
-        embed.set_footer(text=footer)
-        return embed
-
-    def _render(self) -> None:
-        """Rebuild the buttons for the current page."""
+    def _build(self) -> None:
+        """Rebuild the whole layout for the current page."""
         self.clear_items()
-        page_items = self._page_items()
-        for idx, item in enumerate(page_items):
-            price = f" · {item['price']:,}"
-            label = item["name"][:80 - len(price)] + price
-            btn = discord.ui.Button(
-                label=label,
-                emoji="🎭" if _is_role_item(item) else "📦",
+
+        container = discord.ui.Container(accent_colour=SHOP_COLOR)
+        container.add_item(discord.ui.TextDisplay(
+            f"## 🌸 {self.guild.name} Shop\n"
+            "Click a **Buy** button to purchase instantly, or use `.buy <name>`."
+        ))
+        container.add_item(discord.ui.Separator())
+
+        for item in self._page_items():
+            buy_btn = discord.ui.Button(
+                label=f"{item['price']:,}",
+                emoji=MAIN_CURRENCY_EMOJI,
                 style=discord.ButtonStyle.success,
-                row=idx // 5,
                 custom_id=f"shop_buy:{item['id']}",
             )
-            btn.callback = self._make_buy_callback(item["id"])
-            self.add_item(btn)
+            buy_btn.callback = self._make_buy_callback(item["id"])
+            container.add_item(discord.ui.Section(
+                discord.ui.TextDisplay(_item_text(self.guild, item)),
+                accessory=buy_btn,
+            ))
+            container.add_item(discord.ui.Separator())
 
         if self.total_pages > 1:
-            nav_row = (self.per_page - 1) // 5 + 1
+            container.add_item(discord.ui.TextDisplay(f"-# Page {self.page + 1}/{self.total_pages}"))
+        self.add_item(container)
+
+        if self.total_pages > 1:
             prev_btn = discord.ui.Button(
-                label="Previous", emoji="◀", style=discord.ButtonStyle.secondary,
-                row=nav_row, disabled=self.page == 0, custom_id="shop_prev",
+                label="Previous Page", style=discord.ButtonStyle.secondary,
+                disabled=self.page == 0, custom_id="shop_prev",
             )
             next_btn = discord.ui.Button(
-                label="Next", emoji="▶", style=discord.ButtonStyle.secondary,
-                row=nav_row, disabled=self.page >= self.total_pages - 1, custom_id="shop_next",
+                label="Next Page", style=discord.ButtonStyle.primary,
+                disabled=self.page >= self.total_pages - 1, custom_id="shop_next",
             )
             prev_btn.callback = self._prev
             next_btn.callback = self._next
-            self.add_item(prev_btn)
-            self.add_item(next_btn)
+            self.add_item(discord.ui.ActionRow(prev_btn, next_btn))
 
     def _make_buy_callback(self, item_id: int):
         async def callback(interaction: discord.Interaction):
@@ -132,17 +127,18 @@ class ShopView(discord.ui.View):
 
     async def _prev(self, interaction: discord.Interaction):
         self.page = max(0, self.page - 1)
-        self._render()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        self._build()
+        await interaction.response.edit_message(view=self)
 
     async def _next(self, interaction: discord.Interaction):
         self.page = min(self.total_pages - 1, self.page + 1)
-        self._render()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        self._build()
+        await interaction.response.edit_message(view=self)
 
     async def on_timeout(self) -> None:
-        for child in self.children:
-            child.disabled = True
+        for child in self.walk_children():
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
         if self.message is not None:
             try:
                 await self.message.edit(view=self)
@@ -244,7 +240,7 @@ class Shop(commands.Cog):
         goods = [i for i in items if not _is_role_item(i)]
 
         view = ShopView(self, ctx.guild, roles + goods)
-        view.message = await ctx.send(embed=view.build_embed(), view=view)
+        view.message = await ctx.send(view=view)
 
     @commands.command()
     @require_not_locked()
