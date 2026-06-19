@@ -20,4 +20,18 @@ SCHEMA = """
         quantity    INTEGER NOT NULL DEFAULT 1,
         PRIMARY KEY (guild_id, user_id, item_id)
     );
+
+    CREATE TABLE IF NOT EXISTS temporary_roles (
+        id          BIGSERIAL PRIMARY KEY,
+        guild_id    BIGINT NOT NULL,
+        user_id     BIGINT NOT NULL,
+        role_id     BIGINT NOT NULL,
+        expires_at  TIMESTAMPTZ NOT NULL,
+        UNIQUE (guild_id, user_id, role_id)
+    );
 """
+
+MIGRATIONS = [
+    # Seconds a granted role lasts; NULL = permanent.
+    "ALTER TABLE items ADD COLUMN IF NOT EXISTS role_duration INTEGER;",
+]

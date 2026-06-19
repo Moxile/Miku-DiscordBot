@@ -3,12 +3,12 @@ from core.db import Conn
 
 async def create_item(conn: Conn, guild_id: int, name: str, price: int,
                       description: str = None, item_type: str = "item",
-                      role_given: int = None):
-    """Create a new shop item."""
+                      role_given: int = None, role_duration: int = None):
+    """Create a new shop item. role_duration (seconds) marks a temporary role; NULL = permanent."""
     return await conn.fetchrow(
-        """INSERT INTO items (guild_id, name, price, description, item_type, role_given)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *""",
-        guild_id, name, price, description, item_type, role_given,
+        """INSERT INTO items (guild_id, name, price, description, item_type, role_given, role_duration)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *""",
+        guild_id, name, price, description, item_type, role_given, role_duration,
     )
 
 
@@ -58,9 +58,42 @@ async def add_to_inventory(conn: Conn, guild_id: int, user_id: int, item_id: int
     )
 
 
+async def grant_temp_role(conn: Conn, guild_id: int, user_id: int, role_id: int, duration_seconds: int):
+    """Record a temporary role grant, extending the expiry if one already exists.
+
+    Returns the new expires_at. GREATEST(existing, NOW()) keeps extend safe even if a
+    prior grant already lapsed but its row hasn't been swept yet.
+    """
+    return await conn.fetchval(
+        """INSERT INTO temporary_roles (guild_id, user_id, role_id, expires_at)
+           VALUES ($1, $2, $3, NOW() + ($4 || ' seconds')::interval)
+           ON CONFLICT (guild_id, user_id, role_id)
+           DO UPDATE SET expires_at = GREATEST(temporary_roles.expires_at, NOW())
+                                      + ($4 || ' seconds')::interval
+           RETURNING expires_at""",
+        guild_id, user_id, role_id, str(duration_seconds),
+    )
+
+
+async def get_expired_temp_roles(conn: Conn):
+    """Get all temporary role grants that have expired."""
+    return await conn.fetch(
+        "SELECT id, guild_id, user_id, role_id FROM temporary_roles WHERE expires_at <= NOW()",
+    )
+
+
+async def delete_temp_role(conn: Conn, grant_id: int):
+    """Delete a temporary role grant by its id."""
+    await conn.execute("DELETE FROM temporary_roles WHERE id = $1", grant_id)
+
+
 async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
-    """Delete a member's inventory when they leave/are removed from the guild."""
+    """Delete a member's inventory and temp-role grants when they leave/are removed from the guild."""
     await conn.execute(
         "DELETE FROM inventory WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )
+    await conn.execute(
+        "DELETE FROM temporary_roles WHERE guild_id = $1 AND user_id = $2",
         guild_id, user_id,
     )
