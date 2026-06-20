@@ -297,6 +297,11 @@ class Economy(commands.Cog):
         if isinstance(error, WrongChannel):
             await ctx.send(str(error), ephemeral=True)
 
+    @commands.command()
+    async def salaries(self, ctx):
+        """List every role that pays a salary via `.collect`, and how much."""
+        await self._show_salary_roles(ctx)
+
     # ── Crime ──
 
     async def _get_crime_config(self, guild_id: int) -> tuple[int, int]:
