@@ -123,6 +123,21 @@ def _command_lines(cmd: commands.Command, *, admin: bool | None = None) -> list[
     return lines
 
 
+def _number_lines(groups: list[list[str]], start: int = 1) -> tuple[list[str], int]:
+    """Prefix each group's first line with a running number (subcommand lines
+    stay un-numbered, since they belong to the command above them). Returns the
+    flattened lines and the next number to use."""
+    lines: list[str] = []
+    n = start
+    for group in groups:
+        if not group:
+            continue
+        group = [f"{n}. {group[0]}", *group[1:]]
+        n += 1
+        lines.extend(group)
+    return lines, n
+
+
 def _add_packed(embed: discord.Embed, name: str, lines: list[str]) -> None:
     """Add `lines` under field `name`, splitting into '(cont.)' fields to respect
     the 1024-char field limit."""
@@ -167,15 +182,14 @@ def build_category_embed(bot: commands.Bot, cat: Category) -> discord.Embed:
         return build_admin_embed(bot, cat)
     color = COG_COLORS.get(cat.cogs[0], discord.Color.blurple())
     embed = discord.Embed(title=f"{cat.emoji} {cat.name}", description=cat.description, color=color)
+    n = 1
     for cog_name in cat.cogs:
         cog = bot.get_cog(cog_name)
         if cog is None:
             continue
-        lines: list[str] = []
-        for cmd in sorted(cog.get_commands(), key=lambda c: c.name):
-            if cmd.hidden:
-                continue
-            lines.extend(_command_lines(cmd, admin=False))
+        groups = [_command_lines(cmd, admin=False)
+                  for cmd in sorted(cog.get_commands(), key=lambda c: c.name) if not cmd.hidden]
+        lines, n = _number_lines(groups, n)
         if lines:
             _add_packed(embed, cog_name, lines)
     embed.set_footer(text="Use .help <command> for full details on any command.")
@@ -187,15 +201,14 @@ def build_admin_embed(bot: commands.Bot, cat: Category) -> discord.Embed:
     Moderation in its own section."""
     embed = discord.Embed(title=f"{cat.emoji} {cat.name}", description=cat.description,
                           color=discord.Color.dark_grey())
+    n = 1
     for cog_name in _admin_hub_cogs(bot, cat):
         cog = bot.get_cog(cog_name)
         if cog is None:
             continue
-        lines: list[str] = []
-        for cmd in sorted(cog.get_commands(), key=lambda c: c.name):
-            if cmd.hidden:
-                continue
-            lines.extend(_command_lines(cmd, admin=True))
+        groups = [_command_lines(cmd, admin=True)
+                  for cmd in sorted(cog.get_commands(), key=lambda c: c.name) if not cmd.hidden]
+        lines, n = _number_lines(groups, n)
         if lines:
             _add_packed(embed, cog_name, lines)
     embed.set_footer(
@@ -326,10 +339,9 @@ class Help(commands.HelpCommand):
     async def send_cog_help(self, cog):
         color = COG_COLORS.get(cog.qualified_name, discord.Color.greyple())
         embed = discord.Embed(title=f"{cog.qualified_name} Commands", color=color)
-        for cmd in sorted(cog.get_commands(), key=lambda c: c.name):
-            if cmd.hidden:
-                continue
-            label = cmd.name
+        visible = sorted((c for c in cog.get_commands() if not c.hidden), key=lambda c: c.name)
+        for i, cmd in enumerate(visible, start=1):
+            label = f"{i}. {cmd.name}"
             if cmd.aliases:
                 label += " (" + ", ".join(cmd.aliases) + ")"
             label += _tag(cmd)
@@ -350,9 +362,10 @@ class Help(commands.HelpCommand):
             color=color,
         )
         embed.add_field(name="Usage", value=f"`{self.get_command_signature(group)}`", inline=False)
-        for sub in sorted((s for s in group.commands if not s.hidden), key=lambda c: c.name):
+        subs = sorted((s for s in group.commands if not s.hidden), key=lambda c: c.name)
+        for i, sub in enumerate(subs, start=1):
             embed.add_field(
-                name=f"{group.qualified_name} {sub.name}{_tag(sub)}",
+                name=f"{i}. {group.qualified_name} {sub.name}{_tag(sub)}",
                 value=sub.short_doc or "No description",
                 inline=False,
             )

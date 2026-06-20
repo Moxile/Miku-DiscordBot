@@ -489,10 +489,10 @@ class Economy(commands.Cog):
         cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title="Role Salaries", color=discord.Color.gold())
         lines = []
-        for r in rows:
+        for i, r in enumerate(rows, start=1):
             role = ctx.guild.get_role(r["role_id"])
             name = role.mention if role else f"`{r['role_id']}` (deleted)"
-            lines.append(f"{name} — **{r['amount']:,}**{cur.emoji} every {humanize_duration(r['interval_seconds'])}")
+            lines.append(f"{i}. {name} — **{r['amount']:,}**{cur.emoji} every {humanize_duration(r['interval_seconds'])}")
         embed.description = "\n".join(lines)
         await ctx.send(embed=embed)
 
