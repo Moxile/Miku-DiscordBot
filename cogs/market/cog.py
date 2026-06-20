@@ -713,7 +713,7 @@ class Market(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def listcompany(self, ctx, stock: discord.TextChannel, name: str, ipo_price: str = "100", total_shares: int = 10000):
-        """Admin: list a new company on the market, associating it with a text channel. Optionally use IPO, total shares to adjust the default 100, 10000."""
+        """List a new company on the market, associating it with a text channel. Optionally use IPO, total shares to adjust the default 100, 10000."""
         try:
             ipo_price = parse_amount(ipo_price)
         except AmountError as e:
@@ -733,7 +733,7 @@ class Market(commands.Cog):
     @commands.is_owner()
     async def ipohelper(self, ctx, channel: discord.TextChannel, days: int = 14,
                         total_shares: int = 10000, wish_pct: str = None):
-        """Admin: recommend an IPO price for a channel from its recent activity.
+        """Recommend an IPO price for a channel from its recent activity.
 
         Step 1: samples the last 100 messages for a representative chars/message mean (fast).
         Step 2: counts all messages + distinct users in the last `days` days for accurate volume.
@@ -887,7 +887,7 @@ class Market(commands.Cog):
     @commands.command(aliases=['delist'])
     @commands.is_owner()
     async def delistcompany(self, ctx, stock: discord.TextChannel):
-        """Admin: delist a company, deleting all shares, orders, and trade history."""
+        """Delist a company, deleting all shares, orders, and trade history."""
         company = await get_company(self.pool, ctx.guild.id, stock.id)
         if not company:
             await ctx.send("This channel is not a listed company.")
@@ -906,7 +906,7 @@ class Market(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def calcrevenue(self, ctx):
-        """Admin: Compute today's revenue for all companies."""
+        """Compute today's revenue for all companies."""
         await self.flush_char_buffer()
         today = datetime.datetime.now(datetime.timezone.utc).date()
         companies = await list_companies(self.pool, ctx.guild.id)
@@ -922,7 +922,7 @@ class Market(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def forcerecap(self, ctx):
-        """Admin: force a revenue recap for the current week."""
+        """Force a revenue recap for the current week."""
         now = datetime.datetime.now(datetime.timezone.utc)
         monday = (now - datetime.timedelta(days=now.weekday())).date()
         today = now.date()
@@ -961,7 +961,7 @@ class Market(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def forcefinancials(self, ctx):
-        """Admin: trigger the weekly financial processing (treasury update, dividends, level-up)."""
+        """Trigger the weekly financial processing (treasury update, dividends, level-up)."""
         now = datetime.datetime.now(datetime.timezone.utc)
         yesterday = (now - datetime.timedelta(days=1)).date()
         monday = yesterday - datetime.timedelta(days=yesterday.weekday())
@@ -1526,7 +1526,7 @@ class Market(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def settradingchannel(self, ctx, channel: discord.TextChannel = None):
-        """Admin: Set (or clear) the channel where trading commands are allowed."""
+        """Set (or clear) the channel where trading commands are allowed."""
         if channel is None:
             await self.pool.execute(
                 "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'trading_channel'",
@@ -1546,7 +1546,7 @@ class Market(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def setmarketownerchannel(self, ctx, channel: discord.TextChannel = None):
-        """Admin: Set (or clear) the channel where weekly recaps and financials are posted."""
+        """Set (or clear) the channel where weekly recaps and financials are posted."""
         if channel is None:
             await self.pool.execute(
                 "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'market_owner_channel'",

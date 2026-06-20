@@ -3,9 +3,13 @@ import math
 import discord
 from discord.ext import commands
 
-from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction, remove_member_data
+from cogs.economy.db import (
+    ensure_wallet, update_wallet, update_bank, add_transaction, remove_member_data,
+    set_salary_role, remove_salary_role, list_salary_roles, get_salary_roles_for,
+)
 from cogs.market.db import remove_member_shares, create_company
 from core.money import parse_amount, AmountError
+from core.time_utils import parse_duration, humanize_duration
 from core.confirm import confirm
 from config import REVENUE_BASE_MULTIPLIER
 
@@ -200,7 +204,7 @@ class Economy(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def setworkchannel(self, ctx, channel: discord.TextChannel = None):
-        """Admin: Set (or clear) the channel where .work is allowed."""
+        """Set (or clear) the channel where .work is allowed."""
         if channel is None:
             await self.pool.execute(
                 "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'work_channel'",
@@ -216,6 +220,140 @@ class Economy(commands.Cog):
             )
             invalidate(ctx.guild.id, "work_channel")
             await ctx.send(f"`.work` restricted to {channel.mention}.")
+
+    @commands.command()
+    @require_not_locked()
+    async def collect(self, ctx):
+        """Collect the salary for every salaried role you hold whose timer is ready."""
+        role_ids = [r.id for r in ctx.author.roles]
+        salary_roles = await get_salary_roles_for(self.pool, ctx.guild.id, role_ids)
+        if not salary_roles:
+            await ctx.send("None of your roles pay a salary. An admin can set one up with `.collectrole bind`.")
+            return
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+
+        collected = []   # (role_name, amount)
+        on_cooldown = []  # (role_name, remaining_seconds)
+        total = 0
+        for sr in salary_roles:
+            role = ctx.guild.get_role(sr["role_id"])
+            role_name = role.name if role else f"role {sr['role_id']}"
+            command = f"collect:{sr['role_id']}"
+            expires_at = await self.pool.fetchval(
+                "SELECT expires_at FROM cooldowns WHERE guild_id = $1 AND user_id = $2 AND command = $3 AND expires_at > now()",
+                ctx.guild.id, ctx.author.id, command,
+            )
+            if expires_at is not None:
+                on_cooldown.append((role_name, (expires_at - now).total_seconds()))
+                continue
+
+            amount = sr["amount"]
+            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, amount)
+            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, amount, "salary", f"Salary for {role_name}")
+            await self.pool.execute(
+                """INSERT INTO cooldowns (guild_id, user_id, command, expires_at)
+                   VALUES ($1, $2, $3, $4)
+                   ON CONFLICT (guild_id, user_id, command) DO UPDATE SET expires_at = EXCLUDED.expires_at""",
+                ctx.guild.id, ctx.author.id, command, now + datetime.timedelta(seconds=sr["interval_seconds"]),
+            )
+            collected.append((role_name, amount))
+            total += amount
+
+        if collected:
+            embed = discord.Embed(title="Salary Collected", color=discord.Color.green())
+            embed.description = "\n".join(f"**{name}** — +{amt:,}{MAIN_CURRENCY_EMOJI}" for name, amt in collected)
+            embed.add_field(name="Total", value=f"{total:,}{MAIN_CURRENCY_EMOJI}")
+            if on_cooldown:
+                embed.add_field(
+                    name="Not ready yet",
+                    value="\n".join(f"**{name}** — in {humanize_duration(rem, short=True)}" for name, rem in on_cooldown),
+                    inline=False,
+                )
+            await ctx.send(embed=embed)
+        else:
+            soonest = min(on_cooldown, key=lambda x: x[1])
+            await ctx.send(
+                f"You've already collected all your salaries. Next up: **{soonest[0]}** in "
+                f"*{humanize_duration(soonest[1], short=True)}*."
+            )
+
+    @commands.group(invoke_without_command=True)
+    @commands.is_owner()
+    async def collectrole(self, ctx):
+        """Owner: manage role salaries collected via `.collect`."""
+        await self._show_salary_roles(ctx)
+
+    @collectrole.command(name="bind")
+    @commands.is_owner()
+    async def collectrole_bind(self, ctx, role: discord.Role, duration: str, amount: str):
+        """Owner: bind a role to a salary. Usage: .collectrole bind <role> <time e.g. 1h> <amount>"""
+        delta = parse_duration(duration)
+        if delta is None or delta.total_seconds() <= 0:
+            await ctx.send("Invalid time. Use a duration like `30m`, `1h`, or `2d`.")
+            return
+        try:
+            amount = parse_amount(amount)
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
+
+        interval_seconds = int(delta.total_seconds())
+        await set_salary_role(self.pool, ctx.guild.id, role.id, interval_seconds, amount)
+        await ctx.send(
+            f"Bound {role.mention}: members can `.collect` **{amount:,}**{MAIN_CURRENCY_EMOJI} "
+            f"every **{humanize_duration(interval_seconds)}**."
+        )
+
+    @collectrole.command(name="unbind")
+    @commands.is_owner()
+    async def collectrole_unbind(self, ctx, role: discord.Role):
+        """Owner: remove a role's salary."""
+        result = await remove_salary_role(self.pool, ctx.guild.id, role.id)
+        if result == "DELETE 0":
+            await ctx.send(f"{role.mention} doesn't have a salary.")
+        else:
+            await ctx.send(f"Removed the salary for {role.mention}.")
+
+    @collectrole.command(name="list")
+    @commands.is_owner()
+    async def collectrole_list(self, ctx):
+        """Owner: list all role salaries."""
+        await self._show_salary_roles(ctx)
+
+    async def _show_salary_roles(self, ctx):
+        rows = await list_salary_roles(self.pool, ctx.guild.id)
+        if not rows:
+            await ctx.send("No role salaries set. Use `.collectrole bind <role> <time> <amount>` to add one.")
+            return
+        embed = discord.Embed(title="Role Salaries", color=discord.Color.gold())
+        lines = []
+        for r in rows:
+            role = ctx.guild.get_role(r["role_id"])
+            name = role.mention if role else f"`{r['role_id']}` (deleted)"
+            lines.append(f"{name} — **{r['amount']:,}**{MAIN_CURRENCY_EMOJI} every {humanize_duration(r['interval_seconds'])}")
+        embed.description = "\n".join(lines)
+        await ctx.send(embed=embed)
+
+    @collectrole.error
+    @collectrole_bind.error
+    @collectrole_unbind.error
+    @collectrole_list.error
+    async def collectrole_error(self, ctx, error):
+        if isinstance(error, commands.NotOwner):
+            await ctx.send("Only the owner or an owner-role holder can manage role salaries.")
+        elif isinstance(error, commands.RoleNotFound):
+            await ctx.send("Role not found. Mention the role, or use its exact name or ID.")
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send("Usage: `.collectrole bind <role> <time e.g. 1h> <amount>`")
+        else:
+            raise error
+
+    @commands.Cog.listener()
+    async def on_guild_role_delete(self, role: discord.Role):
+        """Drop a role's salary binding when the role is deleted."""
+        await remove_salary_role(self.pool, role.guild.id, role.id)
 
     @commands.command()
     @require_not_locked()
@@ -311,7 +449,7 @@ class Economy(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def add(self, ctx, member: discord.Member, amount: str):
-        """Admin: Add money to a user's wallet."""
+        """Add money to a user's wallet."""
         try:
             amount = parse_amount(amount)
         except AmountError as e:
@@ -329,7 +467,7 @@ class Economy(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def lockuser(self, ctx, member: discord.Member, *, flags: str = ""):
-        """Admin: Lock a user from using economy commands. Pass --delete to also zero their balance and return all shares to IPO."""
+        """Lock a user from using economy commands. Pass --delete to also zero their balance and return all shares to IPO."""
         if "--delete" in flags:
             if not await confirm(
                 ctx,
@@ -378,7 +516,7 @@ class Economy(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def unlockuser(self, ctx, member: discord.Member):
-        """Admin: Unlock a user's access to economy commands."""
+        """Unlock a user's access to economy commands."""
         result = await self.pool.execute(
             "DELETE FROM locked_users WHERE guild_id = $1 AND user_id = $2",
             ctx.guild.id, member.id,
@@ -392,7 +530,7 @@ class Economy(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def reseteconomy(self, ctx):
-        """Admin: Wipe all balances, stock relations and recreate stocks at their original IPO settings."""
+        """Wipe all balances, stock relations and recreate stocks at their original IPO settings."""
         if not await confirm(
             ctx,
             "⚠️ This will zero **all wallets and banks**, delete all transactions and stock relations, "
@@ -451,7 +589,7 @@ class Economy(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def remove(self, ctx, member: discord.Member, amount: str):
-        """Admin: Remove money from a user's wallet and bank."""
+        """Remove money from a user's wallet and bank."""
         try:
             amount = parse_amount(amount)
         except AmountError as e:

@@ -802,7 +802,7 @@ class Gambling(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def setgamblingchannel(self, ctx, channel: discord.TextChannel = None):
-        """Admin: Set (or clear) the channel where gambling commands are allowed."""
+        """Set (or clear) the channel where gambling commands are allowed."""
         if channel is None:
             await self.pool.execute(
                 "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'gambling_channel'",

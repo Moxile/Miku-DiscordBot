@@ -33,7 +33,7 @@ class Moderation(commands.Cog):
     @commands.has_permissions(kick_members=True)
     @commands.bot_has_permissions(kick_members=True)
     async def kick(self, ctx: commands.Context, member: discord.Member, *, reason: str = None):
-        """Admin: Kick a member from the server."""
+        """Kick a member from the server."""
         if not await self.check_target(ctx, member):
             return
         try:
@@ -62,7 +62,7 @@ class Moderation(commands.Cog):
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def ban(self, ctx: commands.Context, member: discord.Member, *, reason: str = None):
-        """Admin: Ban a member from the server."""
+        """Ban a member from the server."""
         if not await self.check_target(ctx, member):
             return
         try:
@@ -91,7 +91,7 @@ class Moderation(commands.Cog):
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def unban(self, ctx: commands.Context, user_id: int):
-        """Admin: Unban a user by their ID."""
+        """Unban a user by their ID."""
         user = await self.bot.fetch_user(user_id)
         await ctx.guild.unban(user)
 
@@ -109,7 +109,7 @@ class Moderation(commands.Cog):
     @commands.has_permissions(moderate_members=True)
     @commands.bot_has_permissions(moderate_members=True)
     async def mute(self, ctx: commands.Context, member: discord.Member, duration: str, *, reason: str = None):
-        """Admin: Timeout a member. Duration: 10s, 5m, 1h, 1d."""
+        """Timeout a member. Duration: 10s, 5m, 1h, 1d."""
         if not await self.check_target(ctx, member):
             return
         delta = parse_duration(duration)
@@ -147,7 +147,7 @@ class Moderation(commands.Cog):
     @commands.has_permissions(moderate_members=True)
     @commands.bot_has_permissions(moderate_members=True)
     async def unmute(self, ctx: commands.Context, member: discord.Member):
-        """Admin: Remove timeout from a member."""
+        """Remove timeout from a member."""
         if not await self.check_target(ctx, member):
             return
         await member.timeout(None)

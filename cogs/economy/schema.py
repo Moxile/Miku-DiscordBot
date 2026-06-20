@@ -32,6 +32,14 @@ SCHEMA = """
         expires_at  TIMESTAMPTZ NOT NULL,
         PRIMARY KEY (guild_id, user_id, command)
     );
+
+    CREATE TABLE IF NOT EXISTS salary_roles (
+        guild_id         BIGINT NOT NULL,
+        role_id          BIGINT NOT NULL,
+        interval_seconds BIGINT NOT NULL,
+        amount           BIGINT NOT NULL,
+        PRIMARY KEY (guild_id, role_id)
+    );
 """
 
 MIGRATIONS = [

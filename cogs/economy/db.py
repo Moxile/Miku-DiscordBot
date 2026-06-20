@@ -57,6 +57,41 @@ async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
     )
 
 
+async def set_salary_role(conn: Conn, guild_id: int, role_id: int, interval_seconds: int, amount: int):
+    """Bind (or rebind) a role to a recurring salary collectable via .collect."""
+    await conn.execute(
+        """INSERT INTO salary_roles (guild_id, role_id, interval_seconds, amount)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (guild_id, role_id)
+           DO UPDATE SET interval_seconds = EXCLUDED.interval_seconds, amount = EXCLUDED.amount""",
+        guild_id, role_id, interval_seconds, amount,
+    )
+
+
+async def remove_salary_role(conn: Conn, guild_id: int, role_id: int) -> str:
+    """Remove a role's salary binding. Returns the asyncpg status string (e.g. 'DELETE 1')."""
+    return await conn.execute(
+        "DELETE FROM salary_roles WHERE guild_id = $1 AND role_id = $2",
+        guild_id, role_id,
+    )
+
+
+async def list_salary_roles(conn: Conn, guild_id: int) -> list:
+    """All salary bindings for a guild."""
+    return await conn.fetch(
+        "SELECT role_id, interval_seconds, amount FROM salary_roles WHERE guild_id = $1",
+        guild_id,
+    )
+
+
+async def get_salary_roles_for(conn: Conn, guild_id: int, role_ids: list) -> list:
+    """Salary bindings whose role is among role_ids (the roles a member holds)."""
+    return await conn.fetch(
+        "SELECT role_id, interval_seconds, amount FROM salary_roles WHERE guild_id = $1 AND role_id = ANY($2)",
+        guild_id, role_ids,
+    )
+
+
 async def lock_wallet(conn: asyncpg.Connection, guild_id: int, user_id: int) -> asyncpg.Record:
     """Lock and return the user's balance row. Must be called within a transaction."""
     return await conn.fetchrow(

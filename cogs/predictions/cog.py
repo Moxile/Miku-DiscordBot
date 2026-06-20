@@ -56,7 +56,7 @@ class Predictions(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def setpredictorrole(self, ctx, role: discord.Role):
-        """Admin: Set which role can create predictions."""
+        """Set which role can create predictions."""
         await self.pool.execute(
             """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, 'predictor_role', $2)
                ON CONFLICT (guild_id, key) DO UPDATE SET value = $2""",

@@ -45,6 +45,7 @@ class MikuBot(commands.Bot):
         self.pool: asyncpg.Pool | None = None
         self.oauth_runner: web.AppRunner | None = None
         self._disabled_cogs_cache: dict[int, set[str]] = {}
+        self._owner_role_cache: dict[int, int | None] = {}
 
     async def _is_cog_disabled(self, guild_id: int, cog_name: str) -> bool:
         if guild_id not in self._disabled_cogs_cache:
@@ -53,6 +54,35 @@ class MikuBot(commands.Bot):
             )
             self._disabled_cogs_cache[guild_id] = {row["cog_name"] for row in rows}
         return cog_name in self._disabled_cogs_cache[guild_id]
+
+    async def _get_owner_role(self, guild_id: int) -> int | None:
+        """Return the role id that grants owner-command access in this guild, or None."""
+        if guild_id not in self._owner_role_cache:
+            row = await self.pool.fetchrow(
+                "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = 'owner_role'",
+                guild_id,
+            )
+            self._owner_role_cache[guild_id] = int(row["value"]) if row else None
+        return self._owner_role_cache[guild_id]
+
+    async def is_bot_owner(self, user: discord.abc.User) -> bool:
+        """The application/bot owner only — ignores guild-owner and owner-role grants."""
+        return await commands.Bot.is_owner(self, user)
+
+    async def is_owner(self, user: discord.abc.User) -> bool:
+        """The bot owner, the guild owner, or anyone holding the configured owner role."""
+        if await self.is_bot_owner(user):
+            return True
+        guild = getattr(user, "guild", None)
+        if guild is None:
+            return False
+        if user.id == guild.owner_id:
+            return True
+        roles = getattr(user, "roles", None)
+        if roles is None or self.pool is None:
+            return False
+        owner_role_id = await self._get_owner_role(guild.id)
+        return owner_role_id is not None and any(r.id == owner_role_id for r in roles)
 
     async def invoke(self, ctx: commands.Context):
         if ctx.command and ctx.cog and ctx.guild:

@@ -234,7 +234,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
     @commands.group(name="reactionroles", aliases=["reactionrole"], invoke_without_command=True)
     @commands.has_permissions(manage_roles=True)
     async def reactionroles(self, ctx: commands.Context):
-        """Admin: manage reaction roles. Subcommands: add, remove, list, clear."""
+        """Manage reaction roles. Subcommands: add, remove, list, clear."""
         await ctx.send_help(ctx.command)
 
     @reactionroles.command(name="add")

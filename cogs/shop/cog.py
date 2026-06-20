@@ -276,7 +276,7 @@ class Shop(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def additem(self, ctx, price: str, *, name: str):
-        """Admin: Add a new item to the shop. Usage: .additem <price> <name>"""
+        """Add a new item to the shop. Usage: .additem <price> <name>"""
         try:
             price = parse_amount(price)
         except AmountError as e:
@@ -291,7 +291,7 @@ class Shop(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def addrole(self, ctx, price: str, role: discord.Role, *, name: str):
-        """Admin: Add a role item to the shop. Usage: .addrole <price> @role <name>"""
+        """Add a role item to the shop. Usage: .addrole <price> @role <name>"""
         try:
             price = parse_amount(price)
         except AmountError as e:
@@ -306,7 +306,7 @@ class Shop(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def addtemprole(self, ctx, price: str, role: discord.Role, duration: str, *, name: str):
-        """Admin: Add a temporary role item. Usage: .addtemprole <price> @role <duration> <name>"""
+        """Add a temporary role item. Usage: .addtemprole <price> @role <duration> <name>"""
         try:
             price = parse_amount(price)
         except AmountError as e:
@@ -335,7 +335,7 @@ class Shop(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def itemdesc(self, ctx, name: str, *, description: str):
-        """Admin: Set a description for a shop item. Usage: .itemdesc <name> <description>"""
+        """Set a description for a shop item. Usage: .itemdesc <name> <description>"""
         result = await self.pool.execute(
             "UPDATE items SET description = $3 WHERE guild_id = $1 AND LOWER(name) = LOWER($2)",
             ctx.guild.id, name, description,
@@ -348,7 +348,7 @@ class Shop(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def removeitem(self, ctx, *, name: str):
-        """Admin: Remove an item from the shop. Usage: .removeitem <name>"""
+        """Remove an item from the shop. Usage: .removeitem <name>"""
         deleted = await delete_item(self.pool, ctx.guild.id, name)
         if deleted:
             await ctx.send(f"**{deleted['name']}** has been removed from the shop.")

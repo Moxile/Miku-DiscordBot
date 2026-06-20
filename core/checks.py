@@ -18,6 +18,19 @@ _channel_cache: dict[tuple[int, str], int] = {}
 _lock_cache: dict[tuple[int, int], bool] = {}
 
 
+def guild_or_bot_owner():
+    """Check that the invoker is the guild owner or the bot owner.
+
+    Unlike commands.is_owner(), this does NOT pass for owner-role holders — it
+    gates the commands that grant owner access in the first place.
+    """
+    async def predicate(ctx) -> bool:
+        if ctx.guild and ctx.author.id == ctx.guild.owner_id:
+            return True
+        return await ctx.bot.is_bot_owner(ctx.author)
+    return commands.check(predicate)
+
+
 def require_channel(setting_key: str):
     """Check that the command is used in the channel configured for setting_key.
     If no channel has been set, the command is allowed everywhere.
