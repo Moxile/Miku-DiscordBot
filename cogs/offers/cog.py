@@ -8,7 +8,6 @@ from cogs.offers.db import (
 )
 from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
-from config import MAIN_CURRENCY_EMOJI
 
 
 def _format_odds(odds: float) -> str:
@@ -71,6 +70,7 @@ class Offers(commands.Cog):
             await ctx.send("You don't have permission to create offers.")
             return
 
+        cur = self.bot.get_currency(ctx.guild.id)
         tokens = args.split()
         if not tokens:
             await ctx.send(
@@ -120,8 +120,8 @@ class Offers(commands.Cog):
         max_liability_per_take = int(max_stake * odds) - max_stake
         if max_liability_per_take > pool:
             await ctx.send(
-                f"Pool too small: a single max-stake take would cost {max_liability_per_take}{MAIN_CURRENCY_EMOJI} "
-                f"but pool is only {pool}{MAIN_CURRENCY_EMOJI}. Raise the pool or lower max stake."
+                f"Pool too small: a single max-stake take would cost {max_liability_per_take}{cur.emoji} "
+                f"but pool is only {pool}{cur.emoji}. Raise the pool or lower max stake."
             )
             return
 
@@ -131,8 +131,8 @@ class Offers(commands.Cog):
                 wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
                 if wallet["wallet"] < pool:
                     await ctx.send(
-                        f"You need {pool}{MAIN_CURRENCY_EMOJI} to fund this offer's pool "
-                        f"but only have {wallet['wallet']}{MAIN_CURRENCY_EMOJI}."
+                        f"You need {pool}{cur.emoji} to fund this offer's pool "
+                        f"but only have {wallet['wallet']}{cur.emoji}."
                     )
                     return
                 await update_wallet(conn, ctx.guild.id, ctx.author.id, -pool)
@@ -143,8 +143,8 @@ class Offers(commands.Cog):
                     description, odds, min_stake, max_stake, pool,
                 )
 
-        stake_range = f"{min_stake}{MAIN_CURRENCY_EMOJI}" if min_stake == max_stake \
-            else f"{min_stake}-{max_stake}{MAIN_CURRENCY_EMOJI}"
+        stake_range = f"{min_stake}{cur.emoji}" if min_stake == max_stake \
+            else f"{min_stake}-{max_stake}{cur.emoji}"
         embed = discord.Embed(
             title=f"New Offer #{row['id']}",
             description=description or "*no description*",
@@ -152,7 +152,7 @@ class Offers(commands.Cog):
         )
         embed.add_field(name="Odds", value=f"x{_format_odds(odds)}", inline=True)
         embed.add_field(name="Stake", value=stake_range, inline=True)
-        embed.add_field(name="Pool", value=f"{pool}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Pool", value=f"{pool}{cur.emoji}", inline=True)
         embed.set_footer(text=f"Use .take {row['id']} <stake> to accept.")
         await ctx.send(embed=embed)
 
@@ -162,6 +162,7 @@ class Offers(commands.Cog):
     @require_not_locked()
     async def take(self, ctx, offer_id: int, stake: str):
         """Accept a host's offer with a given stake. Usage: .take <offer_id> <stake>"""
+        cur = self.bot.get_currency(ctx.guild.id)
         try:
             stake = parse_amount(stake)
         except AmountError as e:
@@ -182,7 +183,7 @@ class Offers(commands.Cog):
                     return
                 if stake < offer["min_stake"] or stake > offer["max_stake"]:
                     await ctx.send(
-                        f"Stake must be between {offer['min_stake']} and {offer['max_stake']}{MAIN_CURRENCY_EMOJI}."
+                        f"Stake must be between {offer['min_stake']} and {offer['max_stake']}{cur.emoji}."
                     )
                     return
 
@@ -190,8 +191,8 @@ class Offers(commands.Cog):
                 liability = int(stake * odds) - stake
                 if liability > offer["pool_remaining"]:
                     await ctx.send(
-                        f"Pool can only cover up to {offer['pool_remaining']}{MAIN_CURRENCY_EMOJI} more in winnings. "
-                        f"Your take would need {liability}{MAIN_CURRENCY_EMOJI}."
+                        f"Pool can only cover up to {offer['pool_remaining']}{cur.emoji} more in winnings. "
+                        f"Your take would need {liability}{cur.emoji}."
                     )
                     return
 
@@ -199,7 +200,7 @@ class Offers(commands.Cog):
                 wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
                 if wallet["wallet"] < stake:
                     await ctx.send(
-                        f"You need {stake}{MAIN_CURRENCY_EMOJI} but only have {wallet['wallet']}{MAIN_CURRENCY_EMOJI}."
+                        f"You need {stake}{cur.emoji} but only have {wallet['wallet']}{cur.emoji}."
                     )
                     return
 
@@ -211,8 +212,8 @@ class Offers(commands.Cog):
 
         payout = int(stake * odds)
         await ctx.send(
-            f"Take placed on offer #{offer_id}: stake {stake}{MAIN_CURRENCY_EMOJI}, "
-            f"payout if correct = {payout}{MAIN_CURRENCY_EMOJI}."
+            f"Take placed on offer #{offer_id}: stake {stake}{cur.emoji}, "
+            f"payout if correct = {payout}{cur.emoji}."
         )
 
     # ── Resolve ──
@@ -222,6 +223,7 @@ class Offers(commands.Cog):
         """Resolve an offer. Usage: .closeoffer <offer_id> win|lose
         'win' = players were correct (host pays out).
         'lose' = host was correct (host keeps stakes)."""
+        cur = self.bot.get_currency(ctx.guild.id)
         outcome = outcome.lower()
         if outcome not in ("win", "lose"):
             await ctx.send("Outcome must be `win` (players win) or `lose` (players lose).")
@@ -274,7 +276,7 @@ class Offers(commands.Cog):
         )
         embed.add_field(name="Outcome", value="Players won" if outcome == "win" else "Host won", inline=True)
         embed.add_field(name="Takes", value=str(len(takes)), inline=True)
-        embed.add_field(name="Total Stake", value=f"{total_stake}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Total Stake", value=f"{total_stake}{cur.emoji}", inline=True)
 
         if outcome == "win":
             lines = []
@@ -282,12 +284,12 @@ class Offers(commands.Cog):
                 member = ctx.guild.get_member(user_id)
                 name = member.display_name if member else str(user_id)
                 profit = payout - stake_amt
-                lines.append(f"{name}: +{profit}{MAIN_CURRENCY_EMOJI} (staked {stake_amt}, got {payout})")
+                lines.append(f"{name}: +{profit}{cur.emoji} (staked {stake_amt}, got {payout})")
             embed.add_field(name="Payouts", value="\n".join(lines) or "No takes.", inline=False)
         else:
             embed.add_field(
                 name="Host Gain",
-                value=f"{total_stake + offer['pool']}{MAIN_CURRENCY_EMOJI} "
+                value=f"{total_stake + offer['pool']}{cur.emoji} "
                       f"(pool {offer['pool']} back + {total_stake} in stakes)",
                 inline=False,
             )
@@ -298,6 +300,7 @@ class Offers(commands.Cog):
     @commands.command()
     async def canceloffer(self, ctx, offer_id: int):
         """Cancel an open offer. Only allowed before any takes are placed."""
+        cur = self.bot.get_currency(ctx.guild.id)
         async with self.pool_conn.acquire() as conn:
             async with conn.transaction():
                 offer = await lock_offer(conn, offer_id)
@@ -324,13 +327,14 @@ class Offers(commands.Cog):
                                       "offer_cancel", f"Cancelled offer #{offer_id}")
                 await set_offer_status(conn, offer_id, "cancelled")
 
-        await ctx.send(f"Offer #{offer_id} cancelled. Pool of {offer['pool']}{MAIN_CURRENCY_EMOJI} refunded.")
+        await ctx.send(f"Offer #{offer_id} cancelled. Pool of {offer['pool']}{cur.emoji} refunded.")
 
     # ── Browse ──
 
     @commands.command()
     async def offers(self, ctx):
         """List all open offers in this guild."""
+        cur = self.bot.get_currency(ctx.guild.id)
         rows = await get_active_offers(self.pool_conn, ctx.guild.id)
         if not rows:
             await ctx.send("No open offers.")
@@ -345,8 +349,8 @@ class Offers(commands.Cog):
             embed.add_field(
                 name=f"#{o['id']} — {o['description'] or '(no description)'}",
                 value=f"Host: {host_name} | Odds: x{_format_odds(o['odds'])} | "
-                      f"Stake: {stake_range}{MAIN_CURRENCY_EMOJI} | "
-                      f"Pool left: {o['pool_remaining']}/{o['pool']}{MAIN_CURRENCY_EMOJI}",
+                      f"Stake: {stake_range}{cur.emoji} | "
+                      f"Pool left: {o['pool_remaining']}/{o['pool']}{cur.emoji}",
                 inline=False,
             )
         await ctx.send(embed=embed)
@@ -354,6 +358,7 @@ class Offers(commands.Cog):
     @commands.command()
     async def offerinfo(self, ctx, offer_id: int):
         """Show detailed info about an offer, including all takes."""
+        cur = self.bot.get_currency(ctx.guild.id)
         offer = await get_offer(self.pool_conn, offer_id)
         if not offer or offer["guild_id"] != ctx.guild.id:
             await ctx.send("Offer not found.")
@@ -372,8 +377,8 @@ class Offers(commands.Cog):
         )
         embed.add_field(name="Host", value=host_name, inline=True)
         embed.add_field(name="Odds", value=f"x{_format_odds(offer['odds'])}", inline=True)
-        embed.add_field(name="Stake", value=f"{stake_range}{MAIN_CURRENCY_EMOJI}", inline=True)
-        embed.add_field(name="Pool", value=f"{offer['pool_remaining']}/{offer['pool']}{MAIN_CURRENCY_EMOJI} remaining", inline=True)
+        embed.add_field(name="Stake", value=f"{stake_range}{cur.emoji}", inline=True)
+        embed.add_field(name="Pool", value=f"{offer['pool_remaining']}/{offer['pool']}{cur.emoji} remaining", inline=True)
         embed.add_field(name="Takes", value=str(len(takes)), inline=True)
 
         if takes:
@@ -382,7 +387,7 @@ class Offers(commands.Cog):
                 member = ctx.guild.get_member(t["user_id"])
                 name = member.display_name if member else str(t["user_id"])
                 potential = int(t["stake"] * float(offer["odds"]))
-                lines.append(f"{name}: {t['stake']}{MAIN_CURRENCY_EMOJI} (wins {potential})")
+                lines.append(f"{name}: {t['stake']}{cur.emoji} (wins {potential})")
             if len(takes) > 15:
                 lines.append(f"... and {len(takes) - 15} more")
             embed.add_field(name="Current Takes", value="\n".join(lines), inline=False)

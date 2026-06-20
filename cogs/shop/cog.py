@@ -12,7 +12,6 @@ from cogs.shop.db import (
 from core.checks import require_not_locked, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from core.time_utils import parse_duration, humanize_duration
-from config import MAIN_CURRENCY_EMOJI
 
 SHOP_COLOR = discord.Color.from_rgb(57, 197, 187)  # Miku teal
 MIN_TEMP_ROLE_SECONDS = 60
@@ -71,10 +70,11 @@ class ShopView(discord.ui.LayoutView):
     def _build(self) -> None:
         """Rebuild the whole layout for the current page."""
         self.clear_items()
+        cur = self.cog.bot.get_currency(self.guild.id)
 
         container = discord.ui.Container(accent_colour=SHOP_COLOR)
         container.add_item(discord.ui.TextDisplay(
-            f"## 🌸 {self.guild.name} Shop\n"
+            f"## {cur.emoji} {self.guild.name} Shop\n"
             "Click a **Buy** button to purchase instantly, or use `.buy <name>`."
         ))
         container.add_item(discord.ui.Separator())
@@ -82,7 +82,7 @@ class ShopView(discord.ui.LayoutView):
         for item in self._page_items():
             buy_btn = discord.ui.Button(
                 label=f"{item['price']:,}",
-                emoji=MAIN_CURRENCY_EMOJI,
+                emoji=cur.emoji,
                 style=discord.ButtonStyle.success,
                 custom_id=f"shop_buy:{item['id']}",
             )
@@ -198,9 +198,10 @@ class Shop(commands.Cog):
         Shared by the `.buy` command and the shop buy buttons. For role items the
         role is assigned before charging, so a failed grant never costs Flowers.
         """
+        cur = self.bot.get_currency(guild.id)
         wallet = await ensure_wallet(self.pool, guild.id, member.id)
         if wallet["wallet"] < item["price"]:
-            return False, f"You don't have enough! You need {item['price']:,}{MAIN_CURRENCY_EMOJI}."
+            return False, f"You don't have enough! You need {item['price']:,}{cur.emoji}."
 
         if item["item_type"] == "role" and item["role_given"]:
             role = guild.get_role(item["role_given"])
@@ -225,7 +226,7 @@ class Shop(commands.Cog):
         await update_wallet(self.pool, guild.id, member.id, -item["price"])
         await add_transaction(self.pool, guild.id, member.id, -item["price"], "shop_buy", f"Bought {item['name']}")
         await add_to_inventory(self.pool, guild.id, member.id, item["id"])
-        return True, f"You bought **{item['name']}** for {item['price']:,}{MAIN_CURRENCY_EMOJI}!"
+        return True, f"You bought **{item['name']}** for {item['price']:,}{cur.emoji}!"
 
     @commands.command()
     async def shop(self, ctx):
@@ -282,9 +283,10 @@ class Shop(commands.Cog):
         except AmountError as e:
             await ctx.send(str(e))
             return
+        cur = self.bot.get_currency(ctx.guild.id)
         try:
             item = await create_item(self.pool, ctx.guild.id, name, price)
-            await ctx.send(f"**{item['name']}** added to the shop for {price}{MAIN_CURRENCY_EMOJI}. Use `.itemdesc {name} <description>` to add a description.")
+            await ctx.send(f"**{item['name']}** added to the shop for {price}{cur.emoji}. Use `.itemdesc {name} <description>` to add a description.")
         except Exception:
             await ctx.send("An item with that name already exists.")
 
@@ -297,9 +299,10 @@ class Shop(commands.Cog):
         except AmountError as e:
             await ctx.send(str(e))
             return
+        cur = self.bot.get_currency(ctx.guild.id)
         try:
             item = await create_item(self.pool, ctx.guild.id, name, price, item_type="role", role_given=role.id)
-            await ctx.send(f"**{item['name']}** (grants {role.mention}) added to the shop for {price}{MAIN_CURRENCY_EMOJI}.")
+            await ctx.send(f"**{item['name']}** (grants {role.mention}) added to the shop for {price}{cur.emoji}.")
         except Exception:
             await ctx.send("An item with that name already exists.")
 
@@ -320,6 +323,7 @@ class Shop(commands.Cog):
         if seconds < MIN_TEMP_ROLE_SECONDS:
             await ctx.send(f"Minimum duration is {humanize_duration(MIN_TEMP_ROLE_SECONDS)}.")
             return
+        cur = self.bot.get_currency(ctx.guild.id)
         try:
             item = await create_item(
                 self.pool, ctx.guild.id, name, price,
@@ -327,7 +331,7 @@ class Shop(commands.Cog):
             )
             await ctx.send(
                 f"**{item['name']}** (grants {role.mention} for {humanize_duration(seconds)}) "
-                f"added to the shop for {price}{MAIN_CURRENCY_EMOJI}."
+                f"added to the shop for {price}{cur.emoji}."
             )
         except Exception:
             await ctx.send("An item with that name already exists.")

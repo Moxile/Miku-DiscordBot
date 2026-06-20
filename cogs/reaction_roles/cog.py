@@ -492,7 +492,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
             return
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You need Manage Roles permission to use this command.")
+            return
         elif isinstance(error, commands.BotMissingPermissions):
             await ctx.send("I'm missing a required permission (Manage Roles / Add Reactions).")
         elif isinstance(error, commands.MessageNotFound):

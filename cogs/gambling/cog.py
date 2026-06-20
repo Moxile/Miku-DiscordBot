@@ -8,7 +8,7 @@ from discord.ext import commands
 from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
 from core.checks import require_channel, WrongChannel, invalidate, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
-from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, PREFIX
+from config import PREFIX
 from . import cards, coins, wheel, board
 
 
@@ -117,7 +117,8 @@ class BlackjackView(discord.ui.View):
             return
         busted = await self.cog.double_current(self.key, game)
         if busted is None:
-            await interaction.response.send_message(f"You don't have enough {CURRENCY_NAME} to double.", ephemeral=True)
+            cur = self.cog.bot.get_currency(self.key[0])
+            await interaction.response.send_message(f"You don't have enough {cur.name} to double.", ephemeral=True)
             return
         phase, net = await self.cog.advance_hand(self.key, game)
         if phase == "continue":
@@ -133,8 +134,9 @@ class BlackjackView(discord.ui.View):
             return
         ok = await self.cog.split_current(self.key, game)
         if not ok:
+            cur = self.cog.bot.get_currency(self.key[0])
             await interaction.response.send_message(
-                f"You can't split that hand (need a matching pair and enough {CURRENCY_NAME}).", ephemeral=True
+                f"You can't split that hand (need a matching pair and enough {cur.name}).", ephemeral=True
             )
             return
         await self._show_turn(interaction, "Split — Hand 1", discord.Color.blue())
@@ -204,13 +206,14 @@ class Gambling(commands.Cog):
             raise error
 
     async def check_bet(self, ctx, amount, min_amount=2):
+        cur = self.bot.get_currency(ctx.guild.id)
         if not isinstance(amount, int) or amount <= 0:
             return False, "Please enter a valid amount (positive integer)."
         if amount < min_amount:
-            return False, f"Please place a bet of at least {min_amount}{MAIN_CURRENCY_EMOJI}."
+            return False, f"Please place a bet of at least {min_amount}{cur.emoji}."
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         if wallet["wallet"] < amount:
-            return False, f"You don't have enough {CURRENCY_NAME} to place this bet."
+            return False, f"You don't have enough {cur.name} to place this bet."
         return True, None
 
     @commands.command(aliases=["cf"])
@@ -263,8 +266,9 @@ class Gambling(commands.Cog):
 
         if total > 0:
             total = int(0.85 * total)
+        cur = self.bot.get_currency(ctx.guild.id)
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, total)
-        await add_transaction(self.pool, ctx.guild.id, ctx.author.id, total, "betflip", f"{tries} tries at {bet_per_try}{MAIN_CURRENCY_EMOJI} each")
+        await add_transaction(self.pool, ctx.guild.id, ctx.author.id, total, "betflip", f"{tries} tries at {bet_per_try}{cur.emoji} each")
 
         wins = results.count(choice_u)
         losses = tries - wins
@@ -275,7 +279,7 @@ class Gambling(commands.Cog):
         embed = discord.Embed(title="Bet Flip Results", color=color)
         embed.set_image(url="attachment://coins.png")
         sign = "+" if total >= 0 else ""
-        embed.set_footer(text=f"Net: {sign}{total}{MAIN_CURRENCY_EMOJI} · {wins}W/{losses}L")
+        embed.set_footer(text=f"Net: {sign}{total}{cur.emoji} · {wins}W/{losses}L")
         await ctx.send(embed=embed, file=file)
 
     @staticmethod
@@ -327,14 +331,15 @@ class Gambling(commands.Cog):
         loop = asyncio.get_running_loop()
         buf = await loop.run_in_executor(None, self._render_buf, game, hide_dealer)
         file = discord.File(buf, filename="table.png")
+        cur = self.bot.get_currency(game["guild_id"])
         embed = discord.Embed(title=f"Blackjack — {title}", color=color)
         embed.set_image(url="attachment://table.png")
         if result is not None:
             sign = "+" if result >= 0 else ""
-            embed.set_footer(text=f"{sign}{result}{MAIN_CURRENCY_EMOJI}")
+            embed.set_footer(text=f"{sign}{result}{cur.emoji}")
         else:
             hand_bet = game["hand_bets"][game["current_hand"]]
-            embed.set_footer(text=f"Bet: {hand_bet}{MAIN_CURRENCY_EMOJI}")
+            embed.set_footer(text=f"Bet: {hand_bet}{cur.emoji}")
         return file, embed
 
     @commands.command(aliases=["bj"])
@@ -366,6 +371,7 @@ class Gambling(commands.Cog):
 
         self.games[key] = {
             "game": "blackjack",
+            "guild_id": ctx.guild.id,
             "bet": bet,
             "current_hand": 0,
             "player_hands": [],
@@ -526,8 +532,9 @@ class Gambling(commands.Cog):
         if amount <= 0:
             await ctx.send("Please enter a positive amount.")
             return
+        cur = self.bot.get_currency(ctx.guild.id)
         if wallet["wallet"] < amount:
-            await ctx.send(f"You don't have enough {CURRENCY_NAME} for a {amount}{MAIN_CURRENCY_EMOJI} bet.")
+            await ctx.send(f"You don't have enough {cur.name} for a {amount}{cur.emoji} bet.")
             return
 
         key = ("roulette", ctx.channel.id)
@@ -557,12 +564,13 @@ class Gambling(commands.Cog):
         game["deadline"] = time.time() + ROULETTE_WINDOW
         await self._refresh_roulette_board(game)
         await ctx.send(
-            f"Placed **{amount}{MAIN_CURRENCY_EMOJI}** on **{_bet_label(choice)}**. "
+            f"Placed **{amount}{cur.emoji}** on **{_bet_label(choice)}**. "
             f"Spinning <t:{int(game['deadline'])}:R>.",
             delete_after=8,
         )
 
     def build_roulette_embed(self, game, guild):
+        cur = self.bot.get_currency(game["guild_id"])
         embed = discord.Embed(title="🎡 Roulette — place your bets!", color=discord.Color.dark_green())
         deadline = int(game["deadline"])
         embed.description = (
@@ -575,8 +583,8 @@ class Gambling(commands.Cog):
                 member = guild.get_member(uid) if guild else None
                 name = member.display_name if member else str(uid)
                 staked = sum(b for _, b in bets)
-                summary = ", ".join(f"{bet}{MAIN_CURRENCY_EMOJI} {_bet_label(c)}" for c, bet in bets)
-                lines.append(f"**{name}** — {summary}  *(staked {staked}{MAIN_CURRENCY_EMOJI})*")
+                summary = ", ".join(f"{bet}{cur.emoji} {_bet_label(c)}" for c, bet in bets)
+                lines.append(f"**{name}** — {summary}  *(staked {staked}{cur.emoji})*")
             embed.add_field(name="Current bets", value="\n".join(lines)[:1024], inline=False)
         embed.set_image(url="attachment://board.png")
         return embed
@@ -611,6 +619,7 @@ class Gambling(commands.Cog):
         game["spun"] = True
         message = game.get("message")
         guild = self.bot.get_guild(game["guild_id"])
+        cur = self.bot.get_currency(game["guild_id"])
 
         result = secrets.randbelow(37)
         color = "green" if result == 0 else ("red" if result in self.ROULETTE_RED else "black")
@@ -636,7 +645,7 @@ class Gambling(commands.Cog):
             member = guild.get_member(user_id) if guild else None
             name = member.display_name if member else str(user_id)
             sign = "+" if net >= 0 else ""
-            embed.add_field(name=name, value=f"{sign}{net}{MAIN_CURRENCY_EMOJI}", inline=True)
+            embed.add_field(name=name, value=f"{sign}{net}{cur.emoji}", inline=True)
 
         if not any(game["bets"].values()):
             embed.description = "No bets were placed."
@@ -695,6 +704,7 @@ class Gambling(commands.Cog):
     @commands.command(aliases=["rr"])
     async def russian_roulette(self, ctx, bet: str):
         """Play Russian Roulette with other players. You can specify an amount or use 'all' to bet everything. Everyone must match the same bet to join."""
+        cur = self.bot.get_currency(ctx.guild.id)
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         try:
             bet = parse_amount(bet, wallet_balance=wallet["wallet"])
@@ -723,7 +733,7 @@ class Gambling(commands.Cog):
                 return
 
             if game["bet"] != bet:
-                await ctx.send(f"The current bet for this round is {game['bet']}{MAIN_CURRENCY_EMOJI}. Please match that to join.")
+                await ctx.send(f"The current bet for this round is {game['bet']}{cur.emoji}. Please match that to join.")
                 return
 
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
@@ -733,7 +743,7 @@ class Gambling(commands.Cog):
 
         embed=discord.Embed(
             title="Russian Roulette",
-            description=f"{ctx.author.display_name} has joined the game with a bet of {bet}{MAIN_CURRENCY_EMOJI}!\n\nType `{PREFIX}rr {bet}` to join. Spinning in **30 seconds**...",
+            description=f"{ctx.author.display_name} has joined the game with a bet of {bet}{cur.emoji}!\n\nType `{PREFIX}rr {bet}` to join. Spinning in **30 seconds**...",
             color=discord.Color.dark_red()
         )
         embed.add_field(name="Players Joined", value="\n".join(
@@ -751,6 +761,7 @@ class Gambling(commands.Cog):
             return
 
         self.games.pop(key)
+        cur = self.bot.get_currency(game["guild_id"])
         players = game["players"]
         playercount = len(players)
 
@@ -789,7 +800,7 @@ class Gambling(commands.Cog):
         name = member.display_name if member else str(winner)
         embed = discord.Embed(
             title="Russian Roulette - Game Over",
-            description=f"🎉 **{name}** is the last survivor and wins {game['bet'] * playercount}{MAIN_CURRENCY_EMOJI} after {round_num} devastating rounds! 🎉",
+            description=f"🎉 **{name}** is the last survivor and wins {game['bet'] * playercount}{cur.emoji} after {round_num} devastating rounds! 🎉",
             color=discord.Color.green()
         )
         embed.add_field(name="Players", value="\n".join(

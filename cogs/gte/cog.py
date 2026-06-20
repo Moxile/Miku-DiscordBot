@@ -8,7 +8,6 @@ import aiohttp
 import discord
 from discord.ext import commands
 
-from config import MAIN_CURRENCY_EMOJI
 from core.time_utils import parse_duration
 from cogs.economy.db import ensure_wallet, update_wallet, lock_wallet, add_transaction
 
@@ -114,6 +113,8 @@ class GTE(commands.Cog):
             await ctx.send("A GTE game is already running in this channel!", delete_after=10)
             return
 
+        cur = self.bot.get_currency(ctx.guild.id)
+
         if award <= 0:
             await ctx.send("Award must be a positive amount.", delete_after=10)
             return
@@ -143,8 +144,8 @@ class GTE(commands.Cog):
                 bal = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
                 if bal["wallet"] < award:
                     await ctx.send(
-                        f"You need {MAIN_CURRENCY_EMOJI} **{award:,}** in your wallet to fund this game. "
-                        f"(Have: {MAIN_CURRENCY_EMOJI} **{bal['wallet']:,}**)"
+                        f"You need {cur.emoji} **{award:,}** in your wallet to fund this game. "
+                        f"(Have: {cur.emoji} **{bal['wallet']:,}**)"
                     )
                     return
                 await update_wallet(conn, ctx.guild.id, ctx.author.id, -award)
@@ -189,7 +190,7 @@ class GTE(commands.Cog):
             title="Guess the Elo!",
             description=(
                 f"**Variant:** {variant.capitalize()} | **Time:** {tc_str}\n"
-                f"**Award:** {MAIN_CURRENCY_EMOJI} **{award:,}** (funded by {ctx.author.display_name})\n\n"
+                f"**Award:** {cur.emoji} **{award:,}** (funded by {ctx.author.display_name})\n\n"
                 f"Guess both players' ratings!\n"
                 f"Type `<white> vs <black>` (e.g. `1500 vs 1800`)\n"
                 f"Guessing ends <t:{ends_at}:R>"
@@ -231,6 +232,7 @@ class GTE(commands.Cog):
         await self._resolve(channel, game)
 
     async def _resolve(self, channel: discord.TextChannel, game: dict):
+        cur = self.bot.get_currency(channel.guild.id)
         actual_w = game["white_rating"]
         actual_b = game["black_rating"]
 
@@ -277,7 +279,7 @@ class GTE(commands.Cog):
             winner_name = winner_member.display_name if winner_member else f"User {winners[0][0]}"
             embed.add_field(
                 name="Winner",
-                value=f"**{winner_name}** wins {MAIN_CURRENCY_EMOJI} **{award:,}**!",
+                value=f"**{winner_name}** wins {cur.emoji} **{award:,}**!",
                 inline=False,
             )
         else:
@@ -288,7 +290,7 @@ class GTE(commands.Cog):
                 winner_names.append(m.display_name if m else f"User {uid}")
             embed.add_field(
                 name="Tie!",
-                value=f"**{', '.join(winner_names)}** split the award — {MAIN_CURRENCY_EMOJI} **{share:,}** each.",
+                value=f"**{', '.join(winner_names)}** split the award — {cur.emoji} **{share:,}** each.",
                 inline=False,
             )
 

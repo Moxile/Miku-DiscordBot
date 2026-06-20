@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 
 from core.checks import guild_or_bot_owner
+from core.currency import Currency, validate_emoji
 
 
 class Management(commands.Cog):
@@ -115,16 +116,61 @@ class Management(commands.Cog):
         )
         self.bot._owner_role_cache.pop(guild_id, None)
 
+    @commands.command()
+    @commands.is_owner()
+    async def setcurrency(self, ctx: commands.Context, emoji: str = None, *, name: str = None):
+        """Owner: set this server's currency emoji and name (e.g. `.setcurrency 🪙 Coins`)."""
+        if emoji is None or name is None:
+            cur = self.bot.get_currency(ctx.guild.id)
+            await ctx.send(
+                f"Currency here is **{cur.name}** {cur.emoji}.\n"
+                "Set it with `.setcurrency <emoji> <name>` (emoji may be a unicode emoji or a "
+                "custom emote from a server I'm in). Use `.resetcurrency` to revert to the default."
+            )
+            return
+
+        stored_emoji = validate_emoji(self.bot, emoji)
+        if stored_emoji is None:
+            await ctx.send(
+                "That emoji can't be used. Use a unicode emoji (like 🪙) or a custom emote "
+                "from a server I'm also in."
+            )
+            return
+
+        name = name.strip()
+        if not name:
+            await ctx.send("Please provide a name, e.g. `.setcurrency 🪙 Coins`.")
+            return
+        await self.bot.pool.execute(
+            """INSERT INTO guild_currency (guild_id, name, emoji)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (guild_id) DO UPDATE SET name = EXCLUDED.name, emoji = EXCLUDED.emoji""",
+            ctx.guild.id, name, stored_emoji,
+        )
+        self.bot._currency_cache[ctx.guild.id] = Currency(name, stored_emoji)
+        await ctx.send(f"Currency set to **{name}** {stored_emoji} — e.g. `1,000`{stored_emoji}.")
+
+    @commands.command()
+    @commands.is_owner()
+    async def resetcurrency(self, ctx: commands.Context):
+        """Owner: revert this server's currency to the default."""
+        await self.bot.pool.execute(
+            "DELETE FROM guild_currency WHERE guild_id = $1", ctx.guild.id
+        )
+        self.bot._currency_cache.pop(ctx.guild.id, None)
+        cur = self.bot.get_currency(ctx.guild.id)
+        await ctx.send(f"Currency reset to the default **{cur.name}** {cur.emoji}.")
+
     @commands.Cog.listener()
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
             return
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You need the **Manage Server** permission to use this command.")
+            return
         elif isinstance(error, commands.BotMissingPermissions):
             await ctx.send("I need the **Manage Roles** permission to create a role.")
         elif isinstance(error, commands.CheckFailure):
-            await ctx.send("Only the server owner or bot owner can manage the owner role.")
+            return
         elif isinstance(error, commands.BadArgument):
             await ctx.send(str(error))
         else:

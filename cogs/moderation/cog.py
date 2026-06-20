@@ -168,7 +168,7 @@ class Moderation(commands.Cog):
             return
 
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You don't have permission to use this command.")
+            return
         elif isinstance(error, commands.BotMissingPermissions):
             await ctx.send("I don't have the required permissions to do that.")
         elif isinstance(error, commands.MemberNotFound):

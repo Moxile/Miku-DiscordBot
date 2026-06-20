@@ -10,7 +10,7 @@ from cogs.missions.db import (
 )
 from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
-from config import MAIN_CURRENCY_EMOJI
+from core.currency import Currency
 
 MISSIONS_PER_PAGE = 5
 BAR_WIDTH = 20
@@ -23,24 +23,25 @@ def _progress_bar(funded: int, goal: int) -> str:
     return f"`[{bar}]` {ratio * 100:.1f}%"
 
 
-def _mission_field(mission) -> tuple[str, str]:
+def _mission_field(mission, emoji: str) -> tuple[str, str]:
     bar = _progress_bar(mission["funded"], mission["goal"])
     remaining = max(mission["goal"] - mission["funded"], 0)
     name = f"#{mission['id']} — {mission['name']}"
     value = (
         f"{mission['description']}\n"
         f"{bar}\n"
-        f"{mission['funded']:,} / {mission['goal']:,}{MAIN_CURRENCY_EMOJI} funded"
-        + (f" — **{remaining:,}{MAIN_CURRENCY_EMOJI} to go**" if remaining > 0 else " — **FUNDED!**")
+        f"{mission['funded']:,} / {mission['goal']:,}{emoji} funded"
+        + (f" — **{remaining:,}{emoji} to go**" if remaining > 0 else " — **FUNDED!**")
     )
     return name, value
 
 
 class MissionsPaginator(discord.ui.View):
-    def __init__(self, missions: list, invoker_id: int, *, timeout=120):
+    def __init__(self, missions: list, invoker_id: int, currency: Currency, *, timeout=120):
         super().__init__(timeout=timeout)
         self.missions = missions
         self.invoker_id = invoker_id
+        self.currency = currency
         self.page = 0
         self.max_page = max(0, math.ceil(len(missions) / MISSIONS_PER_PAGE) - 1)
         self._update_buttons()
@@ -55,7 +56,7 @@ class MissionsPaginator(discord.ui.View):
         embed = discord.Embed(title="Active Missions", color=discord.Color.from_rgb(255, 140, 0))
         embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1} — {len(self.missions)} mission(s) | Use .fund <name> <amount> to contribute")
         for m in page_missions:
-            name, value = _mission_field(m)
+            name, value = _mission_field(m, self.currency.emoji)
             embed.add_field(name=name, value=value, inline=False)
         return embed
 
@@ -129,12 +130,13 @@ class Missions(commands.Cog):
 
         mission = await create_mission(self.pool, ctx.guild.id, name, description, goal)
 
+        cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(
             title=f"Mission #{mission['id']} Created",
             color=discord.Color.from_rgb(255, 140, 0),
         )
         embed.add_field(name="Name", value=name, inline=True)
-        embed.add_field(name="Goal", value=f"{goal:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Goal", value=f"{goal:,}{cur.emoji}", inline=True)
         if description:
             embed.add_field(name="Description", value=description, inline=False)
         embed.set_footer(text="Players can fund it with .fund <name> <amount>")
@@ -182,7 +184,7 @@ class Missions(commands.Cog):
             await ctx.send("No active missions right now.")
             return
         rows = list(rows)
-        view = MissionsPaginator(rows, ctx.author.id)
+        view = MissionsPaginator(rows, ctx.author.id, self.bot.get_currency(ctx.guild.id))
         await ctx.send(embed=view.build_embed(), view=view)
 
     @commands.command()
@@ -207,6 +209,7 @@ class Missions(commands.Cog):
             await ctx.send("Amount must be positive.")
             return
 
+        cur = self.bot.get_currency(ctx.guild.id)
         mission = await get_mission_by_name(self.pool, ctx.guild.id, mission_name)
         if not mission:
             await ctx.send(f"No mission named **{mission_name}** found.")
@@ -220,7 +223,7 @@ class Missions(commands.Cog):
                 bal = await ensure_wallet(conn, ctx.guild.id, ctx.author.id)
                 if bal["wallet"] < amount:
                     await ctx.send(
-                        f"You only have {bal['wallet']:,}{MAIN_CURRENCY_EMOJI} in your wallet."
+                        f"You only have {bal['wallet']:,}{cur.emoji} in your wallet."
                     )
                     return
 
@@ -235,12 +238,12 @@ class Missions(commands.Cog):
                 if completed:
                     await set_mission_status(conn, mission["id"], "completed")
 
-        name, value = _mission_field(updated)
+        name, value = _mission_field(updated, cur.emoji)
         embed = discord.Embed(
             title=f"Mission Funded!",
             color=discord.Color.green() if completed else discord.Color.from_rgb(255, 140, 0),
         )
-        embed.add_field(name="Your contribution", value=f"{amount:,}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Your contribution", value=f"{amount:,}{cur.emoji}", inline=True)
         embed.add_field(name=name, value=value, inline=False)
 
         if completed:

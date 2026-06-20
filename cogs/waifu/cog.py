@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 
 from config import (
     WAIFU_BASE_VALUE, WAIFU_VALUE_MULTIPLIER, WAIFU_DECAY_RATE,
-    MARRIAGE_FEE, ENGAGEMENT_DAYS, MAIN_CURRENCY_EMOJI,
+    MARRIAGE_FEE, ENGAGEMENT_DAYS,
 )
 from cogs.economy.db import ensure_wallet, lock_wallet, update_wallet, add_transaction
 from cogs.waifu.db import (
@@ -85,6 +85,7 @@ class Waifu(commands.Cog):
     async def waifubuy(self, ctx: commands.Context, member: discord.Member, amount: str = None):
         """Buy a user as your waifu. Pay at least their current value.
         Usage: .waifubuy <@user> [amount]"""
+        cur = self.bot.get_currency(ctx.guild.id)
         if member == ctx.author:
             await ctx.send("You can't buy yourself.")
             return
@@ -113,14 +114,14 @@ class Waifu(commands.Cog):
 
                 if pay < current_value:
                     await ctx.send(
-                        f"**{member.display_name}** is worth {MAIN_CURRENCY_EMOJI} **{current_value:,}**. "
+                        f"**{member.display_name}** is worth {cur.emoji} **{current_value:,}**. "
                         f"You must pay at least that much."
                     )
                     return
                 if buyer_bal["wallet"] < pay:
                     await ctx.send(
                         f"You don't have enough in your wallet. "
-                        f"Need {MAIN_CURRENCY_EMOJI} **{pay:,}**, have {MAIN_CURRENCY_EMOJI} **{buyer_bal['wallet']:,}**."
+                        f"Need {cur.emoji} **{pay:,}**, have {cur.emoji} **{buyer_bal['wallet']:,}**."
                     )
                     return
 
@@ -143,8 +144,8 @@ class Waifu(commands.Cog):
             color=discord.Color.from_rgb(255, 105, 180),
         )
         embed.add_field(name="New Waifu", value=member.mention, inline=True)
-        embed.add_field(name="Paid", value=f"{MAIN_CURRENCY_EMOJI} {pay:,}", inline=True)
-        embed.add_field(name="New Value", value=f"{MAIN_CURRENCY_EMOJI} {new_value:,}", inline=True)
+        embed.add_field(name="Paid", value=f"{cur.emoji} {pay:,}", inline=True)
+        embed.add_field(name="New Value", value=f"{cur.emoji} {new_value:,}", inline=True)
         if engaged:
             embed.add_field(
                 name="💍 Engaged!",
@@ -157,6 +158,7 @@ class Waifu(commands.Cog):
     async def harem(self, ctx: commands.Context, member: discord.Member = None):
         """Show your (or someone's) harem — all waifus owned.
         Usage: .harem [@member]"""
+        cur = self.bot.get_currency(ctx.guild.id)
         target = member or ctx.author
         async with self.pool.acquire() as conn:
             rows = await get_harem(conn, ctx.guild.id, target.id)
@@ -175,15 +177,16 @@ class Waifu(commands.Cog):
         for i, row in enumerate(rows, 1):
             name = await self._get_display_name(ctx.guild, row["user_id"])
             status = "💍 Married" if row["spouse_id"] else ("💕 Engaged" if row["engaged_since"] and row["owner_id"] == target.id else "")
-            lines.append(f"`{i}.` **{name}** — {MAIN_CURRENCY_EMOJI} {row['value']:,} {status}")
+            lines.append(f"`{i}.` **{name}** — {cur.emoji} {row['value']:,} {status}")
         embed.description = "\n".join(lines)
-        embed.set_footer(text=f"Total harem value: {MAIN_CURRENCY_EMOJI} {total_value:,}")
+        embed.set_footer(text=f"Total harem value: {cur.emoji} {total_value:,}")
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["winfo"])
     async def waifuinfo(self, ctx: commands.Context, member: discord.Member = None):
         """Show a user's waifu stats: value, owner, and relationship status.
         Usage: .waifuinfo [@member]"""
+        cur = self.bot.get_currency(ctx.guild.id)
         target = member or ctx.author
         async with self.pool.acquire() as conn:
             row = await ensure_waifu(conn, ctx.guild.id, target.id)
@@ -193,7 +196,7 @@ class Waifu(commands.Cog):
             color=discord.Color.from_rgb(255, 105, 180),
         )
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.add_field(name="Value", value=f"{MAIN_CURRENCY_EMOJI} {row['value']:,}", inline=True)
+        embed.add_field(name="Value", value=f"{cur.emoji} {row['value']:,}", inline=True)
 
         if row["owner_id"]:
             owner_name = await self._get_display_name(ctx.guild, row["owner_id"])
@@ -218,6 +221,7 @@ class Waifu(commands.Cog):
     async def waifugift(self, ctx: commands.Context, waifu: discord.Member, recipient: discord.Member):
         """Gift a waifu you own to another user.
         Usage: .waifugift <@waifu> <@recipient>"""
+        cur = self.bot.get_currency(ctx.guild.id)
         if waifu == ctx.author:
             await ctx.send("You can't gift yourself.")
             return
@@ -242,7 +246,7 @@ class Waifu(commands.Cog):
             description=f"{ctx.author.mention} gifted **{waifu.display_name}** to {recipient.mention}! 🎁",
             color=discord.Color.from_rgb(255, 105, 180),
         )
-        embed.add_field(name="Value", value=f"{MAIN_CURRENCY_EMOJI} {row['value']:,}", inline=True)
+        embed.add_field(name="Value", value=f"{cur.emoji} {row['value']:,}", inline=True)
         await ctx.send(embed=embed)
 
     @commands.command()
@@ -250,6 +254,7 @@ class Waifu(commands.Cog):
     async def propose(self, ctx: commands.Context, member: discord.Member):
         """Propose marriage to your engaged partner. Requires 7 days of mutual ownership.
         Usage: .propose <@member>"""
+        cur = self.bot.get_currency(ctx.guild.id)
         if member == ctx.author:
             await ctx.send("You can't propose to yourself.")
             return
@@ -291,8 +296,8 @@ class Waifu(commands.Cog):
             bal = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
             if bal["wallet"] < MARRIAGE_FEE:
                 await ctx.send(
-                    f"Proposing costs {MAIN_CURRENCY_EMOJI} **{MARRIAGE_FEE:,}**. "
-                    f"You only have {MAIN_CURRENCY_EMOJI} **{bal['wallet']:,}**."
+                    f"Proposing costs {cur.emoji} **{MARRIAGE_FEE:,}**. "
+                    f"You only have {cur.emoji} **{bal['wallet']:,}**."
                 )
                 return
 
@@ -307,7 +312,7 @@ class Waifu(commands.Cog):
             ),
             color=discord.Color.from_rgb(255, 105, 180),
         )
-        embed.set_footer(text=f"Fee: {MAIN_CURRENCY_EMOJI} {MARRIAGE_FEE:,} (charged on acceptance)")
+        embed.set_footer(text=f"Fee: {cur.emoji} {MARRIAGE_FEE:,} (charged on acceptance)")
         await ctx.send(embed=embed)
 
     @commands.command()

@@ -16,18 +16,20 @@ from config import REVENUE_BASE_MULTIPLIER
 import datetime
 import secrets
 
-from config import MAIN_CURRENCY_EMOJI, CURRENCY_NAME, WORK_COOLDOWN
+from config import WORK_COOLDOWN
+from core.currency import Currency
 from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked, invalidate_lock
 
 PER_PAGE = 10
 
 
 class TransactionPaginator(discord.ui.View):
-    def __init__(self, rows: list, member: discord.Member, invoker_id: int, *, counting_note: bool = False, timeout=120):
+    def __init__(self, rows: list, member: discord.Member, invoker_id: int, currency: Currency, *, counting_note: bool = False, timeout=120):
         super().__init__(timeout=timeout)
         self.rows = rows
         self.member = member
         self.invoker_id = invoker_id
+        self.currency = currency
         self.counting_note = counting_note
         self.page = 0
         self.max_page = max(0, math.ceil(len(rows) / PER_PAGE) - 1)
@@ -49,7 +51,7 @@ class TransactionPaginator(discord.ui.View):
             date = row["created_at"].strftime("%Y-%m-%d %H:%M")
             sign = "+" if row["amount"] >= 0 else ""
             desc = row["description"] or row["tx_type"]
-            lines.append(f"`{date}` **{sign}{row['amount']:,}**{MAIN_CURRENCY_EMOJI} — {desc}")
+            lines.append(f"`{date}` **{sign}{row['amount']:,}**{self.currency.emoji} — {desc}")
         embed.description = "\n".join(lines) if lines else "No transactions."
         footer = f"Page {self.page + 1}/{self.max_page + 1} — {len(self.rows)} total"
         if self.counting_note:
@@ -116,7 +118,8 @@ class Economy(commands.Cog):
         await update_bank(self.pool, ctx.guild.id, ctx.author.id, amount)
         await add_transaction(self.pool, ctx.guild.id, ctx.author.id, amount, "deposit")
 
-        embed = discord.Embed(title="Deposit", description=f"You deposited {amount}{MAIN_CURRENCY_EMOJI} into your bank account!", color=discord.Color.blue())
+        cur = self.bot.get_currency(ctx.guild.id)
+        embed = discord.Embed(title="Deposit", description=f"You deposited {amount}{cur.emoji} into your bank account!", color=discord.Color.blue())
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["with", "w"])
@@ -139,7 +142,8 @@ class Economy(commands.Cog):
         await update_bank(self.pool, ctx.guild.id, ctx.author.id, -amount)
         await add_transaction(self.pool, ctx.guild.id, ctx.author.id, amount, "withdraw")
 
-        embed = discord.Embed(title="Withdraw", description=f"You withdrew {amount}{MAIN_CURRENCY_EMOJI} from your bank account!", color=discord.Color.blue())
+        cur = self.bot.get_currency(ctx.guild.id)
+        embed = discord.Embed(title="Withdraw", description=f"You withdrew {amount}{cur.emoji} from your bank account!", color=discord.Color.blue())
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["bal", "b", "$"])
@@ -151,10 +155,11 @@ class Economy(commands.Cog):
         wallet = bal["wallet"]
         bank = bal["bank"]
 
+        cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title=f"{member.display_name}'s Balance", color=discord.Color.green())
-        embed.add_field(name=f"Wallet ({CURRENCY_NAME})", value=f"{wallet}{MAIN_CURRENCY_EMOJI}")
-        embed.add_field(name=f"Bank ({CURRENCY_NAME})", value=f"{bank}{MAIN_CURRENCY_EMOJI}")
-        embed.add_field(name="Total", value=f"{wallet + bank}{MAIN_CURRENCY_EMOJI}")
+        embed.add_field(name=f"Wallet ({cur.name})", value=f"{wallet}{cur.emoji}")
+        embed.add_field(name=f"Bank ({cur.name})", value=f"{bank}{cur.emoji}")
+        embed.add_field(name="Total", value=f"{wallet + bank}{cur.emoji}")
         embed.set_thumbnail(url=member.display_avatar.url)
 
         await ctx.send(embed=embed)
@@ -188,7 +193,8 @@ class Economy(commands.Cog):
                 ctx.guild.id, ctx.author.id, datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=WORK_COOLDOWN)
             )
 
-            embed = discord.Embed(title="Work", description=f"You earned {earnings}{MAIN_CURRENCY_EMOJI} from your work!", color=discord.Color.blue())
+            cur = self.bot.get_currency(ctx.guild.id)
+            embed = discord.Embed(title="Work", description=f"You earned {earnings}{cur.emoji} from your work!", color=discord.Color.blue())
             await ctx.send(embed=embed)
             return
 
@@ -228,7 +234,7 @@ class Economy(commands.Cog):
         role_ids = [r.id for r in ctx.author.roles]
         salary_roles = await get_salary_roles_for(self.pool, ctx.guild.id, role_ids)
         if not salary_roles:
-            await ctx.send("None of your roles pay a salary. An admin can set one up with `.collectrole bind`.")
+            await ctx.send("None of your roles pay a salary.")
             return
 
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -262,9 +268,10 @@ class Economy(commands.Cog):
             total += amount
 
         if collected:
+            cur = self.bot.get_currency(ctx.guild.id)
             embed = discord.Embed(title="Salary Collected", color=discord.Color.green())
-            embed.description = "\n".join(f"**{name}** — +{amt:,}{MAIN_CURRENCY_EMOJI}" for name, amt in collected)
-            embed.add_field(name="Total", value=f"{total:,}{MAIN_CURRENCY_EMOJI}")
+            embed.description = "\n".join(f"**{name}** — +{amt:,}{cur.emoji}" for name, amt in collected)
+            embed.add_field(name="Total", value=f"{total:,}{cur.emoji}")
             if on_cooldown:
                 embed.add_field(
                     name="Not ready yet",
@@ -301,8 +308,9 @@ class Economy(commands.Cog):
 
         interval_seconds = int(delta.total_seconds())
         await set_salary_role(self.pool, ctx.guild.id, role.id, interval_seconds, amount)
+        cur = self.bot.get_currency(ctx.guild.id)
         await ctx.send(
-            f"Bound {role.mention}: members can `.collect` **{amount:,}**{MAIN_CURRENCY_EMOJI} "
+            f"Bound {role.mention}: members can `.collect` **{amount:,}**{cur.emoji} "
             f"every **{humanize_duration(interval_seconds)}**."
         )
 
@@ -327,12 +335,13 @@ class Economy(commands.Cog):
         if not rows:
             await ctx.send("No role salaries set. Use `.collectrole bind <role> <time> <amount>` to add one.")
             return
+        cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title="Role Salaries", color=discord.Color.gold())
         lines = []
         for r in rows:
             role = ctx.guild.get_role(r["role_id"])
             name = role.mention if role else f"`{r['role_id']}` (deleted)"
-            lines.append(f"{name} — **{r['amount']:,}**{MAIN_CURRENCY_EMOJI} every {humanize_duration(r['interval_seconds'])}")
+            lines.append(f"{name} — **{r['amount']:,}**{cur.emoji} every {humanize_duration(r['interval_seconds'])}")
         embed.description = "\n".join(lines)
         await ctx.send(embed=embed)
 
@@ -374,7 +383,8 @@ class Economy(commands.Cog):
         await update_wallet(self.pool, ctx.guild.id, member.id, amount)
         await add_transaction(self.pool, ctx.guild.id, ctx.author.id, -amount, "gift", f"Gift to {member}")
         await add_transaction(self.pool, ctx.guild.id, member.id, amount, "gift", f"Gift from {ctx.author}")
-        await ctx.send(f"You gifted {amount}{MAIN_CURRENCY_EMOJI} to {member.mention}!")
+        cur = self.bot.get_currency(ctx.guild.id)
+        await ctx.send(f"You gifted {amount}{cur.emoji} to {member.mention}!")
 
     @commands.command(aliases=["transactions", "txlog"])
     @require_not_locked()
@@ -411,7 +421,7 @@ class Economy(commands.Cog):
                 await ctx.send(f"{member.display_name} has no counting transactions.")
                 return
             rows = [dict(r) for r in rows]
-            view = TransactionPaginator(rows, member, ctx.author.id)
+            view = TransactionPaginator(rows, member, ctx.author.id, self.bot.get_currency(ctx.guild.id))
             await ctx.send(embed=view.build_embed(), view=view)
             return
 
@@ -443,7 +453,7 @@ class Economy(commands.Cog):
             await ctx.send(f"{member.display_name} has no transactions.")
             return
 
-        view = TransactionPaginator(rows, member, ctx.author.id, counting_note=has_counting)
+        view = TransactionPaginator(rows, member, ctx.author.id, self.bot.get_currency(ctx.guild.id), counting_note=has_counting)
         await ctx.send(embed=view.build_embed(), view=view)
 
     @commands.command()
@@ -456,13 +466,14 @@ class Economy(commands.Cog):
             await ctx.send(str(e))
             return
 
-        if not await confirm(ctx, f"⚠️ Add **{amount:,}**{MAIN_CURRENCY_EMOJI} to {member.mention}'s wallet?"):
+        cur = self.bot.get_currency(ctx.guild.id)
+        if not await confirm(ctx, f"⚠️ Add **{amount:,}**{cur.emoji} to {member.mention}'s wallet?"):
             return
 
         await ensure_wallet(self.pool, ctx.guild.id, member.id)
         await update_wallet(self.pool, ctx.guild.id, member.id, amount)
         await add_transaction(self.pool, ctx.guild.id, member.id, amount, "admin_add", f"Added by {ctx.author}")
-        await ctx.send(f"Added **{amount:,}**{MAIN_CURRENCY_EMOJI} to {member.mention}'s wallet.")
+        await ctx.send(f"Added **{amount:,}**{cur.emoji} to {member.mention}'s wallet.")
 
     @commands.command()
     @commands.is_owner()
@@ -505,9 +516,10 @@ class Economy(commands.Cog):
                         ctx.guild.id, member.id,
                     )
 
+        cur = self.bot.get_currency(ctx.guild.id)
         parts = [f"**{member.display_name}** has been locked from the economy."]
         if open_orders:
-            parts.append(f"{len(open_orders)} open order(s) cancelled" + (f", {refund}{MAIN_CURRENCY_EMOJI} escrowed gold refunded." if refund else "."))
+            parts.append(f"{len(open_orders)} open order(s) cancelled" + (f", {refund}{cur.emoji} escrowed gold refunded." if refund else "."))
         if "--delete" in flags:
             share_lines = ", ".join(f"{h['quantity']}x {h['name']}" for h in returned) if returned else "none"
             parts.append(f"Balance zeroed, shares returned to IPO ({share_lines}).")
@@ -596,17 +608,18 @@ class Economy(commands.Cog):
             await ctx.send(str(e))
             return
 
+        cur = self.bot.get_currency(ctx.guild.id)
         bal = await ensure_wallet(self.pool, ctx.guild.id, member.id)
         if bal["wallet"] + bal["bank"] < amount:
-            await ctx.send(f"{member.display_name} only has {bal['wallet'] + bal['bank']}{MAIN_CURRENCY_EMOJI} total.")
+            await ctx.send(f"{member.display_name} only has {bal['wallet'] + bal['bank']}{cur.emoji} total.")
             return
 
-        if not await confirm(ctx, f"⚠️ Remove **{amount:,}**{MAIN_CURRENCY_EMOJI} from {member.mention}'s wallet/bank?"):
+        if not await confirm(ctx, f"⚠️ Remove **{amount:,}**{cur.emoji} from {member.mention}'s wallet/bank?"):
             return
 
         bal = await ensure_wallet(self.pool, ctx.guild.id, member.id)
         if bal["wallet"] + bal["bank"] < amount:
-            await ctx.send(f"{member.display_name} only has {bal['wallet'] + bal['bank']}{MAIN_CURRENCY_EMOJI} total.")
+            await ctx.send(f"{member.display_name} only has {bal['wallet'] + bal['bank']}{cur.emoji} total.")
             return
 
         from_wallet = min(amount, bal["wallet"])
@@ -617,4 +630,4 @@ class Economy(commands.Cog):
         if from_bank > 0:
             await update_bank(self.pool, ctx.guild.id, member.id, -from_bank)
         await add_transaction(self.pool, ctx.guild.id, member.id, -amount, "admin_remove", f"Removed by {ctx.author}")
-        await ctx.send(f"Removed **{amount:,}**{MAIN_CURRENCY_EMOJI} from {member.mention}'s wallet/bank.")
+        await ctx.send(f"Removed **{amount:,}**{cur.emoji} from {member.mention}'s wallet/bank.")

@@ -1,8 +1,6 @@
 import discord
 from discord.ext import commands
 
-from config import MAIN_CURRENCY_EMOJI
-
 
 _VALID_MODES = {"wallet", "bank", "port", "portfolio", "waifu"}
 
@@ -125,6 +123,7 @@ class Leaderboard(commands.Cog):
     # ── Display ──
 
     async def _build_embed(self, ctx: commands.Context, title: str, rows: list, invoker_id: int) -> discord.Embed:
+        cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title=title, color=discord.Color.from_rgb(255, 215, 0))
         if not rows:
             embed.description = "No data yet."
@@ -140,7 +139,7 @@ class Leaderboard(commands.Cog):
             member = ctx.guild.get_member(uid)
             name = member.display_name if member else f"User {uid}"
             prefix = medals.get(i, f"`{i}.`")
-            lines.append(f"{prefix} **{name}** — {MAIN_CURRENCY_EMOJI} {row['score']:,}")
+            lines.append(f"{prefix} **{name}** — {cur.emoji} {row['score']:,}")
         embed.description = "\n".join(lines)
 
         if not invoker_in_top:

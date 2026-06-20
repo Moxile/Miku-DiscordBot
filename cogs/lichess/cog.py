@@ -216,7 +216,7 @@ class Lichess(commands.Cog, name="Lichess"):
         client_id = os.getenv("LICHESS_CLIENT_ID")
         redirect_uri = os.getenv("LICHESS_REDIRECT_URI")
         if not client_id or not redirect_uri:
-            await ctx.send("Lichess OAuth is not configured on this bot.")
+            await ctx.send("Lichess linking isn't available right now.")
             return
 
         code_verifier, code_challenge = generate_pkce_pair()
@@ -475,7 +475,7 @@ class Lichess(commands.Cog, name="Lichess"):
         if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
             return
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You need Manage Roles permission for that command.")
+            return
         elif isinstance(error, commands.BotMissingPermissions):
             await ctx.send("I'm missing Manage Roles permission.")
         elif isinstance(error, commands.MissingRequiredArgument):

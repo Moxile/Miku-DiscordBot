@@ -10,7 +10,6 @@ from cogs.predictions.db import (
 )
 from core.checks import require_not_locked, UserLocked
 from core.money import parse_amount, AmountError
-from config import MAIN_CURRENCY_EMOJI
 
 # In-memory cache: guild_id -> role_id
 _predictor_roles: dict[int, int] = {}
@@ -107,6 +106,7 @@ class Predictions(commands.Cog):
     @require_not_locked()
     async def pbet(self, ctx, prediction_id: int, option: int, amount: str):
         """Bet on a prediction option. Usage: .pbet <id> <option#> <amount|all>"""
+        cur = self.bot.get_currency(ctx.guild.id)
         pred = await get_prediction(self.pool, prediction_id)
         if not pred or pred["guild_id"] != ctx.guild.id:
             await ctx.send("Prediction not found.")
@@ -123,7 +123,7 @@ class Predictions(commands.Cog):
             return
 
         if wallet["wallet"] < amount:
-            await ctx.send(f"You don't have enough {MAIN_CURRENCY_EMOJI}.")
+            await ctx.send(f"You don't have enough {cur.emoji}.")
             return
 
         options = await get_prediction_options(self.pool, prediction_id)
@@ -141,11 +141,12 @@ class Predictions(commands.Cog):
                               f"Bet on prediction #{prediction_id}")
         await place_prediction_bet(self.pool, prediction_id, target["id"], ctx.guild.id, ctx.author.id, amount)
 
-        await ctx.send(f"{ctx.author.display_name} bet {amount}{MAIN_CURRENCY_EMOJI} on **{target['label']}**!")
+        await ctx.send(f"{ctx.author.display_name} bet {amount}{cur.emoji} on **{target['label']}**!")
 
     @commands.command()
     async def pclose(self, ctx, prediction_id: int):
         """Close a prediction (no more bets). Creator or admin only."""
+        cur = self.bot.get_currency(ctx.guild.id)
         pred = await get_prediction(self.pool, prediction_id)
         if not pred or pred["guild_id"] != ctx.guild.id:
             await ctx.send("Prediction not found.")
@@ -164,13 +165,13 @@ class Predictions(commands.Cog):
         pool_total = sum(totals.values())
 
         embed = discord.Embed(title="Prediction Closed!", description=pred["question"], color=discord.Color.orange())
-        embed.add_field(name="Total Pool", value=f"{pool_total}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Total Pool", value=f"{pool_total}{cur.emoji}", inline=True)
         for opt in options:
             opt_total = totals.get(opt["id"], 0)
             pct = f"({opt_total * 100 // pool_total}%)" if pool_total > 0 else ""
             embed.add_field(
                 name=f"Option {opt['option_index']}: {opt['label']}",
-                value=f"{opt_total}{MAIN_CURRENCY_EMOJI} {pct}",
+                value=f"{opt_total}{cur.emoji} {pct}",
                 inline=False,
             )
         embed.set_footer(text=f"Use .presolve {prediction_id} <option#> to pick the winner.")
@@ -179,6 +180,7 @@ class Predictions(commands.Cog):
     @commands.command()
     async def presolve(self, ctx, prediction_id: int, winning_option: int):
         """Resolve a prediction and pay out winners. Creator or admin only."""
+        cur = self.bot.get_currency(ctx.guild.id)
         pred = await get_prediction(self.pool, prediction_id)
         if not pred or pred["guild_id"] != ctx.guild.id:
             await ctx.send("Prediction not found.")
@@ -211,7 +213,7 @@ class Predictions(commands.Cog):
             description=f"{pred['question']}\n\nWinner: **{winner_opt['label']}**",
             color=discord.Color.green(),
         )
-        embed.add_field(name="Total Pool", value=f"{pool_total}{MAIN_CURRENCY_EMOJI}", inline=True)
+        embed.add_field(name="Total Pool", value=f"{pool_total}{cur.emoji}", inline=True)
 
         if winner_pool > 0 and pool_total > 0:
             winning_bets = await get_winning_bets(self.pool, prediction_id, winner_opt["id"])
@@ -224,7 +226,7 @@ class Predictions(commands.Cog):
                 member = ctx.guild.get_member(bet["user_id"])
                 name = member.display_name if member else str(bet["user_id"])
                 profit = payout - bet["amount"]
-                payout_lines.append(f"{name}: +{profit}{MAIN_CURRENCY_EMOJI} (bet {bet['amount']}, got {payout})")
+                payout_lines.append(f"{name}: +{profit}{cur.emoji} (bet {bet['amount']}, got {payout})")
             embed.add_field(name="Payouts", value="\n".join(payout_lines) or "None", inline=False)
         else:
             embed.add_field(name="Payouts", value="No winning bets.", inline=False)
@@ -234,6 +236,7 @@ class Predictions(commands.Cog):
     @commands.command(aliases=["preds"])
     async def predictions(self, ctx):
         """View all active predictions."""
+        cur = self.bot.get_currency(ctx.guild.id)
         preds = await get_active_predictions(self.pool, ctx.guild.id)
         if not preds:
             await ctx.send("No active predictions.")
@@ -245,13 +248,13 @@ class Predictions(commands.Cog):
             totals = {r["option_id"]: r["total"] for r in await get_option_totals(self.pool, pred["id"])}
             pool_total = sum(totals.values())
             opts_text = "\n".join(
-                f"  {o['option_index']}. {o['label']} — {totals.get(o['id'], 0)}{MAIN_CURRENCY_EMOJI}"
+                f"  {o['option_index']}. {o['label']} — {totals.get(o['id'], 0)}{cur.emoji}"
                 for o in options
             )
             status = pred["status"].capitalize()
             embed.add_field(
                 name=f"#{pred['id']} [{status}] {pred['question']}",
-                value=f"Pool: {pool_total}{MAIN_CURRENCY_EMOJI}\n{opts_text}",
+                value=f"Pool: {pool_total}{cur.emoji}\n{opts_text}",
                 inline=False,
             )
         await ctx.send(embed=embed)

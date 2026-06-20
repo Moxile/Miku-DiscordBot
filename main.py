@@ -7,6 +7,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from config import PREFIX
+from core.currency import Currency, DEFAULT_CURRENCY
 from core.db_init import init_db
 from core.help import Help
 
@@ -46,6 +47,13 @@ class MikuBot(commands.Bot):
         self.oauth_runner: web.AppRunner | None = None
         self._disabled_cogs_cache: dict[int, set[str]] = {}
         self._owner_role_cache: dict[int, int | None] = {}
+        self._currency_cache: dict[int, Currency] = {}
+
+    def get_currency(self, guild_id: int | None) -> Currency:
+        """Return the configured currency for a guild, or the default if unset."""
+        if guild_id is None:
+            return DEFAULT_CURRENCY
+        return self._currency_cache.get(guild_id, DEFAULT_CURRENCY)
 
     async def _is_cog_disabled(self, guild_id: int, cog_name: str) -> bool:
         if guild_id not in self._disabled_cogs_cache:
@@ -98,6 +106,9 @@ class MikuBot(commands.Bot):
             max_size=10,
         )
         await init_db(self.pool)
+
+        for row in await self.pool.fetch("SELECT guild_id, name, emoji FROM guild_currency"):
+            self._currency_cache[row["guild_id"]] = Currency(row["name"], row["emoji"])
 
         for ext in EXTENSIONS:
             await self.load_extension(ext)

@@ -17,4 +17,12 @@ DISABLED_COGS = """
     );
 """
 
-SCHEMA = GUILD_SETTINGS + DISABLED_COGS
+GUILD_CURRENCY = """
+    CREATE TABLE IF NOT EXISTS guild_currency (
+        guild_id BIGINT PRIMARY KEY,
+        name     TEXT NOT NULL,
+        emoji    TEXT NOT NULL
+    );
+"""
+
+SCHEMA = GUILD_SETTINGS + DISABLED_COGS + GUILD_CURRENCY

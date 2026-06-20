@@ -127,7 +127,7 @@ class BotReactions(commands.Cog, name="BotReactions"):
         if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
             return
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send('You need Manage Server permission to use this command.')
+            return
         elif isinstance(error, commands.RoleNotFound):
             await ctx.send("Couldn't find that role.")
         elif isinstance(error, commands.MissingRequiredArgument):

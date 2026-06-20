@@ -7,7 +7,7 @@ import re
 import discord
 from discord.ext import commands
 
-from config import MAIN_CURRENCY_EMOJI, PREFIX
+from config import PREFIX
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 from core.checks import user_is_locked
 

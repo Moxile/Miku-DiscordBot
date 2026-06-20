@@ -5,7 +5,6 @@ import string
 import discord
 from discord.ext import commands
 
-from config import MAIN_CURRENCY_EMOJI
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 from core.money import parse_amount, AmountError
 
@@ -26,6 +25,7 @@ class Acro(commands.Cog):
             await ctx.send("An Acro game is already running in this channel!")
             return
 
+        cur = self.bot.get_currency(ctx.guild.id)
         if bet is not None:
             try:
                 bet = parse_amount(bet)
@@ -47,7 +47,7 @@ class Acro(commands.Cog):
             "submission_order": [],
         }
 
-        bet_text = f"\nEntry fee: {MAIN_CURRENCY_EMOJI} **{bet:,}** (deducted when you submit)" if bet else ""
+        bet_text = f"\nEntry fee: {cur.emoji} **{bet:,}** (deducted when you submit)" if bet else ""
         embed = discord.Embed(
             title="Acro Game Started!",
             description=(
@@ -119,6 +119,7 @@ class Acro(commands.Cog):
         await self._resolve(channel, game)
 
     async def _resolve(self, channel: discord.TextChannel, game: dict):
+        cur = self.bot.get_currency(channel.guild.id)
         order = game["submission_order"]
         num_submissions = len(order)
         voters_who_are_players = {uid for uid in game["participants"]}
@@ -174,7 +175,7 @@ class Acro(commands.Cog):
             if len(winners) == 1:
                 embed.add_field(
                     name="Winner",
-                    value=f"**{winner_names[0]}** wins {MAIN_CURRENCY_EMOJI} **{pot:,}**!",
+                    value=f"**{winner_names[0]}** wins {cur.emoji} **{pot:,}**!",
                     inline=False,
                 )
             else:
@@ -182,7 +183,7 @@ class Acro(commands.Cog):
                     name="Tie!",
                     value=(
                         f"**{', '.join(winner_names)}** split the pot — "
-                        f"{MAIN_CURRENCY_EMOJI} **{share:,}** each."
+                        f"{cur.emoji} **{share:,}** each."
                     ),
                     inline=False,
                 )
@@ -226,6 +227,7 @@ class Acro(commands.Cog):
             await self._handle_vote(message, game)
 
     async def _handle_guess(self, message: discord.Message, game: dict):
+        cur = self.bot.get_currency(message.guild.id)
         letters = game["letters"]
         words = message.content.strip().split()
 
@@ -256,8 +258,8 @@ class Acro(commands.Cog):
                 )
                 if bal["wallet"] < game["bet"]:
                     await message.channel.send(
-                        f"{message.author.mention} you need {MAIN_CURRENCY_EMOJI} **{game['bet']:,}** "
-                        f"in your wallet to play. (Have: {MAIN_CURRENCY_EMOJI} **{bal['wallet']:,}**)",
+                        f"{message.author.mention} you need {cur.emoji} **{game['bet']:,}** "
+                        f"in your wallet to play. (Have: {cur.emoji} **{bal['wallet']:,}**)",
                         delete_after=10,
                     )
                     return
