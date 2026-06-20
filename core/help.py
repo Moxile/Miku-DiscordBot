@@ -36,6 +36,7 @@ class Category:
     name: str
     description: str
     cogs: list[str] = field(default_factory=list)  # cog qualified names, in display order
+    admin_hub: bool = False  # if True, collect every admin/owner command across all cogs
 
 
 # The 19 cogs grouped into a handful of scannable themes. The dropdown and the
@@ -62,9 +63,14 @@ CATEGORIES: list[Category] = [
     Category("utility", "🛠️", "Utility",
              "Calculator, color preview, reminders & counting.",
              ["Utility", "Reminders", "Counting"]),
-    Category("admin", "🔧", "Admin",
-             "Moderation, reaction roles & bot reactions.",
-             ["Moderation", "ReactionRoles", "BotReactions"]),
+    Category("admin", "🔧", "Admin & Setup",
+             "Every owner/admin setup command — channels, currency, shop, stocks, "
+             "salaries, crime, roles, with moderation in its own section.",
+             # Display order within the hub; any other cog with admin commands is
+             # appended automatically. Moderation is last so it stands on its own.
+             ["Management", "Economy", "Shop", "Market", "Missions", "Predictions",
+              "Gambling", "Lichess", "Counting", "ReactionRoles", "BotReactions", "Moderation"],
+             admin_hub=True),
 ]
 
 CATEGORY_BY_KEY = {c.key: c for c in CATEGORIES}
@@ -78,21 +84,40 @@ def _tag(cmd: commands.Command) -> str:
     """Return a ` [Admin]`/` [Owner]` suffix for permission-gated commands."""
     for check in cmd.checks:
         s = str(check)
-        if "is_owner" in s:
+        if "is_owner" in s or "guild_or_bot_owner" in s:
             return " [Owner]"
         if "has_permissions" in s or "has_guild_permissions" in s:
             return " [Admin]"
     return ""
 
 
-def _command_lines(cmd: commands.Command) -> list[str]:
-    """A compact one-liner for a command, plus a subcommand line for groups."""
+def _is_admin(cmd: commands.Command) -> bool:
+    """True if a command is owner- or admin-gated (i.e. it carries a tag)."""
+    return bool(_tag(cmd))
+
+
+def _command_lines(cmd: commands.Command, *, admin: bool | None = None) -> list[str]:
+    """A compact one-liner for a command, plus a subcommand line for groups.
+
+    admin=None  -> command + every subcommand (legacy behavior).
+    admin=False -> only public commands; the subcommand line drops admin subs.
+    admin=True  -> only admin commands; a group shows if it (or any subcommand)
+                   is admin, listing just the admin subcommands.
+    """
+    if not isinstance(cmd, commands.Group):
+        if admin is not None and _is_admin(cmd) != admin:
+            return []
     line = f"`{cmd.name}`{_tag(cmd)}"
     if cmd.short_doc:
         line += f" — {cmd.short_doc}"
     lines = [_truncate(line, 110)]
     if isinstance(cmd, commands.Group):
         subs = sorted((s for s in cmd.commands if not s.hidden), key=lambda c: c.name)
+        if admin is not None:
+            subs = [s for s in subs if _is_admin(s) == admin]
+            show_group = (_is_admin(cmd) or bool(subs)) if admin else (not _is_admin(cmd))
+            if not show_group:
+                return []
         if subs:
             lines.append(" ↳ " + " ".join(f"`{s.name}`" for s in subs))
     return lines
@@ -114,18 +139,32 @@ def _add_packed(embed: discord.Embed, name: str, lines: list[str]) -> None:
         embed.add_field(name=name if first else f"{name} (cont.)", value=chunk, inline=False)
 
 
-def _cog_command_count(cog: commands.Cog) -> int:
+def _count_commands(cog: commands.Cog, *, admin: bool) -> int:
+    """Count the commands a cog contributes to a public (admin=False) or the
+    Admin hub (admin=True) view — matching what `_command_lines` would render."""
     total = 0
     for cmd in cog.get_commands():
         if cmd.hidden:
             continue
-        total += 1
         if isinstance(cmd, commands.Group):
-            total += sum(1 for s in cmd.commands if not s.hidden)
+            matching = [s for s in cmd.commands if not s.hidden and _is_admin(s) == admin]
+            show_group = (_is_admin(cmd) or bool(matching)) if admin else (not _is_admin(cmd))
+            if show_group:
+                total += 1
+            total += len(matching)
+        elif _is_admin(cmd) == admin:
+            total += 1
     return total
 
 
+def _admin_hub_cogs(bot: commands.Bot, cat: Category) -> list[str]:
+    """The Admin hub's preferred cog order, with any other cog appended."""
+    return list(cat.cogs) + [n for n in bot.cogs if n not in cat.cogs]
+
+
 def build_category_embed(bot: commands.Bot, cat: Category) -> discord.Embed:
+    if cat.admin_hub:
+        return build_admin_embed(bot, cat)
     color = COG_COLORS.get(cat.cogs[0], discord.Color.blurple())
     embed = discord.Embed(title=f"{cat.emoji} {cat.name}", description=cat.description, color=color)
     for cog_name in cat.cogs:
@@ -136,10 +175,33 @@ def build_category_embed(bot: commands.Bot, cat: Category) -> discord.Embed:
         for cmd in sorted(cog.get_commands(), key=lambda c: c.name):
             if cmd.hidden:
                 continue
-            lines.extend(_command_lines(cmd))
+            lines.extend(_command_lines(cmd, admin=False))
         if lines:
             _add_packed(embed, cog_name, lines)
     embed.set_footer(text="Use .help <command> for full details on any command.")
+    return embed
+
+
+def build_admin_embed(bot: commands.Bot, cat: Category) -> discord.Embed:
+    """The Admin hub: every owner/admin setup command, grouped by feature, with
+    Moderation in its own section."""
+    embed = discord.Embed(title=f"{cat.emoji} {cat.name}", description=cat.description,
+                          color=discord.Color.dark_grey())
+    for cog_name in _admin_hub_cogs(bot, cat):
+        cog = bot.get_cog(cog_name)
+        if cog is None:
+            continue
+        lines: list[str] = []
+        for cmd in sorted(cog.get_commands(), key=lambda c: c.name):
+            if cmd.hidden:
+                continue
+            lines.extend(_command_lines(cmd, admin=True))
+        if lines:
+            _add_packed(embed, cog_name, lines)
+    embed.set_footer(
+        text="[Owner] = server/bot owner or owner-role · [Admin] = needs the Discord permission · "
+             ".help <command> for details"
+    )
     return embed
 
 
@@ -154,7 +216,9 @@ def build_home_embed(bot: commands.Bot) -> discord.Embed:
     )
     total = 0
     for cat in CATEGORIES:
-        count = sum(_cog_command_count(c) for c in (bot.get_cog(n) for n in cat.cogs) if c)
+        cog_names = _admin_hub_cogs(bot, cat) if cat.admin_hub else cat.cogs
+        count = sum(_count_commands(c, admin=cat.admin_hub)
+                    for c in (bot.get_cog(n) for n in cog_names) if c)
         total += count
         embed.add_field(
             name=f"{cat.emoji} {cat.name} ({count})",

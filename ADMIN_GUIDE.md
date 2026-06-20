@@ -17,6 +17,7 @@ How to set up and run Miku **inside your Discord server** once the bot has been 
    - [Shop & Items](#shop--items)
    - [Stock Market](#stock-market)
    - [Economy & Money](#economy--money)
+   - [Crime](#crime)
    - [Role Salaries](#role-salaries)
    - [Missions](#missions)
    - [Predictions](#predictions)
@@ -72,7 +73,7 @@ That's it. Everything is stored per-server and persists. The rest of this guide 
 
 ## 2. Permission Tiers
 
-Commands fall into three access levels. In `.help`, restricted commands are tagged **[Owner]** or **[Admin]**.
+Commands fall into three access levels. In `.help`, restricted commands are tagged **[Owner]** or **[Admin]**, and every setup command listed in this guide is collected under the dedicated **🔧 Admin & Setup** category (with **Moderation** in its own section) — so `.help admin` is the live, in-Discord version of this reference.
 
 | Tier | Who qualifies | Based on |
 |------|---------------|----------|
@@ -124,7 +125,7 @@ All of these are **[Owner]** commands.
 
 | Feature | Set to a channel | Clear (allow everywhere) |
 |---------|------------------|--------------------------|
-| `.work` | `.setworkchannel #channel` | `.setworkchannel` |
+| `.work`, `.collect`, `.crime` | `.setworkchannel #channel` | `.setworkchannel` |
 | Gambling (`.coinflip`, `.blackjack`, `.roulette`, …) | `.setgamblingchannel #channel` | `.setgamblingchannel` |
 | Trading (`.marketbuy`, `.sellorder`, …) | `.settradingchannel #channel` | `.settradingchannel` |
 | Market weekly recap / financials posts | `.setmarketownerchannel #channel` | `.setmarketownerchannel` |
@@ -196,7 +197,25 @@ All **[Owner]**.
 - `.lockuser @member --delete` also **zeroes their balance** and returns their shares to IPO. `.unlockuser` restores access but does **not** refund a `--delete` wipe.
 - `.reseteconomy` zeroes **all** wallets/banks, deletes all transactions and stock positions, and recreates every stock at 10,000 shares / its original IPO price. It asks to confirm first and **cannot be reversed**.
 
-**Player-facing:** `.balance`, `.deposit`, `.withdraw`, `.work`, `.collect`, `.gift`, `.curtrs` (transaction log).
+**Player-facing:** `.balance`, `.deposit`, `.withdraw`, `.work`, `.collect`, `.crime`, `.gift`, `.curtrs` (transaction log).
+
+---
+
+### Crime
+
+`.crime` is a high-risk twist on `.work`: on success the player wins a random payout (skewed so small wins are far more common than big ones); on failure they **lose a percentage of their total money — wallet *and* bank**. It has its own 1-hour cooldown and obeys the **work channel** ([`.setworkchannel`](#5-lock-features-to-channels)). All settings are **[Owner]**.
+
+| Action | Command | Default |
+|--------|---------|---------|
+| Show the current crime settings | `.crimeconfig` | — |
+| Set the **success rate** (0–100%) | `.crimeconfig rate <percent>` | `40` |
+| Set the **failure penalty** (% of total wallet+bank lost) | `.crimeconfig penalty <percent>` | `20` |
+
+- **To change** either setting, just run the command again with a new value — it overwrites.
+- Successful payouts range from **100** to **1000**; the distribution leans heavily toward the low end, so 1000 is rare.
+- The penalty is taken from the **wallet first, then the bank**.
+
+**Player-facing:** `.crime`.
 
 ---
 
@@ -326,6 +345,7 @@ Auto-assigns rating roles when members link their Lichess account. Setup needs *
 | `.remove @user <amt>` | `.add @user <amt>` |
 | `.lockuser @user` | `.unlockuser @user` (a `--delete` wipe is **not** refunded) |
 | `.reseteconomy` | ❌ irreversible |
+| `.crimeconfig rate/penalty <n>` | run again with a new value (overwrites; defaults are 40% / 20%) |
 | `.collectrole bind @role …` | `.collectrole unbind @role` |
 | `.addmission …` | `.deletemission <id>` |
 | `.set*channel #ch` (any) | the same command with **no channel** |
@@ -347,7 +367,7 @@ Auto-assigns rating roles when members link their Lichess account. Setup needs *
 
 Type `.help` for the interactive menu, `.help <category>` for a group, or `.help <command>` for details on any command.
 
-**💰 Economy** — `.balance` (`bal`,`b`,`$`), `.deposit` (`dep`,`d`), `.withdraw` (`with`,`w`), `.work`, `.collect`, `.gift`, `.curtrs` (`transactions`,`txlog`)
+**💰 Economy** — `.balance` (`bal`,`b`,`$`), `.deposit` (`dep`,`d`), `.withdraw` (`with`,`w`), `.work`, `.collect`, `.crime`, `.gift`, `.curtrs` (`transactions`,`txlog`)
 **🛒 Shop** — `.shop`, `.buy <name>`, `.inventory` (`inv`)
 **🎯 Missions** — `.missions`, `.fund <name> <amount>`
 **🤝 Offers (peer bets)** — `.offer …`, `.take <id> <stake>`, `.offers`, `.offerinfo <id>`, `.closeoffer <id> win|lose`, `.canceloffer <id>`

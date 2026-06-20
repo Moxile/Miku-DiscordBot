@@ -16,7 +16,10 @@ from config import REVENUE_BASE_MULTIPLIER
 import datetime
 import secrets
 
-from config import WORK_COOLDOWN
+from config import (
+    WORK_COOLDOWN, CRIME_COOLDOWN, DEFAULT_CRIME_SUCCESS_RATE, DEFAULT_CRIME_PENALTY_PCT,
+    CRIME_MIN_PAYOUT, CRIME_MAX_PAYOUT, CRIME_PAYOUT_EXPONENT,
+)
 from core.currency import Currency
 from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked, invalidate_lock
 
@@ -87,7 +90,9 @@ class Economy(commands.Cog):
         return self.bot.pool
 
     async def cog_command_error(self, ctx, error):
-        if isinstance(error, UserLocked):
+        # UserLocked is silent; WrongChannel is reported by each command's own
+        # error handler, so swallow it here to avoid a duplicate traceback.
+        if isinstance(error, (UserLocked, WrongChannel)):
             return
         raise error
 
@@ -229,6 +234,7 @@ class Economy(commands.Cog):
 
     @commands.command()
     @require_not_locked()
+    @require_channel("work_channel")
     async def collect(self, ctx):
         """Collect the salary for every salaried role you hold whose timer is ready."""
         role_ids = [r.id for r in ctx.author.roles]
@@ -285,6 +291,146 @@ class Economy(commands.Cog):
                 f"You've already collected all your salaries. Next up: **{soonest[0]}** in "
                 f"*{humanize_duration(soonest[1], short=True)}*."
             )
+
+    @collect.error
+    async def collect_error(self, ctx, error):
+        if isinstance(error, WrongChannel):
+            await ctx.send(str(error), ephemeral=True)
+
+    # ── Crime ──
+
+    async def _get_crime_config(self, guild_id: int) -> tuple[int, int]:
+        """Return (success_rate, penalty_pct) for this guild, falling back to defaults."""
+        rows = await self.pool.fetch(
+            "SELECT key, value FROM guild_settings WHERE guild_id = $1 AND key = ANY($2)",
+            guild_id, ["crime_success_rate", "crime_penalty_pct"],
+        )
+        settings = {r["key"]: int(r["value"]) for r in rows}
+        return (
+            settings.get("crime_success_rate", DEFAULT_CRIME_SUCCESS_RATE),
+            settings.get("crime_penalty_pct", DEFAULT_CRIME_PENALTY_PCT),
+        )
+
+    async def _set_crime_setting(self, guild_id: int, key: str, value: int):
+        await self.pool.execute(
+            """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, $2, $3)
+               ON CONFLICT (guild_id, key) DO UPDATE SET value = EXCLUDED.value""",
+            guild_id, key, str(value),
+        )
+
+    @commands.command()
+    @require_not_locked()
+    @require_channel("work_channel")
+    async def crime(self, ctx):
+        """Commit a crime: a chance at a big payout, but risk losing a cut of your total money."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cooldown = await self.pool.fetchval(
+            "SELECT expires_at FROM cooldowns WHERE guild_id = $1 AND user_id = $2 AND command = 'crime' AND expires_at > now()",
+            ctx.guild.id, ctx.author.id,
+        )
+        if cooldown is not None:
+            remaining = cooldown - now
+            minutes, seconds = divmod(int(remaining.total_seconds()), 60)
+            await ctx.send(f"You're laying low after your last job. Wait *{minutes}m {seconds}s* before your next crime.")
+            return
+
+        success_rate, penalty_pct = await self._get_crime_config(ctx.guild.id)
+        bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        cur = self.bot.get_currency(ctx.guild.id)
+
+        # Start the cooldown regardless of the outcome.
+        await self.pool.execute(
+            """INSERT INTO cooldowns (guild_id, user_id, command, expires_at)
+               VALUES ($1, $2, 'crime', $3)
+               ON CONFLICT (guild_id, user_id, command) DO UPDATE SET expires_at = EXCLUDED.expires_at""",
+            ctx.guild.id, ctx.author.id, now + datetime.timedelta(seconds=CRIME_COOLDOWN),
+        )
+
+        if secrets.randbelow(100) < success_rate:
+            # Skew the payout toward CRIME_MIN_PAYOUT: a uniform roll raised to an
+            # exponent makes large payouts increasingly unlikely.
+            roll = secrets.randbelow(1_000_000) / 1_000_000
+            span = CRIME_MAX_PAYOUT - CRIME_MIN_PAYOUT
+            payout = CRIME_MIN_PAYOUT + int(span * (roll ** CRIME_PAYOUT_EXPONENT))
+            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, payout)
+            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, payout, "crime", "Successful crime")
+            embed = discord.Embed(
+                title="Crime — Success 🤑",
+                description=f"You pulled it off and got away with **{payout:,}**{cur.emoji}!",
+                color=discord.Color.green(),
+            )
+            await ctx.send(embed=embed)
+            return
+
+        # Failure: lose penalty_pct of total money, taken from the wallet first then the bank.
+        total = bal["wallet"] + bal["bank"]
+        loss = total * penalty_pct // 100
+        from_wallet = min(loss, bal["wallet"])
+        from_bank = loss - from_wallet
+        if from_wallet > 0:
+            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -from_wallet)
+        if from_bank > 0:
+            await update_bank(self.pool, ctx.guild.id, ctx.author.id, -from_bank)
+        if loss > 0:
+            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, -loss, "crime", "Failed crime")
+
+        embed = discord.Embed(
+            title="Crime — Busted 🚔",
+            description=(
+                f"You got caught and lost **{loss:,}**{cur.emoji} ({penalty_pct}% of your total wallet + bank)."
+                if loss > 0 else
+                "You got caught — lucky for you, you had nothing worth taking."
+            ),
+            color=discord.Color.red(),
+        )
+        await ctx.send(embed=embed)
+
+    @crime.error
+    async def crime_error(self, ctx, error):
+        if isinstance(error, WrongChannel):
+            await ctx.send(str(error), ephemeral=True)
+
+    @commands.group(invoke_without_command=True)
+    @commands.is_owner()
+    async def crimeconfig(self, ctx):
+        """Owner: view or change the `.crime` success rate and failure penalty."""
+        rate, penalty = await self._get_crime_config(ctx.guild.id)
+        embed = discord.Embed(title="Crime Settings", color=discord.Color.dark_red())
+        embed.add_field(name="Success rate", value=f"{rate}%")
+        embed.add_field(name="Failure penalty", value=f"{penalty}% of total")
+        embed.set_footer(text="Change with .crimeconfig rate <percent> or .crimeconfig penalty <percent>")
+        await ctx.send(embed=embed)
+
+    @crimeconfig.command(name="rate")
+    @commands.is_owner()
+    async def crimeconfig_rate(self, ctx, percent: int):
+        """Owner: set the `.crime` success rate (0–100%)."""
+        if not 0 <= percent <= 100:
+            await ctx.send("Success rate must be between 0 and 100.")
+            return
+        await self._set_crime_setting(ctx.guild.id, "crime_success_rate", percent)
+        await ctx.send(f"`.crime` success rate set to **{percent}%**.")
+
+    @crimeconfig.command(name="penalty")
+    @commands.is_owner()
+    async def crimeconfig_penalty(self, ctx, percent: int):
+        """Owner: set the `.crime` failure penalty as a % of total wallet + bank (0–100%)."""
+        if not 0 <= percent <= 100:
+            await ctx.send("Penalty must be between 0 and 100.")
+            return
+        await self._set_crime_setting(ctx.guild.id, "crime_penalty_pct", percent)
+        await ctx.send(f"`.crime` failure penalty set to **{percent}%** of total money.")
+
+    @crimeconfig.error
+    @crimeconfig_rate.error
+    @crimeconfig_penalty.error
+    async def crimeconfig_error(self, ctx, error):
+        if isinstance(error, commands.NotOwner):
+            await ctx.send("Only the owner or an owner-role holder can change crime settings.")
+        elif isinstance(error, (commands.BadArgument, commands.MissingRequiredArgument)):
+            await ctx.send("Usage: `.crimeconfig rate <percent>` or `.crimeconfig penalty <percent>`")
+        else:
+            raise error
 
     @commands.group(invoke_without_command=True)
     @commands.is_owner()

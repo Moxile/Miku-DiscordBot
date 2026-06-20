@@ -1,8 +1,86 @@
+import math
+
 import discord
 from discord.ext import commands
 
 
 _VALID_MODES = {"wallet", "bank", "port", "portfolio", "waifu"}
+
+PER_PAGE = 10
+
+
+class LeaderboardPaginator(discord.ui.View):
+    """Pages through a full leaderboard, 10 entries at a time."""
+
+    def __init__(self, ctx: commands.Context, title: str, rows: list, invoker_id: int, timeout=180):
+        super().__init__(timeout=timeout)
+        self.ctx = ctx
+        self.title = title
+        self.rows = rows
+        self.invoker_id = invoker_id
+        self.currency = ctx.bot.get_currency(ctx.guild.id)
+        self.page = 0
+        self.max_page = max(0, math.ceil(len(rows) / PER_PAGE) - 1)
+        self.message: discord.Message | None = None
+        # Global rank of the invoker across the whole leaderboard, if present.
+        self.invoker_rank = next((i for i, r in enumerate(rows, 1) if r["user_id"] == invoker_id), None)
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page >= self.max_page
+
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(title=self.title, color=discord.Color.from_rgb(255, 215, 0))
+        if not self.rows:
+            embed.description = "No data yet."
+            return embed
+
+        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+        start = self.page * PER_PAGE
+        page_rows = self.rows[start:start + PER_PAGE]
+        lines = []
+        for rank, row in enumerate(page_rows, start + 1):
+            uid = row["user_id"]
+            member = self.ctx.guild.get_member(uid)
+            name = member.display_name if member else f"User {uid}"
+            prefix = medals.get(rank, f"`{rank}.`")
+            lines.append(f"{prefix} **{name}** — {self.currency.emoji} {row['score']:,}")
+        embed.description = "\n".join(lines)
+
+        footer = f"Page {self.page + 1}/{self.max_page + 1} • {len(self.rows)} ranked"
+        footer += f" • You are #{self.invoker_rank}" if self.invoker_rank else " • You are unranked"
+        embed.set_footer(text=footer)
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "This leaderboard isn't yours — run `.lb` to get your own.", ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.max_page, self.page + 1)
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class Leaderboard(commands.Cog):
@@ -20,7 +98,7 @@ class Leaderboard(commands.Cog):
             return await conn.fetch(
                 """SELECT user_id, wallet AS score
                    FROM balances WHERE guild_id = $1
-                   ORDER BY wallet DESC LIMIT 10""",
+                   ORDER BY wallet DESC""",
                 guild_id,
             )
 
@@ -29,7 +107,7 @@ class Leaderboard(commands.Cog):
             return await conn.fetch(
                 """SELECT user_id, bank AS score
                    FROM balances WHERE guild_id = $1
-                   ORDER BY bank DESC LIMIT 10""",
+                   ORDER BY bank DESC""",
                 guild_id,
             )
 
@@ -57,8 +135,7 @@ class Leaderboard(commands.Cog):
                    JOIN prices pr ON pr.guild_id = p.guild_id AND pr.stock_channel_id = p.stock_channel_id
                    WHERE p.guild_id = $1 AND p.quantity > 0
                    GROUP BY p.user_id
-                   ORDER BY score DESC
-                   LIMIT 10""",
+                   ORDER BY score DESC""",
                 guild_id,
             )
 
@@ -70,8 +147,7 @@ class Leaderboard(commands.Cog):
                    FROM waifus
                    WHERE guild_id = $1 AND owner_id IS NOT NULL
                    GROUP BY owner_id
-                   ORDER BY score DESC
-                   LIMIT 10""",
+                   ORDER BY score DESC""",
                 guild_id,
             )
 
@@ -115,36 +191,9 @@ class Leaderboard(commands.Cog):
                    LEFT JOIN port_value pv ON pv.user_id = b.user_id
                    LEFT JOIN harem_value hv ON hv.user_id = b.user_id
                    WHERE b.guild_id = $1
-                   ORDER BY score DESC
-                   LIMIT 10""",
+                   ORDER BY score DESC""",
                 guild_id,
             )
-
-    # ── Display ──
-
-    async def _build_embed(self, ctx: commands.Context, title: str, rows: list, invoker_id: int) -> discord.Embed:
-        cur = self.bot.get_currency(ctx.guild.id)
-        embed = discord.Embed(title=title, color=discord.Color.from_rgb(255, 215, 0))
-        if not rows:
-            embed.description = "No data yet."
-            return embed
-
-        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-        lines = []
-        invoker_in_top = False
-        for i, row in enumerate(rows, 1):
-            uid = row["user_id"]
-            if uid == invoker_id:
-                invoker_in_top = True
-            member = ctx.guild.get_member(uid)
-            name = member.display_name if member else f"User {uid}"
-            prefix = medals.get(i, f"`{i}.`")
-            lines.append(f"{prefix} **{name}** — {cur.emoji} {row['score']:,}")
-        embed.description = "\n".join(lines)
-
-        if not invoker_in_top:
-            embed.set_footer(text="You are not in the top 10.")
-        return embed
 
     # ── Command ──
 
@@ -152,9 +201,9 @@ class Leaderboard(commands.Cog):
     async def lb(self, ctx: commands.Context, mode: str = None):
         """Show leaderboards. Use `.lb` for net worth, or specify a mode:
         `wallet`, `bank`, `port` (portfolio), `waifu` (harem value).
+        Pages through everyone 10 at a time — use the buttons to scroll.
         Usage: .lb [wallet|bank|port|waifu]"""
         guild_id = ctx.guild.id
-        invoker_id = ctx.author.id
 
         if mode is None:
             rows = await self._lb_net(guild_id)
@@ -179,8 +228,11 @@ class Leaderboard(commands.Cog):
                 rows = await self._lb_waifu(guild_id)
                 title = "Harem Value Leaderboard"
 
-        embed = await self._build_embed(ctx, title, rows, invoker_id)
-        await ctx.send(embed=embed)
+        # Only rank players with something to show.
+        rows = [r for r in rows if (r["score"] or 0) > 0]
+
+        view = LeaderboardPaginator(ctx, title, rows, ctx.author.id)
+        view.message = await ctx.send(embed=view.build_embed(), view=view)
 
     @lb.error
     async def lb_error(self, ctx, error):
