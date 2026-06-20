@@ -12,15 +12,15 @@ PER_PAGE = 10
 class LeaderboardPaginator(discord.ui.View):
     """Pages through a full leaderboard, 10 entries at a time."""
 
-    def __init__(self, ctx: commands.Context, title: str, rows: list, invoker_id: int, timeout=180):
+    def __init__(self, ctx: commands.Context, title: str, rows: list, invoker_id: int, timeout=180, start_page: int = 0):
         super().__init__(timeout=timeout)
         self.ctx = ctx
         self.title = title
         self.rows = rows
         self.invoker_id = invoker_id
         self.currency = ctx.bot.get_currency(ctx.guild.id)
-        self.page = 0
         self.max_page = max(0, math.ceil(len(rows) / PER_PAGE) - 1)
+        self.page = max(0, min(start_page, self.max_page))
         self.message: discord.Message | None = None
         # Global rank of the invoker across the whole leaderboard, if present.
         self.invoker_rank = next((i for i, r in enumerate(rows, 1) if r["user_id"] == invoker_id), None)
@@ -198,18 +198,26 @@ class Leaderboard(commands.Cog):
     # ── Command ──
 
     @commands.command(aliases=["leaderboard"])
-    async def lb(self, ctx: commands.Context, mode: str = None):
+    async def lb(self, ctx: commands.Context, *args: str):
         """Show leaderboards. Use `.lb` for net worth, or specify a mode:
         `wallet`, `bank`, `port` (portfolio), `waifu` (harem value).
-        Pages through everyone 10 at a time — use the buttons to scroll.
-        Usage: .lb [wallet|bank|port|waifu]"""
+        Pages through everyone 10 at a time — use the buttons to scroll,
+        or jump straight to a page by adding its number.
+        Usage: .lb [wallet|bank|port|waifu] [page]"""
         guild_id = ctx.guild.id
+
+        mode = None
+        page = 1
+        for arg in args:
+            if arg.isdigit():
+                page = int(arg)
+            else:
+                mode = arg.lower()
 
         if mode is None:
             rows = await self._lb_net(guild_id)
             title = "Net Worth Leaderboard"
         else:
-            mode = mode.lower()
             if mode not in _VALID_MODES:
                 await ctx.send(
                     f"Unknown mode `{mode}`. Valid options: `wallet`, `bank`, `port`, `waifu`."
@@ -231,10 +239,10 @@ class Leaderboard(commands.Cog):
         # Only rank players with something to show.
         rows = [r for r in rows if (r["score"] or 0) > 0]
 
-        view = LeaderboardPaginator(ctx, title, rows, ctx.author.id)
+        view = LeaderboardPaginator(ctx, title, rows, ctx.author.id, start_page=page - 1)
         view.message = await ctx.send(embed=view.build_embed(), view=view)
 
     @lb.error
     async def lb_error(self, ctx, error):
         if isinstance(error, commands.BadArgument):
-            await ctx.send("Usage: `.lb [wallet|bank|port|waifu]`")
+            await ctx.send("Usage: `.lb [wallet|bank|port|waifu] [page]`")
