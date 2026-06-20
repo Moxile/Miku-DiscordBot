@@ -13,6 +13,7 @@ from discord.ext import commands, tasks
 
 from config import LICHESS_RATING_ROLE_DEFAULTS, LICHESS_VARIANTS, RATING_SEPARATOR_ROLE
 from cogs.lichess.api import exchange_code, extract_ratings, fetch_account
+from core.checks import has_permissions_or_owner
 from cogs.lichess.db import (
     delete_account,
     get_account,
@@ -303,7 +304,7 @@ class Lichess(commands.Cog, name="Lichess"):
     # ── Admin: setup ─────────────────────────────────────────────────────────
 
     @lichess_group.command(name="setup")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True)
     async def lichess_setup(self, ctx: commands.Context, variant: str = None) -> None:
         """Create rating roles for all (or one) variant. Usage: .lichess setup [variant]"""
@@ -354,13 +355,13 @@ class Lichess(commands.Cog, name="Lichess"):
     # ── Admin: roles subgroup ─────────────────────────────────────────────────
 
     @lichess_group.group(name="roles", invoke_without_command=True)
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def lichess_roles(self, ctx: commands.Context) -> None:
         """Manage rating role bindings. Subcommands: list, bind."""
         await ctx.send_help(ctx.command)
 
     @lichess_roles.command(name="list")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def lichess_roles_list(self, ctx: commands.Context) -> None:
         """List all configured rating role bindings."""
         async with self.pool.acquire() as conn:
@@ -389,7 +390,7 @@ class Lichess(commands.Cog, name="Lichess"):
         await ctx.send(embed=embed)
 
     @lichess_roles.command(name="bind")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def lichess_roles_bind(
         self, ctx: commands.Context, variant: str, tier: int, *, role: discord.Role
     ) -> None:
@@ -410,7 +411,7 @@ class Lichess(commands.Cog, name="Lichess"):
     # ── Admin: config ─────────────────────────────────────────────────────────
 
     @lichess_group.command(name="config")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def lichess_config(
         self,
         ctx: commands.Context,

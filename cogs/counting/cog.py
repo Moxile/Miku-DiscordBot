@@ -9,7 +9,7 @@ from discord.ext import commands
 
 from config import PREFIX
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
-from core.checks import user_is_locked
+from core.checks import has_permissions_or_owner, user_is_locked
 
 _OPS = {
     ast.Add: operator.add,
@@ -206,7 +206,7 @@ class Counting(commands.Cog):
         )
 
     @counting.command(name="bind")
-    @commands.has_permissions(manage_channels=True)
+    @has_permissions_or_owner(manage_channels=True)
     async def counting_bind(self, ctx: commands.Context):
         """Bind counting to this channel (resets current count)."""
         await self.pool.execute(
@@ -225,7 +225,7 @@ class Counting(commands.Cog):
         await ctx.send(f"✅ Counting bound to {ctx.channel.mention}. Start at **1**!")
 
     @counting.command(name="unbind")
-    @commands.has_permissions(manage_channels=True)
+    @has_permissions_or_owner(manage_channels=True)
     async def counting_unbind(self, ctx: commands.Context):
         """Remove the counting channel binding."""
         await self.pool.execute("DELETE FROM counting WHERE guild_id = $1", ctx.guild.id)

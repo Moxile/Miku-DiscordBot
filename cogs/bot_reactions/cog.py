@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 
 from cogs.bot_reactions.db import add_reaction, remove_reaction, list_reactions
+from core.checks import has_permissions_or_owner
 
 
 class BotReactions(commands.Cog, name="BotReactions"):
@@ -50,13 +51,13 @@ class BotReactions(commands.Cog, name="BotReactions"):
     # ── Commands ──
 
     @commands.group(name="botreaction", aliases=["br"], invoke_without_command=True)
-    @commands.has_permissions(manage_guild=True)
+    @has_permissions_or_owner(manage_guild=True)
     async def botreaction(self, ctx: commands.Context):
         """Manage bot reactions. Subcommands: add, remove, list."""
         await ctx.send_help(ctx.command)
 
     @botreaction.command(name="add")
-    @commands.has_permissions(manage_guild=True)
+    @has_permissions_or_owner(manage_guild=True)
     async def br_add(self, ctx: commands.Context, trigger: str, response: str, role: discord.Role = None):
         """Add a bot reaction.
         Usage: .br add <trigger> <response> [role]
@@ -83,7 +84,7 @@ class BotReactions(commands.Cog, name="BotReactions"):
         await ctx.send(embed=embed)
 
     @botreaction.command(name="remove", aliases=["rm", "delete"])
-    @commands.has_permissions(manage_guild=True)
+    @has_permissions_or_owner(manage_guild=True)
     async def br_remove(self, ctx: commands.Context, *, trigger: str):
         """Remove a bot reaction by its trigger.
         Usage: .br remove <trigger>"""
@@ -98,7 +99,7 @@ class BotReactions(commands.Cog, name="BotReactions"):
         await ctx.send(f'Removed reaction for trigger `{trigger}`.')
 
     @botreaction.command(name="list")
-    @commands.has_permissions(manage_guild=True)
+    @has_permissions_or_owner(manage_guild=True)
     async def br_list(self, ctx: commands.Context):
         """List all bot reactions in this server."""
         rows = await self._get_reactions(ctx.guild.id)

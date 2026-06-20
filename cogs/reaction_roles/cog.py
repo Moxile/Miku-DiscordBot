@@ -3,6 +3,7 @@ import re
 import discord
 from discord.ext import commands
 
+from core.checks import has_permissions_or_owner
 from cogs.reaction_roles.db import (
     add_reaction_role,
     get_reaction_role,
@@ -232,13 +233,13 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
     # ── Commands ──
 
     @commands.group(name="reactionroles", aliases=["reactionrole"], invoke_without_command=True)
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def reactionroles(self, ctx: commands.Context):
         """Manage reaction roles. Subcommands: add, remove, list, clear."""
         await ctx.send_help(ctx.command)
 
     @reactionroles.command(name="add")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True, add_reactions=True)
     async def rr_add(self, ctx: commands.Context, message: discord.Message, emoji: str, *, role: discord.Role):
         """Bind an emoji on a message to a role.
@@ -288,7 +289,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         await ctx.send(embed=embed)
 
     @reactionroles.command(name="remove", aliases=["rm", "delete"])
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def rr_remove(self, ctx: commands.Context, message: discord.Message, emoji: str):
         """Remove a reaction role binding.
         Usage: .rr remove <message_link_or_id> <emoji>"""
@@ -312,7 +313,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         await ctx.send(f"Removed reaction role binding for {emoji}.")
 
     @reactionroles.command(name="list")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def rr_list(self, ctx: commands.Context, message: discord.Message = None):
         """List reaction roles for a message, or all bindings in this server."""
         async with self.pool.acquire() as conn:
@@ -358,7 +359,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         await ctx.send(embed=embed)
 
     @reactionroles.command(name="clear")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def rr_clear(self, ctx: commands.Context, message: discord.Message):
         """Remove all reaction role bindings (including default) on a message."""
         async with self.pool.acquire() as conn:
@@ -377,7 +378,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         await ctx.send(f"Cleared {deleted} binding(s) on that message.")
 
     @reactionroles.command(name="default")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True)
     async def rr_default(self, ctx: commands.Context, message: discord.Message, *, role: discord.Role):
         """Set a default role for a message. Members with no reactions receive it; reacting removes it.
@@ -412,7 +413,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         await ctx.send(embed=embed)
 
     @reactionroles.command(name="defaultremove", aliases=["rmdefault", "removedefault"])
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     async def rr_defaultremove(self, ctx: commands.Context, message: discord.Message):
         """Remove the default role binding for a message.
         Usage: .reactionroles defaultremove <message>"""
@@ -424,7 +425,7 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
         await ctx.send("Default role removed.")
 
     @reactionroles.command(name="defaultsync")
-    @commands.has_permissions(manage_roles=True)
+    @has_permissions_or_owner(manage_roles=True)
     @commands.bot_has_permissions(manage_roles=True)
     async def rr_defaultsync(self, ctx: commands.Context, message: discord.Message):
         """Assign the default role to all members who have no mapped reactions on this message.

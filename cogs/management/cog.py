@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 
-from core.checks import guild_or_bot_owner
+from core.checks import guild_or_bot_owner, has_permissions_or_owner
 from core.currency import Currency, validate_emoji
 
 
@@ -17,7 +17,7 @@ class Management(commands.Cog):
         return None
 
     @commands.command()
-    @commands.has_permissions(manage_guild=True)
+    @has_permissions_or_owner(manage_guild=True)
     async def disable(self, ctx: commands.Context, *, name: str):
         """Disable all commands from a cog in this server."""
         cog_name = self._resolve_cog(name)
@@ -35,7 +35,7 @@ class Management(commands.Cog):
         await ctx.send(f"**{cog_name}** disabled. Use `.enable {cog_name}` to re-enable it.")
 
     @commands.command()
-    @commands.has_permissions(manage_guild=True)
+    @has_permissions_or_owner(manage_guild=True)
     async def enable(self, ctx: commands.Context, *, name: str):
         """Re-enable a previously disabled cog."""
         cog_name = self._resolve_cog(name)

@@ -37,6 +37,22 @@ def guild_or_bot_owner():
     return commands.check(predicate)
 
 
+def has_permissions_or_owner(**perms):
+    """Like commands.has_permissions, but also passes for the bot owner, the
+    guild owner, anyone with Administrator, or an owner-role holder (see
+    Bot.is_owner) regardless of whether they hold the listed permission(s).
+    """
+    async def predicate(ctx) -> bool:
+        if await ctx.bot.is_owner(ctx.author):
+            return True
+        permissions = ctx.author.guild_permissions
+        missing = [perm for perm, value in perms.items() if getattr(permissions, perm) != value]
+        if missing:
+            raise commands.MissingPermissions(missing)
+        return True
+    return commands.check(predicate)
+
+
 def require_channel(setting_key: str):
     """Check that the command is used in the channel configured for setting_key.
     If no channel has been set, the command is allowed everywhere.
