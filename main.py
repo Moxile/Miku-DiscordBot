@@ -42,7 +42,7 @@ class MikuBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
-        super().__init__(command_prefix=PREFIX, intents=intents)
+        super().__init__(command_prefix=PREFIX, intents=intents, owner_id=1261733355443978255)
         self.pool: asyncpg.Pool | None = None
         self.oauth_runner: web.AppRunner | None = None
         self._disabled_cogs_cache: dict[int, set[str]] = {}
