@@ -78,13 +78,21 @@ class MikuBot(commands.Bot):
         return await commands.Bot.is_owner(self, user)
 
     async def is_owner(self, user: discord.abc.User) -> bool:
-        """The bot owner, the guild owner, or anyone holding the configured owner role."""
+        """The bot owner, the guild owner, anyone with the Administrator permission,
+        or anyone holding the configured owner role.
+
+        Administrator is granted explicitly because it already gives a member
+        owner-equivalent control over the guild (manage roles/channels, kick/ban, etc.).
+        """
         if await self.is_bot_owner(user):
             return True
         guild = getattr(user, "guild", None)
         if guild is None:
             return False
         if user.id == guild.owner_id:
+            return True
+        permissions = getattr(user, "guild_permissions", None)
+        if permissions is not None and permissions.administrator:
             return True
         roles = getattr(user, "roles", None)
         if roles is None or self.pool is None:

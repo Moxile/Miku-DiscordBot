@@ -431,7 +431,7 @@ class Economy(commands.Cog):
     @crimeconfig_penalty.error
     async def crimeconfig_error(self, ctx, error):
         if isinstance(error, commands.NotOwner):
-            await ctx.send("Only the owner or an owner-role holder can change crime settings.")
+            await ctx.send("Only the owner, an admin, or an owner-role holder can change crime settings.")
         elif isinstance(error, (commands.BadArgument, commands.MissingRequiredArgument)):
             await ctx.send("Usage: `.crimeconfig rate <percent>` or `.crimeconfig penalty <percent>`")
         else:
@@ -502,7 +502,7 @@ class Economy(commands.Cog):
     @collectrole_list.error
     async def collectrole_error(self, ctx, error):
         if isinstance(error, commands.NotOwner):
-            await ctx.send("Only the owner or an owner-role holder can manage role salaries.")
+            await ctx.send("Only the owner, an admin, or an owner-role holder can manage role salaries.")
         elif isinstance(error, commands.RoleNotFound):
             await ctx.send("Role not found. Mention the role, or use its exact name or ID.")
         elif isinstance(error, commands.MissingRequiredArgument):

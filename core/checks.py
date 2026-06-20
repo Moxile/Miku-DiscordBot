@@ -19,14 +19,20 @@ _lock_cache: dict[tuple[int, int], bool] = {}
 
 
 def guild_or_bot_owner():
-    """Check that the invoker is the guild owner or the bot owner.
+    """Check that the invoker is the guild owner, the bot owner, or has the
+    Administrator permission.
 
     Unlike commands.is_owner(), this does NOT pass for owner-role holders — it
-    gates the commands that grant owner access in the first place.
+    gates the commands that grant owner access in the first place. Administrator
+    is allowed because it's already owner-equivalent control over the guild.
     """
     async def predicate(ctx) -> bool:
-        if ctx.guild and ctx.author.id == ctx.guild.owner_id:
-            return True
+        if ctx.guild:
+            if ctx.author.id == ctx.guild.owner_id:
+                return True
+            permissions = getattr(ctx.author, "guild_permissions", None)
+            if permissions is not None and permissions.administrator:
+                return True
         return await ctx.bot.is_bot_owner(ctx.author)
     return commands.check(predicate)
 
