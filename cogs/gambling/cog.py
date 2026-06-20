@@ -187,6 +187,8 @@ class Gambling(commands.Cog):
         # One shared blackjack shoe per guild, keyed by guild_id. It carries over between
         # games and across players and is only reshuffled once it runs out (see _draw_card).
         self.shoes = {}
+        # guild_id -> max bet, or None if unset/no limit
+        self._max_bet_cache: dict[int, int | None] = {}
 
     @property
     def pool(self):
@@ -205,12 +207,25 @@ class Gambling(commands.Cog):
         else:
             raise error
 
+    async def get_max_bet(self, guild_id: int) -> int | None:
+        """Return the configured max bet for this guild, or None if unset."""
+        if guild_id not in self._max_bet_cache:
+            row = await self.pool.fetchrow(
+                "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = 'gambling_max_bet'",
+                guild_id,
+            )
+            self._max_bet_cache[guild_id] = int(row["value"]) if row else None
+        return self._max_bet_cache[guild_id]
+
     async def check_bet(self, ctx, amount, min_amount=2):
         cur = self.bot.get_currency(ctx.guild.id)
         if not isinstance(amount, int) or amount <= 0:
             return False, "Please enter a valid amount (positive integer)."
         if amount < min_amount:
             return False, f"Please place a bet of at least {min_amount}{cur.emoji}."
+        max_bet = await self.get_max_bet(ctx.guild.id)
+        if max_bet is not None and amount > max_bet:
+            return False, f"The maximum bet allowed in this server is **{max_bet:,}**{cur.emoji}."
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         if wallet["wallet"] < amount:
             return False, f"You don't have enough {cur.name} to place this bet."
@@ -533,6 +548,10 @@ class Gambling(commands.Cog):
             await ctx.send("Please enter a positive amount.")
             return
         cur = self.bot.get_currency(ctx.guild.id)
+        max_bet = await self.get_max_bet(ctx.guild.id)
+        if max_bet is not None and amount > max_bet:
+            await ctx.send(f"The maximum bet allowed in this server is **{max_bet:,}**{cur.emoji}.")
+            return
         if wallet["wallet"] < amount:
             await ctx.send(f"You don't have enough {cur.name} for a {amount}{cur.emoji} bet.")
             return
@@ -829,3 +848,27 @@ class Gambling(commands.Cog):
             )
             invalidate(ctx.guild.id, "gambling_channel")
             await ctx.send(f"Gambling commands restricted to {channel.mention}.")
+
+    @commands.command()
+    @commands.is_owner()
+    async def setmaxbet(self, ctx, amount: int = None):
+        """Set (or clear) the highest amount that can be wagered in a single gambling bet. No argument removes the limit."""
+        if amount is None:
+            await self.pool.execute(
+                "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'gambling_max_bet'",
+                ctx.guild.id,
+            )
+            self._max_bet_cache[ctx.guild.id] = None
+            await ctx.send("Max bet limit removed — bets are no longer capped.")
+        else:
+            if amount <= 0:
+                await ctx.send("Please enter a positive amount.")
+                return
+            await self.pool.execute(
+                """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, 'gambling_max_bet', $2)
+                   ON CONFLICT (guild_id, key) DO UPDATE SET value = $2""",
+                ctx.guild.id, str(amount),
+            )
+            self._max_bet_cache[ctx.guild.id] = amount
+            cur = self.bot.get_currency(ctx.guild.id)
+            await ctx.send(f"Max bet set to **{amount:,}**{cur.emoji}.")
