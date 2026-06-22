@@ -26,7 +26,7 @@ from cogs.market.db import (
     process_dilution,
     refund_company_buy_orders,
 )
-from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked, user_is_locked
+from core.checks import require_channel, invalidate, require_not_locked, user_is_locked
 from core.money import parse_amount, AmountError
 from core.confirm import confirm
 from config import (
@@ -131,14 +131,6 @@ class Market(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
-
-    async def cog_command_error(self, ctx, error):
-        if isinstance(error, UserLocked):
-            return
-        if isinstance(error, WrongChannel):
-            await ctx.send(str(error), delete_after=10)
-        else:
-            raise error
 
     async def _get_company_channels(self, guild_id: int) -> set[int]:
         now = time.monotonic()
@@ -1576,15 +1568,3 @@ class Market(commands.Cog):
                 ctx.guild.id, str(channel.id),
             )
             await ctx.send(f"Weekly recaps and financials will be posted to {channel.mention}.")
-
-    @commands.Cog.listener()
-    async def on_command_error(self, ctx, error):
-        if not ctx.command or ctx.command.cog_name != self.__cog_name__:
-            return
-        if isinstance(error, commands.ChannelNotFound):
-            await ctx.send(f"Stock not found: `{error.argument}`. Please provide a valid channel.")
-        elif isinstance(error, commands.CommandInvokeError):
-            await ctx.send(f"An error occurred: `{error.original}`")
-            raise error.original
-        else:
-            raise error

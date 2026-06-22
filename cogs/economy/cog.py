@@ -21,7 +21,7 @@ from config import (
     CRIME_MIN_PAYOUT, CRIME_MAX_PAYOUT, CRIME_PAYOUT_EXPONENT,
 )
 from core.currency import Currency
-from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked, invalidate_lock
+from core.checks import require_channel, invalidate, require_not_locked, invalidate_lock
 
 PER_PAGE = 10
 
@@ -88,13 +88,6 @@ class Economy(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
-
-    async def cog_command_error(self, ctx, error):
-        # UserLocked is silent; WrongChannel is reported by each command's own
-        # error handler, so swallow it here to avoid a duplicate traceback.
-        if isinstance(error, (UserLocked, WrongChannel)):
-            return
-        raise error
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
@@ -169,11 +162,6 @@ class Economy(commands.Cog):
 
         await ctx.send(embed=embed)
 
-    @balance.error
-    async def balance_error(self, ctx, error):
-        if isinstance(error, commands.MemberNotFound):
-            await ctx.send("Member not found. Please mention a valid member or provide a valid user ID.")
-
     @commands.command()
     @require_not_locked()
     @require_channel("work_channel")
@@ -206,11 +194,6 @@ class Economy(commands.Cog):
         remaining = cooldown - datetime.datetime.now(datetime.timezone.utc)
         minutes, seconds = divmod(int(remaining.total_seconds()), 60)
         await ctx.send(f"You need to wait *{minutes}m {seconds}s* before you can work again.")
-
-    @work.error
-    async def work_error(self, ctx, error):
-        if isinstance(error, WrongChannel):
-            await ctx.send(str(error), ephemeral=True)
 
     @commands.command()
     @commands.is_owner()
@@ -291,11 +274,6 @@ class Economy(commands.Cog):
                 f"You've already collected all your salaries. Next up: **{soonest[0]}** in "
                 f"*{humanize_duration(soonest[1], short=True)}*."
             )
-
-    @collect.error
-    async def collect_error(self, ctx, error):
-        if isinstance(error, WrongChannel):
-            await ctx.send(str(error), ephemeral=True)
 
     @commands.command()
     async def salaries(self, ctx):
@@ -390,11 +368,6 @@ class Economy(commands.Cog):
         )
         await ctx.send(embed=embed)
 
-    @crime.error
-    async def crime_error(self, ctx, error):
-        if isinstance(error, WrongChannel):
-            await ctx.send(str(error), ephemeral=True)
-
     @commands.group(invoke_without_command=True)
     @commands.is_owner()
     async def crimeconfig(self, ctx):
@@ -425,17 +398,6 @@ class Economy(commands.Cog):
             return
         await self._set_crime_setting(ctx.guild.id, "crime_penalty_pct", percent)
         await ctx.send(f"`.crime` failure penalty set to **{percent}%** of total money.")
-
-    @crimeconfig.error
-    @crimeconfig_rate.error
-    @crimeconfig_penalty.error
-    async def crimeconfig_error(self, ctx, error):
-        if isinstance(error, commands.NotOwner):
-            await ctx.send("Only the owner, an admin, or an owner-role holder can change crime settings.")
-        elif isinstance(error, (commands.BadArgument, commands.MissingRequiredArgument)):
-            await ctx.send("Usage: `.crimeconfig rate <percent>` or `.crimeconfig penalty <percent>`")
-        else:
-            raise error
 
     @commands.group(invoke_without_command=True)
     @commands.is_owner()
@@ -495,20 +457,6 @@ class Economy(commands.Cog):
             lines.append(f"{i}. {name} — **{r['amount']:,}**{cur.emoji} every {humanize_duration(r['interval_seconds'])}")
         embed.description = "\n".join(lines)
         await ctx.send(embed=embed)
-
-    @collectrole.error
-    @collectrole_bind.error
-    @collectrole_unbind.error
-    @collectrole_list.error
-    async def collectrole_error(self, ctx, error):
-        if isinstance(error, commands.NotOwner):
-            await ctx.send("Only the owner, an admin, or an owner-role holder can manage role salaries.")
-        elif isinstance(error, commands.RoleNotFound):
-            await ctx.send("Role not found. Mention the role, or use its exact name or ID.")
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send("Usage: `.collectrole bind <role> <time e.g. 1h> <amount>`")
-        else:
-            raise error
 
     @commands.Cog.listener()
     async def on_guild_role_delete(self, role: discord.Role):

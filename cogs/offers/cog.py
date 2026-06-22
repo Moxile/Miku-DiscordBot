@@ -6,7 +6,7 @@ from cogs.offers.db import (
     create_offer, get_offer, lock_offer, get_active_offers, get_offer_takes,
     add_offer_take, decrement_offer_pool, set_offer_status, remove_member_data,
 )
-from core.checks import require_not_locked, UserLocked
+from core.checks import require_not_locked
 from core.money import parse_amount, AmountError
 
 
@@ -27,11 +27,6 @@ class Offers(commands.Cog):
     @property
     def pool_conn(self):
         return self.bot.pool
-
-    async def cog_command_error(self, ctx, error):
-        if isinstance(error, UserLocked):
-            return
-        raise error
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):

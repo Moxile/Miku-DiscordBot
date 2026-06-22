@@ -121,19 +121,3 @@ class BotReactions(commands.Cog, name="BotReactions"):
             )
         await ctx.send(embed=embed)
 
-    # ── Error handler ──
-
-    @commands.Cog.listener()
-    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
-        if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
-            return
-        if isinstance(error, commands.MissingPermissions):
-            return
-        elif isinstance(error, commands.RoleNotFound):
-            await ctx.send("Couldn't find that role.")
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f'Missing argument. Check `.help {ctx.command.qualified_name}`.')
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send(f'Invalid argument. Check `.help {ctx.command.qualified_name}`.')
-        else:
-            raise error

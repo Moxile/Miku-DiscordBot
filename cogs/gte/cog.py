@@ -101,7 +101,7 @@ class GTE(commands.Cog):
 
     # ── Command ──
 
-    @commands.command()
+    @commands.command(extras={"example": ".gte https://lichess.org/7o8NKKnL 500 90s"})
     async def gte(self, ctx: commands.Context, lichess_link: str, award: int, duration: str = "60s"):
         """Start a Guess the Elo game. The award is paid from your wallet to the closest guesser. Guess format: <white_rating> vs <black_rating> (e.g. 1500 vs 1800). Usage: .gte <link> <award> [duration]. Example: .gte https://lichess.org/abc123 500 90s"""
         try:
@@ -324,11 +324,3 @@ class GTE(commands.Cog):
         except (discord.Forbidden, discord.NotFound):
             pass
 
-    # ── Error handler ──
-
-    @gte.error
-    async def gte_error(self, ctx, error):
-        if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send("Usage: `.gte <lichess_link> <award> [duration]`\nExample: `.gte https://lichess.org/7o8NKKnL 500 90s`")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send("Invalid argument. Award must be a number.")

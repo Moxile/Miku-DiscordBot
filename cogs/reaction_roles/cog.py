@@ -486,23 +486,3 @@ class ReactionRoles(commands.Cog, name="ReactionRoles"):
 
         await status.edit(content=f"Done. Assigned {default_role.mention} to **{count}** member(s).")
 
-    # ── Error handler ──
-
-    @commands.Cog.listener()
-    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
-        if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
-            return
-        if isinstance(error, commands.MissingPermissions):
-            return
-        elif isinstance(error, commands.BotMissingPermissions):
-            await ctx.send("I'm missing a required permission (Manage Roles / Add Reactions).")
-        elif isinstance(error, commands.MessageNotFound):
-            await ctx.send("Couldn't find that message. Use a message link or ID from this channel.")
-        elif isinstance(error, commands.RoleNotFound):
-            await ctx.send("Couldn't find that role.")
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Missing argument. Check `.help {ctx.command.qualified_name}`.")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send(f"Invalid argument. Check `.help {ctx.command.qualified_name}`.")
-        else:
-            raise error

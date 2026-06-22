@@ -12,7 +12,7 @@ from cogs.waifu.db import (
     set_waifu_owner, set_engagement, set_marriage, dissolve_marriage,
     decay_waifu_values, remove_member_waifus,
 )
-from core.checks import require_not_locked, UserLocked
+from core.checks import require_not_locked
 from core.money import parse_amount, AmountError
 
 
@@ -72,11 +72,6 @@ class Waifu(commands.Cog):
                 row_b and row_b["owner_id"] == row_a["user_id"]):
             return "Engaged"
         return "None"
-
-    async def cog_command_error(self, ctx, error):
-        if isinstance(error, UserLocked):
-            return
-        raise error
 
     # ── Commands ──
 
@@ -385,16 +380,3 @@ class Waifu(commands.Cog):
             color=discord.Color.greyple(),
         )
         await ctx.send(embed=embed)
-
-    # ── Error handlers ──
-
-    @waifubuy.error
-    @waifugift.error
-    @propose.error
-    async def waifu_error(self, ctx, error):
-        if isinstance(error, commands.MemberNotFound):
-            await ctx.send("Member not found. Try mentioning them directly.")
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Missing argument. Usage: `{ctx.prefix}{ctx.command.name} {ctx.command.signature}`")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send("Invalid argument.")

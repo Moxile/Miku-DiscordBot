@@ -160,20 +160,3 @@ class Moderation(commands.Cog):
         embed.set_footer(text=f"By {ctx.author}")
         await ctx.send(embed=embed)
 
-    # --- Error Handler ---
-
-    @commands.Cog.listener()
-    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
-        if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
-            return
-
-        if isinstance(error, commands.MissingPermissions):
-            return
-        elif isinstance(error, commands.BotMissingPermissions):
-            await ctx.send("I don't have the required permissions to do that.")
-        elif isinstance(error, commands.MemberNotFound):
-            await ctx.send("Could not find that member.")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send(f"Invalid argument. Check `{ctx.prefix}help {ctx.command}` for usage.")
-        else:
-            raise error

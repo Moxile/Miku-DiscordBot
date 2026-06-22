@@ -59,7 +59,7 @@ class Utility(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.command()
+    @commands.command(extras={"example": ".calc (10+67/7)^2"})
     async def calc(self, ctx: commands.Context, *, expression: str):
         """Calculate a math expression. Supports +, -, *, /, ^, %, parentheses. Example: .calc (10+67/7)^2"""
         try:
@@ -117,9 +117,3 @@ class Utility(commands.Cog):
         )
         embed.set_image(url="attachment://color.png")
         await ctx.send(file=file, embed=embed)
-
-    @calc.error
-    @color.error
-    async def utility_error(self, ctx, error):
-        if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Usage: `{ctx.prefix}{ctx.command.name} {ctx.command.signature}`")

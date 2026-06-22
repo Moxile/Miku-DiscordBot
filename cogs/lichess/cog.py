@@ -468,20 +468,3 @@ class Lichess(commands.Cog, name="Lichess"):
         async with self.pool.acquire() as conn:
             await upsert_profile_style(conn, ctx.author.id, style)
         await ctx.send(f"Profile style set to **{style}**.")
-
-    # ── Error handler ──────────────────────────────────────────────────────────
-
-    @commands.Cog.listener()
-    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
-        if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
-            return
-        if isinstance(error, commands.MissingPermissions):
-            return
-        elif isinstance(error, commands.BotMissingPermissions):
-            await ctx.send("I'm missing Manage Roles permission.")
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Missing argument. Check `.help {ctx.command.qualified_name}`.")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send(f"Invalid argument. Check `.help {ctx.command.qualified_name}`.")
-        else:
-            raise error

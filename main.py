@@ -34,6 +34,7 @@ EXTENSIONS = [
     "cogs.wolfrandom",
     "cogs.bot_reactions",
     "cogs.missions",
+    "cogs.errors",  # global command-error handler — must load last (catch-all)
 ]
 
 

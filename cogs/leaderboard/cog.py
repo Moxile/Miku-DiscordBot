@@ -197,7 +197,7 @@ class Leaderboard(commands.Cog):
 
     # ── Command ──
 
-    @commands.command(aliases=["leaderboard"])
+    @commands.command(aliases=["leaderboard"], extras={"example": ".lb wallet 2"})
     async def lb(self, ctx: commands.Context, *args: str):
         """Show leaderboards. Use `.lb` for net worth, or specify a mode:
         `wallet`, `bank`, `port` (portfolio), `waifu` (harem value).
@@ -242,7 +242,3 @@ class Leaderboard(commands.Cog):
         view = LeaderboardPaginator(ctx, title, rows, ctx.author.id, start_page=page - 1)
         view.message = await ctx.send(embed=view.build_embed(), view=view)
 
-    @lb.error
-    async def lb_error(self, ctx, error):
-        if isinstance(error, commands.BadArgument):
-            await ctx.send("Usage: `.lb [wallet|bank|port|waifu] [page]`")

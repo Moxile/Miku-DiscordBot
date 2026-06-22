@@ -117,10 +117,3 @@ class Reminders(commands.Cog):
             return
         await ctx.send(f"Reminder **#{reminder_id}** cancelled.")
 
-    @remember.error
-    @cancelreminder.error
-    async def reminder_error(self, ctx, error):
-        if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Usage: `.remember <duration> [message]` or `.cancelreminder <id>`")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send("Invalid argument. Reminder ID must be a number.")

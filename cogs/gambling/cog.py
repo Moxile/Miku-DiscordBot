@@ -6,7 +6,7 @@ import discord
 from discord.ext import commands
 
 from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
-from core.checks import require_channel, WrongChannel, invalidate, UserLocked, user_is_locked
+from core.checks import require_channel, invalidate, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from config import PREFIX
 from . import cards, coins, wheel, board
@@ -281,14 +281,6 @@ class Gambling(commands.Cog):
         if ctx.guild and await user_is_locked(self.pool, ctx.guild.id, ctx.author.id):
             raise UserLocked()
         return True
-
-    async def cog_command_error(self, ctx, error):
-        if isinstance(error, UserLocked):
-            return
-        if isinstance(error, WrongChannel):
-            await ctx.send(str(error), delete_after=10)
-        else:
-            raise error
 
     async def get_max_bet(self, guild_id: int) -> int | None:
         """Return the configured max bet for this guild, or None if unset."""
@@ -735,7 +727,7 @@ class Gambling(commands.Cog):
         )
         view.message = await ctx.send(embed=embed, file=file, view=view)
 
-    @commands.command()
+    @commands.command(extras={"example": ".roulette red 100"})
     @require_channel("gambling_channel")
     async def roulette(self, ctx, option: str, bet: str):
         """Place a bet on the roulette table. Usage: .roulette <option> <amount>. Options: red, black, odd, even, low, high, dozen1-3, col1-3, or a number 0–36. The wheel spins 10 seconds after the last bet."""

@@ -8,7 +8,7 @@ from cogs.missions.db import (
     create_mission, get_missions, get_mission, get_mission_by_name,
     add_funding, set_mission_status, delete_mission, remove_member_data,
 )
-from core.checks import require_channel, WrongChannel, invalidate, require_not_locked, UserLocked
+from core.checks import require_channel, invalidate, require_not_locked
 from core.money import parse_amount, AmountError
 from core.currency import Currency
 
@@ -86,14 +86,6 @@ class Missions(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
-
-    async def cog_command_error(self, ctx, error):
-        if isinstance(error, WrongChannel):
-            await ctx.send(str(error), delete_after=10)
-        elif isinstance(error, UserLocked):
-            return
-        else:
-            raise error
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):

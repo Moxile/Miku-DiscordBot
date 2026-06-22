@@ -8,7 +8,7 @@ from cogs.predictions.db import (
     close_prediction, resolve_prediction, get_winning_bets,
     get_active_predictions, remove_member_data,
 )
-from core.checks import require_not_locked, UserLocked
+from core.checks import require_not_locked
 from core.money import parse_amount, AmountError
 
 # In-memory cache: guild_id -> role_id
@@ -22,11 +22,6 @@ class Predictions(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
-
-    async def cog_command_error(self, ctx, error):
-        if isinstance(error, UserLocked):
-            return
-        raise error
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):

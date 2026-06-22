@@ -9,7 +9,7 @@ from cogs.shop.db import (
     get_inventory, add_to_inventory, remove_member_data,
     grant_temp_role, get_expired_temp_roles, delete_temp_role,
 )
-from core.checks import require_not_locked, UserLocked, user_is_locked
+from core.checks import require_not_locked, user_is_locked
 from core.money import parse_amount, AmountError
 from core.time_utils import parse_duration, humanize_duration
 
@@ -157,11 +157,6 @@ class Shop(commands.Cog):
     @property
     def pool(self):
         return self.bot.pool
-
-    async def cog_command_error(self, ctx, error):
-        if isinstance(error, UserLocked):
-            return
-        raise error
 
     # ── Background task ──
 

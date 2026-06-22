@@ -160,18 +160,3 @@ class Management(commands.Cog):
         self.bot._currency_cache.pop(ctx.guild.id, None)
         cur = self.bot.get_currency(ctx.guild.id)
         await ctx.send(f"Currency reset to the default **{cur.name}** {cur.emoji}.")
-
-    @commands.Cog.listener()
-    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
-        if ctx.command is None or ctx.command.cog_name != self.__cog_name__:
-            return
-        if isinstance(error, commands.MissingPermissions):
-            return
-        elif isinstance(error, commands.BotMissingPermissions):
-            await ctx.send("I need the **Manage Roles** permission to create a role.")
-        elif isinstance(error, commands.CheckFailure):
-            return
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send(str(error))
-        else:
-            raise error
