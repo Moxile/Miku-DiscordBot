@@ -377,7 +377,9 @@ class Gambling(commands.Cog):
         embed = discord.Embed(title="Bet Flip Results", color=color)
         embed.set_image(url="attachment://coins.png")
         sign = "+" if total >= 0 else ""
-        embed.set_footer(text=f"Net: {sign}{total}{cur.emoji} · {wins}W/{losses}L")
+        # Currency is shown in the description, not the footer: Discord doesn't render
+        # custom emoji (e.g. a guild's <:Dor:id> currency) in embed footers or titles.
+        embed.description = f"Net: **{sign}{total}**{cur.emoji} · {wins}W/{losses}L"
         await ctx.send(embed=embed, file=file)
 
     @staticmethod
@@ -432,12 +434,14 @@ class Gambling(commands.Cog):
         cur = self.bot.get_currency(game["guild_id"])
         embed = discord.Embed(title=f"Blackjack — {title}", color=color)
         embed.set_image(url="attachment://table.png")
+        # Currency goes in the description, not the footer: Discord doesn't render custom
+        # emoji (e.g. a guild's <:Dor:id> currency) in embed footers or titles.
         if result is not None:
             sign = "+" if result >= 0 else ""
-            embed.set_footer(text=f"{sign}{result}{cur.emoji}")
+            embed.description = f"**{sign}{result}**{cur.emoji}"
         else:
             hand_bet = game["hand_bets"][game["current_hand"]]
-            embed.set_footer(text=f"Bet: {hand_bet}{cur.emoji}")
+            embed.description = f"Bet: **{hand_bet}**{cur.emoji}"
         return file, embed
 
     @commands.command(aliases=["bj"])
@@ -676,11 +680,14 @@ class Gambling(commands.Cog):
         cur = self.bot.get_currency(game["guild_id"])
         embed = discord.Embed(title=f"Higher-Lower — {title}", color=color)
         embed.set_image(url="attachment://highlow.png")
+        # Currency goes in the description, not the footer: Discord doesn't render custom
+        # emoji (e.g. a guild's <:Dor:id> currency) in embed footers or titles.
         if net is not None:
             sign = "+" if net >= 0 else ""
-            embed.set_footer(text=f"{sign}{net}{cur.emoji}")
+            embed.description = f"**{sign}{net}**{cur.emoji}"
         else:
-            embed.set_footer(text=f"Bet: {game['bet']}{cur.emoji} · Aces are high")
+            embed.description = f"Bet: **{game['bet']}**{cur.emoji}"
+            embed.set_footer(text="Aces are high")
         return file, embed
 
     @commands.command(aliases=["hl"])
