@@ -80,11 +80,11 @@ class BlackjackView(discord.ui.View):
         await interaction.response.edit_message(attachments=[file], embed=embed, view=self)
 
     async def _finish(self, interaction, game, net):
-        for child in self.children:
-            child.disabled = True
         title, color = _result_meta(net)
         file, embed = await self.cog.build_state(game, title=title, color=color, hide_dealer=False, result=net)
-        await interaction.response.edit_message(attachments=[file], embed=embed, view=self)
+        play_again = PlayAgainView(self.cog, self.key, game["bet"])
+        await interaction.response.edit_message(attachments=[file], embed=embed, view=play_again)
+        play_again.message = self.message
         self.stop()
 
     @discord.ui.button(label="Hit", style=discord.ButtonStyle.success)
@@ -158,14 +158,77 @@ class BlackjackView(discord.ui.View):
             return
         game["state"] = "dealer_turn"
         net = await self.cog.settle(self.key, game)
-        for child in self.children:
-            child.disabled = True
         title, color = _result_meta(net)
         file, embed = await self.cog.build_state(
             game, title=f"Timed out — {title}", color=color, hide_dealer=False, result=net
         )
+        play_again = PlayAgainView(self.cog, self.key, game["bet"])
+        play_again.message = self.message
         try:
-            await self.message.edit(attachments=[file], embed=embed, view=self)
+            await self.message.edit(attachments=[file], embed=embed, view=play_again)
+        except discord.HTTPException:
+            pass
+
+
+class PlayAgainView(discord.ui.View):
+    """Shown after a blackjack game ends; lets the player start a new one with the same bet."""
+
+    def __init__(self, cog, key, bet, *, timeout=BLACKJACK_TIMEOUT):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.key = key
+        self.bet = bet
+        self.player_id = key[1]
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Play Again", style=discord.ButtonStyle.primary, emoji="🔁")
+    async def play_again_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild_id = self.key[0]
+        if self.key in self.cog.games:
+            await interaction.response.defer()
+            return
+        ok, error = await self.cog.check_rebet(guild_id, self.player_id, self.bet)
+        if not ok:
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(view=self)
+            await interaction.followup.send(error, ephemeral=True)
+            return
+
+        await update_wallet(self.cog.pool, guild_id, self.player_id, -self.bet)
+        game = self.cog.new_blackjack_game(self.key, guild_id, self.bet)
+
+        if self.cog.calculate_hand_value(game["player_hands"][0]) == 21:
+            game["state"] = "dealer_turn"
+            net = await self.cog.settle(self.key, game)
+            title, color = _result_meta(net)
+            file, embed = await self.cog.build_state(game, title=title, color=color, hide_dealer=False, result=net)
+            new_view = PlayAgainView(self.cog, self.key, self.bet)
+            await interaction.response.edit_message(attachments=[file], embed=embed, view=new_view)
+            new_view.message = self.message
+            self.stop()
+            return
+
+        new_view = BlackjackView(self.cog, self.key)
+        await new_view._sync_buttons(game)
+        file, embed = await self.cog.build_state(game, title="Game Started", color=discord.Color.blue(), hide_dealer=True)
+        await interaction.response.edit_message(attachments=[file], embed=embed, view=new_view)
+        new_view.message = self.message
+        self.stop()
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(view=self)
         except discord.HTTPException:
             pass
 
@@ -457,15 +520,35 @@ class Gambling(commands.Cog):
             return
 
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
+        game = self.new_blackjack_game(key, ctx.guild.id, bet)
 
-        shoe = self.shoes.get(ctx.guild.id)
+        if self.calculate_hand_value(game["player_hands"][0]) == 21:
+            game["state"] = "dealer_turn"
+            net = await self.settle(key, game)
+            title, color = _result_meta(net)
+            file, embed = await self.build_state(game, title=title, color=color, hide_dealer=False, result=net)
+            play_again = PlayAgainView(self, key, bet)
+            play_again.message = await ctx.send(embed=embed, file=file, view=play_again)
+            return
+
+        view = BlackjackView(self, key)
+        await view._sync_buttons(game)
+        file, embed = await self.build_state(game, title="Game Started", color=discord.Color.blue(), hide_dealer=True)
+        view.message = await ctx.send(embed=embed, file=file, view=view)
+
+    # ── Blackjack actions (driven by BlackjackView buttons) ──
+
+    def new_blackjack_game(self, key, guild_id, bet):
+        """Create a fresh game dict and deal the opening hand. The caller must
+        already have deducted the bet from the player's wallet."""
+        shoe = self.shoes.get(guild_id)
         if not shoe:
             shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
-            self.shoes[ctx.guild.id] = shoe
+            self.shoes[guild_id] = shoe
 
         self.games[key] = {
             "game": "blackjack",
-            "guild_id": ctx.guild.id,
+            "guild_id": guild_id,
             "bet": bet,
             "current_hand": 0,
             "player_hands": [],
@@ -482,21 +565,15 @@ class Gambling(commands.Cog):
         game["dealer_cards"].append(self._draw_card(game))
         game["player_hands"].append(player_cards)
         game["hand_bets"].append(bet)
+        return game
 
-        if self.calculate_hand_value(player_cards) == 21:
-            game["state"] = "dealer_turn"
-            net = await self.settle(key, game)
-            title, color = _result_meta(net)
-            file, embed = await self.build_state(game, title=title, color=color, hide_dealer=False, result=net)
-            await ctx.send(embed=embed, file=file)
-            return
-
-        view = BlackjackView(self, key)
-        await view._sync_buttons(game)
-        file, embed = await self.build_state(game, title="Game Started", color=discord.Color.blue(), hide_dealer=True)
-        view.message = await ctx.send(embed=embed, file=file, view=view)
-
-    # ── Blackjack actions (driven by BlackjackView buttons) ──
+    async def check_rebet(self, guild_id, user_id, bet):
+        """Validate that a player can afford to replay their previous bet."""
+        cur = self.bot.get_currency(guild_id)
+        wallet = await ensure_wallet(self.pool, guild_id, user_id)
+        if wallet["wallet"] < bet:
+            return False, f"You don't have enough {cur.name} to bet {bet}{cur.emoji} again."
+        return True, None
 
     def _draw_card(self, game):
         """Draw the top card of the shoe, shuffling in a fresh deck when it runs out."""
