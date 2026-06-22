@@ -153,6 +153,81 @@ def _hand_value(cards) -> int:
     return value
 
 
+def _draw_deck_indicator(d, img, table_w, deck_left, small_font):
+    """Draw the little card-stack + count in the top-right header strip."""
+    stack_w, stack_h = 44, 60
+    deck_x = table_w - MARGIN - stack_w - 6
+    deck_y = MARGIN + 6
+    for k in range(3):
+        d.rounded_rectangle(
+            [deck_x + k * 3, deck_y - k * 3, deck_x + stack_w + k * 3, deck_y + stack_h - k * 3],
+            radius=6, fill=BACK_BG, outline=(225, 225, 230), width=2,
+        )
+    deck_text = f"Deck: {deck_left}"
+    tw = d.textbbox((0, 0), deck_text, font=small_font)[2]
+    d.text((deck_x - 14 - tw, deck_y + stack_h / 2 - 14), deck_text, font=small_font, fill=TEXT_DIM)
+
+
+def render_highlow(current_card, next_card=None, *, deck_left=0, outcome=None) -> io.BytesIO:
+    """Composite the high-low table to a PNG returned as a BytesIO.
+
+    `current_card` is a (rank, suit); `next_card` is the same once revealed, or None
+    to keep it face-down. `outcome` is None / "win" / "loss" to tint the border.
+    """
+    MID = 70  # gap between the two cards (room for the "vs" marker)
+    row_w = CARD_W * 2 + MID
+    table_w = MARGIN * 2 + max(row_w, 320)
+    table_h = MARGIN * 2 + HEADER_H + LABEL_H + CARD_H
+
+    edge = FELT_EDGE
+    if outcome == "win":
+        edge = (70, 170, 100)
+    elif outcome == "loss":
+        edge = (180, 60, 70)
+
+    img = Image.new("RGB", (table_w, table_h), FELT)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, table_w - 1, table_h - 1], outline=edge, width=6)
+
+    label_font = _font(26)
+    small_font = _font(20)
+    vs_font = _font(34)
+
+    _draw_deck_indicator(d, img, table_w, deck_left, small_font)
+
+    top = MARGIN + HEADER_H + LABEL_H
+    x0 = (table_w - row_w) // 2
+
+    cur_img = _render_card(*current_card)
+    d.text((x0, top - LABEL_H + 6), "CURRENT", font=label_font, fill=TEXT)
+    img.paste(cur_img, (x0, top), cur_img)
+
+    nx = x0 + CARD_W + MID
+    if next_card is None:
+        nxt_img = _render_back()
+        nlabel = "NEXT — ?"
+    else:
+        nxt_img = _render_card(*next_card)
+        nlabel = "NEXT"
+    d.text((nx, top - LABEL_H + 6), nlabel, font=label_font, fill=TEXT)
+    img.paste(nxt_img, (nx, top), nxt_img)
+
+    mid_color = HIGHLIGHT
+    if outcome == "win":
+        mid_color = (110, 210, 140)
+    elif outcome == "loss":
+        mid_color = (225, 110, 110)
+    bbox = d.textbbox((0, 0), "vs", font=vs_font)
+    vw, vh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    d.text((x0 + CARD_W + MID / 2 - vw / 2 - bbox[0], top + CARD_H / 2 - vh / 2 - bbox[1]),
+           "vs", font=vs_font, fill=mid_color)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
 def render_table(
     dealer_cards,
     player_hands,
@@ -193,17 +268,7 @@ def render_table(
             x += CARD_W + GAP
 
     # Deck indicator in the top header strip (right-aligned, clear of all card rows)
-    stack_w, stack_h = 44, 60
-    deck_x = table_w - MARGIN - stack_w - 6
-    deck_y = MARGIN + 6
-    for k in range(3):
-        d.rounded_rectangle(
-            [deck_x + k * 3, deck_y - k * 3, deck_x + stack_w + k * 3, deck_y + stack_h - k * 3],
-            radius=6, fill=BACK_BG, outline=(225, 225, 230), width=2,
-        )
-    deck_text = f"Deck: {deck_left}"
-    tw = d.textbbox((0, 0), deck_text, font=small_font)[2]
-    d.text((deck_x - 14 - tw, deck_y + stack_h / 2 - 14), deck_text, font=small_font, fill=TEXT_DIM)
+    _draw_deck_indicator(d, img, table_w, deck_left, small_font)
 
     # Dealer row
     top = MARGIN + HEADER_H + LABEL_H

@@ -15,6 +15,17 @@ from . import cards, coins, wheel, board
 BLACKJACK_TIMEOUT = 120
 BLACKJACK_SHOE_DECKS = 6  # number of 52-card decks in each guild's shared shoe
 
+HIGHERLOWER_TIMEOUT = 120
+HL_HOUSE_EDGE = 0.92  # fair-odds payout is scaled by this to give the house an advantage
+# High-low rank ordering — Aces are high.
+_HL_ORDER = {r: i for i, r in enumerate(
+    ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+)}
+
+
+def _hl_rank(card):
+    return _HL_ORDER[card[0]]
+
 
 def _card_value(rank):
     return 10 if rank in ("10", "J", "Q", "K") else rank
@@ -152,6 +163,78 @@ class BlackjackView(discord.ui.View):
         title, color = _result_meta(net)
         file, embed = await self.cog.build_state(
             game, title=f"Timed out — {title}", color=color, hide_dealer=False, result=net
+        )
+        try:
+            await self.message.edit(attachments=[file], embed=embed, view=self)
+        except discord.HTTPException:
+            pass
+
+
+class HighLowView(discord.ui.View):
+    """Buttons for a single high-low game. State lives in ``cog.games[key]``."""
+
+    def __init__(self, cog, key, *, timeout=HIGHERLOWER_TIMEOUT):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.key = key
+        self.player_id = key[1]
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            return False
+        return True
+
+    def configure(self, odds):
+        """Label/enable each button from the current odds (choice -> (count, mult))."""
+        for choice, btn in (
+            ("higher", self.higher_btn), ("equal", self.equal_btn), ("lower", self.lower_btn)
+        ):
+            count, mult = odds[choice]
+            btn.label = f"{choice.title()} ×{mult:.2f}"
+            btn.disabled = count == 0
+
+    async def _resolve(self, interaction, choice):
+        game = self.cog.games.get(self.key)
+        if game is None:
+            await interaction.response.defer()
+            return
+        for child in self.children:
+            child.disabled = True
+        net, actual = await self.cog.hl_resolve(self.key, game, choice)
+        won = choice == actual
+        title = f"{actual.title()}! — You {'win' if won else 'lose'}"
+        color = discord.Color.green() if net > 0 else (
+            discord.Color.red() if net < 0 else discord.Color.dark_gray()
+        )
+        file, embed = await self.cog.build_hl_state(game, title=title, color=color, reveal=True, net=net)
+        await interaction.response.edit_message(attachments=[file], embed=embed, view=self)
+        self.stop()
+
+    @discord.ui.button(label="Higher", style=discord.ButtonStyle.success, emoji="⬆️")
+    async def higher_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._resolve(interaction, "higher")
+
+    @discord.ui.button(label="Equal", style=discord.ButtonStyle.primary, emoji="🟰")
+    async def equal_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._resolve(interaction, "equal")
+
+    @discord.ui.button(label="Lower", style=discord.ButtonStyle.danger, emoji="⬇️")
+    async def lower_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._resolve(interaction, "lower")
+
+    async def on_timeout(self):
+        game = self.cog.games.get(self.key)
+        if game is None or self.message is None:
+            return
+        # Timing out forfeits the (already-deducted) bet.
+        await add_transaction(self.cog.pool, self.key[0], self.key[1], -game["bet"], "higherlower_loss")
+        self.cog.games.pop(self.key, None)
+        for child in self.children:
+            child.disabled = True
+        file, embed = await self.cog.build_hl_state(
+            game, title="Timed out — You lose", color=discord.Color.red(), reveal=False, net=-game["bet"]
         )
         try:
             await self.message.edit(attachments=[file], embed=embed, view=self)
@@ -519,6 +602,131 @@ class Gambling(commands.Cog):
 
         self.games.pop(key, None)
         return total_result
+
+    # ── Higher-Lower ──
+
+    def _hl_odds(self, game):
+        """Compute, from the remaining shoe, the payout odds for each choice.
+
+        Returns {choice: (count, multiplier)}. The multiplier is the fair payout
+        (stake / probability) scaled by the house edge, floored at 1.0 so a win
+        never pays out less than the bet. A count of 0 means the choice is
+        impossible (e.g. "higher" on an Ace) and gets disabled by the view.
+        """
+        deck = game["deck"]
+        if not deck:
+            deck.extend(self.create_deck(BLACKJACK_SHOE_DECKS))
+        current = _hl_rank(game["current_card"])
+        total = len(deck)
+        counts = {"higher": 0, "equal": 0, "lower": 0}
+        for card in deck:
+            r = _hl_rank(card)
+            if r > current:
+                counts["higher"] += 1
+            elif r < current:
+                counts["lower"] += 1
+            else:
+                counts["equal"] += 1
+        odds = {}
+        for choice, count in counts.items():
+            mult = max(1.0, (total / count) * HL_HOUSE_EDGE) if count else 0.0
+            odds[choice] = (count, round(mult, 2))
+        return odds
+
+    async def hl_resolve(self, key, game, choice):
+        """Draw the next card, settle the bet, and tear down the game.
+
+        Returns (net, actual) where actual is "higher"/"equal"/"lower"."""
+        guild_id, user_id = key
+        next_card = self._draw_card(game)
+        game["next_card"] = next_card
+        cur_rank, nxt_rank = _hl_rank(game["current_card"]), _hl_rank(next_card)
+        if nxt_rank > cur_rank:
+            actual = "higher"
+        elif nxt_rank < cur_rank:
+            actual = "lower"
+        else:
+            actual = "equal"
+
+        bet = game["bet"]
+        if choice == actual:
+            winnings = int(bet * game["odds"][choice][1])
+            await update_wallet(self.pool, guild_id, user_id, winnings)
+            net = winnings - bet
+        else:
+            net = -bet
+        if net != 0:
+            tx_type = "higherlower_win" if net > 0 else "higherlower_loss"
+            await add_transaction(self.pool, guild_id, user_id, net, tx_type)
+        self.games.pop(key, None)
+        return net, actual
+
+    async def build_hl_state(self, game, *, title, color, reveal, net=None):
+        """Render the high-low table to an image and wrap it in a (File, Embed)."""
+        next_card = game.get("next_card") if reveal else None
+        outcome = None if net is None else ("win" if net > 0 else ("loss" if net < 0 else None))
+        loop = asyncio.get_running_loop()
+        buf = await loop.run_in_executor(
+            None,
+            lambda: cards.render_highlow(
+                game["current_card"], next_card, deck_left=len(game["deck"]), outcome=outcome
+            ),
+        )
+        file = discord.File(buf, filename="highlow.png")
+        cur = self.bot.get_currency(game["guild_id"])
+        embed = discord.Embed(title=f"Higher-Lower — {title}", color=color)
+        embed.set_image(url="attachment://highlow.png")
+        if net is not None:
+            sign = "+" if net >= 0 else ""
+            embed.set_footer(text=f"{sign}{net}{cur.emoji}")
+        else:
+            embed.set_footer(text=f"Bet: {game['bet']}{cur.emoji} · Aces are high")
+        return file, embed
+
+    @commands.command(aliases=["hl"])
+    @require_channel("gambling_channel")
+    async def higherlower(self, ctx, bet: str):
+        """Play higher-lower: a card is drawn, then bet whether the next card will be Higher, Lower or Equal. Rarer outcomes pay bigger multipliers (shown on the buttons). You can specify an amount or use 'all' to bet everything."""
+        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        try:
+            bet = parse_amount(bet, wallet_balance=wallet["wallet"])
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
+        is_valid, error = await self.check_bet(ctx, bet)
+        if not is_valid:
+            await ctx.send(error)
+            return
+
+        key = (ctx.guild.id, ctx.author.id)
+        if key in self.games:
+            await ctx.send("You already have an active game! Please finish it before starting a new one.")
+            return
+
+        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
+
+        shoe = self.shoes.get(ctx.guild.id)
+        if not shoe:
+            shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
+            self.shoes[ctx.guild.id] = shoe
+
+        game = {
+            "game": "higherlower",
+            "guild_id": ctx.guild.id,
+            "bet": bet,
+            "deck": shoe,
+            "next_card": None,
+        }
+        self.games[key] = game
+        game["current_card"] = self._draw_card(game)
+        game["odds"] = self._hl_odds(game)
+
+        view = HighLowView(self, key)
+        view.configure(game["odds"])
+        file, embed = await self.build_hl_state(
+            game, title="Higher, Lower or Equal?", color=discord.Color.blue(), reveal=False
+        )
+        view.message = await ctx.send(embed=embed, file=file, view=view)
 
     @commands.command()
     @require_channel("gambling_channel")
