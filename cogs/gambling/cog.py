@@ -682,7 +682,7 @@ class Gambling(commands.Cog):
             embed.set_footer(text="Aces are high")
         return file, embed
 
-    @commands.command(aliases=["hl"])
+    @commands.command(aliases=["hl", "highlow"])
     @require_channel("gambling_channel")
     async def higherlower(self, ctx, bet: str):
         """Play higher-lower: a card is drawn, then bet whether the next card will be Higher, Lower or Equal. Rarer outcomes pay bigger multipliers (shown on the buttons). You can specify an amount or use 'all' to bet everything."""
