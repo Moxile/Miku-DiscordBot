@@ -897,7 +897,7 @@ class Gambling(commands.Cog):
         except AmountError as e:
             await ctx.send(str(e))
             return
-        is_valid, error = await self.check_bet(ctx, bet)
+        is_valid, error = await self.check_bet(ctx, bet, 20)
         if not is_valid:
             await ctx.send(error)
             return
