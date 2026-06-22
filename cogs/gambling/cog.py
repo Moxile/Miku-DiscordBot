@@ -263,8 +263,6 @@ class HighLowView(discord.ui.View):
         if game is None:
             await interaction.response.defer()
             return
-        for child in self.children:
-            child.disabled = True
         net, actual = await self.cog.hl_resolve(self.key, game, choice)
         won = choice == actual
         title = f"{actual.title()}! — You {'win' if won else 'lose'}"
@@ -272,7 +270,9 @@ class HighLowView(discord.ui.View):
             discord.Color.red() if net < 0 else discord.Color.dark_gray()
         )
         file, embed = await self.cog.build_hl_state(game, title=title, color=color, reveal=True, net=net)
-        await interaction.response.edit_message(attachments=[file], embed=embed, view=self)
+        play_again = HLPlayAgainView(self.cog, self.key, game["bet"])
+        await interaction.response.edit_message(attachments=[file], embed=embed, view=play_again)
+        play_again.message = self.message
         self.stop()
 
     @discord.ui.button(label="Higher", style=discord.ButtonStyle.success, emoji="⬆️")
@@ -294,13 +294,67 @@ class HighLowView(discord.ui.View):
         # Timing out forfeits the (already-deducted) bet.
         await add_transaction(self.cog.pool, self.key[0], self.key[1], -game["bet"], "higherlower_loss")
         self.cog.games.pop(self.key, None)
-        for child in self.children:
-            child.disabled = True
         file, embed = await self.cog.build_hl_state(
             game, title="Timed out — You lose", color=discord.Color.red(), reveal=False, net=-game["bet"]
         )
+        play_again = HLPlayAgainView(self.cog, self.key, game["bet"])
+        play_again.message = self.message
         try:
-            await self.message.edit(attachments=[file], embed=embed, view=self)
+            await self.message.edit(attachments=[file], embed=embed, view=play_again)
+        except discord.HTTPException:
+            pass
+
+
+class HLPlayAgainView(discord.ui.View):
+    """Shown after a higher-lower round ends; lets the player replay the same bet."""
+
+    def __init__(self, cog, key, bet, *, timeout=HIGHERLOWER_TIMEOUT):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.key = key
+        self.bet = bet
+        self.player_id = key[1]
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Play Again", style=discord.ButtonStyle.primary, emoji="🔁")
+    async def play_again_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild_id = self.key[0]
+        if self.key in self.cog.games:
+            await interaction.response.defer()
+            return
+        ok, error = await self.cog.check_rebet(guild_id, self.player_id, self.bet)
+        if not ok:
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(view=self)
+            await interaction.followup.send(error, ephemeral=True)
+            return
+
+        await update_wallet(self.cog.pool, guild_id, self.player_id, -self.bet)
+        game = self.cog.new_higherlower_game(self.key, guild_id, self.bet)
+
+        new_view = HighLowView(self.cog, self.key)
+        new_view.configure(game["odds"])
+        file, embed = await self.cog.build_hl_state(
+            game, title="Higher, Lower or Equal?", color=discord.Color.blue(), reveal=False
+        )
+        await interaction.response.edit_message(attachments=[file], embed=embed, view=new_view)
+        new_view.message = self.message
+        self.stop()
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(view=self)
         except discord.HTTPException:
             pass
 
@@ -321,6 +375,61 @@ def _bet_label(choice):
     if choice.isdigit():
         return f"Number {choice}"
     return _OUTSIDE_LABELS.get(choice, choice.title())
+
+
+class RouletteAgainView(discord.ui.View):
+    """Shown after a spin; lets any participant replay their exact bets from that round."""
+
+    def __init__(self, cog, guild_id, channel_id, bets_by_user, *, timeout=ROULETTE_WINDOW + 60):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self.bets_by_user = bets_by_user
+        self.message = None
+
+    @discord.ui.button(label="Play Again", style=discord.ButtonStyle.primary, emoji="🔁")
+    async def play_again_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bets = self.bets_by_user.get(interaction.user.id)
+        if not bets:
+            await interaction.response.send_message("You didn't have a bet in that round.", ephemeral=True)
+            return
+
+        cur = self.cog.bot.get_currency(self.guild_id)
+        total = sum(amount for _, amount in bets)
+        wallet = await ensure_wallet(self.cog.pool, self.guild_id, interaction.user.id)
+        if wallet["wallet"] < total:
+            await interaction.response.send_message(
+                f"You don't have enough {cur.name} to repeat that bet.", ephemeral=True
+            )
+            return
+        max_bet = await self.cog.get_max_bet(self.guild_id)
+        if max_bet is not None and any(amount > max_bet for _, amount in bets):
+            await interaction.response.send_message(
+                f"The maximum bet allowed in this server is **{max_bet:,}**{cur.emoji}.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        game = await self.cog._get_or_create_roulette_game(interaction.channel, interaction.guild, interaction.user.id)
+        await update_wallet(self.cog.pool, self.guild_id, interaction.user.id, -total)
+        game["bets"].setdefault(interaction.user.id, []).extend(bets)
+        game["deadline"] = time.time() + ROULETTE_WINDOW
+        await self.cog._refresh_roulette_board(game)
+        summary = ", ".join(f"{amount}{cur.emoji} on {_bet_label(choice)}" for choice, amount in bets)
+        await interaction.followup.send(
+            f"Placed **{summary}** again. Spinning <t:{int(game['deadline'])}:R>.", ephemeral=True
+        )
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(view=self)
+        except discord.HTTPException:
+            pass
 
 
 class Gambling(commands.Cog):
@@ -734,6 +843,25 @@ class Gambling(commands.Cog):
         self.games.pop(key, None)
         return net, actual
 
+    def new_higherlower_game(self, key, guild_id, bet):
+        """Create a fresh higher-lower game dict and draw the opening card."""
+        shoe = self.shoes.get(guild_id)
+        if not shoe:
+            shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
+            self.shoes[guild_id] = shoe
+
+        game = {
+            "game": "higherlower",
+            "guild_id": guild_id,
+            "bet": bet,
+            "deck": shoe,
+            "next_card": None,
+        }
+        self.games[key] = game
+        game["current_card"] = self._draw_card(game)
+        game["odds"] = self._hl_odds(game)
+        return game
+
     async def build_hl_state(self, game, *, title, color, reveal, net=None):
         """Render the high-low table to an image and wrap it in a (File, Embed)."""
         next_card = game.get("next_card") if reveal else None
@@ -780,22 +908,7 @@ class Gambling(commands.Cog):
             return
 
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
-
-        shoe = self.shoes.get(ctx.guild.id)
-        if not shoe:
-            shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
-            self.shoes[ctx.guild.id] = shoe
-
-        game = {
-            "game": "higherlower",
-            "guild_id": ctx.guild.id,
-            "bet": bet,
-            "deck": shoe,
-            "next_card": None,
-        }
-        self.games[key] = game
-        game["current_card"] = self._draw_card(game)
-        game["odds"] = self._hl_odds(game)
+        game = self.new_higherlower_game(key, ctx.guild.id, bet)
 
         view = HighLowView(self, key)
         view.configure(game["odds"])
@@ -840,27 +953,7 @@ class Gambling(commands.Cog):
             await ctx.send(f"You don't have enough {cur.name} for a {amount}{cur.emoji} bet.")
             return
 
-        key = ("roulette", ctx.channel.id)
-        existing = self.games.get(key)
-        if existing and not existing.get("spun"):
-            game = existing
-        else:
-            game = {
-                "game": "roulette",
-                "guild_id": ctx.guild.id,
-                "channel_id": ctx.channel.id,
-                "opener_id": ctx.author.id,
-                "bets": {},
-                "message": None,
-                "spun": False,
-                "deadline": time.time() + ROULETTE_WINDOW,
-            }
-            self.games[key] = game
-            embed = self.build_roulette_embed(game, ctx.guild)
-            file = discord.File(board.render_board(), filename="board.png")
-            message = await ctx.send(embed=embed, file=file)
-            game["message"] = message
-            game["timer"] = asyncio.create_task(self._roulette_timer(key))
+        game = await self._get_or_create_roulette_game(ctx.channel, ctx.guild, ctx.author.id)
 
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -amount)
         game["bets"].setdefault(ctx.author.id, []).append((choice, amount))
@@ -871,6 +964,31 @@ class Gambling(commands.Cog):
             f"Spinning <t:{int(game['deadline'])}:R>.",
             delete_after=8,
         )
+
+    async def _get_or_create_roulette_game(self, channel, guild, opener_id):
+        """Return the open roulette game for this channel, creating and announcing one if needed."""
+        key = ("roulette", channel.id)
+        game = self.games.get(key)
+        if game and not game.get("spun"):
+            return game
+
+        game = {
+            "game": "roulette",
+            "guild_id": guild.id,
+            "channel_id": channel.id,
+            "opener_id": opener_id,
+            "bets": {},
+            "message": None,
+            "spun": False,
+            "deadline": time.time() + ROULETTE_WINDOW,
+        }
+        self.games[key] = game
+        embed = self.build_roulette_embed(game, guild)
+        file = discord.File(board.render_board(), filename="board.png")
+        message = await channel.send(embed=embed, file=file)
+        game["message"] = message
+        game["timer"] = asyncio.create_task(self._roulette_timer(key))
+        return game
 
     def build_roulette_embed(self, game, guild):
         cur = self.bot.get_currency(game["guild_id"])
@@ -957,15 +1075,19 @@ class Gambling(commands.Cog):
         buf = await loop.run_in_executor(None, wheel.render_wheel, result)
         embed.set_image(url="attachment://wheel.png")
 
+        play_again = RouletteAgainView(self, game["guild_id"], game["channel_id"], dict(game["bets"]))
         self.games.pop(key, None)
 
         if message is None:
             return
         try:
-            await message.edit(embed=embed, attachments=[discord.File(buf, filename="wheel.png")])
+            await message.edit(embed=embed, attachments=[discord.File(buf, filename="wheel.png")], view=play_again)
+            play_again.message = message
         except discord.HTTPException:
             buf.seek(0)
-            await message.channel.send(embed=embed, file=discord.File(buf, filename="wheel.png"))
+            play_again.message = await message.channel.send(
+                embed=embed, file=discord.File(buf, filename="wheel.png"), view=play_again
+            )
 
     @staticmethod
     def resolve_roulette_bet(choice, bet, result, color):
