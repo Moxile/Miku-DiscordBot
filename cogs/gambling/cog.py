@@ -17,9 +17,9 @@ BLACKJACK_SHOE_DECKS = 6  # number of 52-card decks in each guild's shared shoe
 
 HIGHERLOWER_TIMEOUT = 120
 HL_HOUSE_EDGE = 0.92  # fair-odds payout is scaled by this to give the house an advantage
-# High-low rank ordering — Aces are high.
+# High-low rank ordering — Aces are low.
 _HL_ORDER = {r: i for i, r in enumerate(
-    ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+    ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
 )}
 
 
@@ -791,9 +791,9 @@ class Gambling(commands.Cog):
         """Compute, from the remaining shoe, the payout odds for each choice.
 
         Returns {choice: (count, multiplier)}. The multiplier is the fair payout
-        (stake / probability) scaled by the house edge, floored at 1.0 so a win
-        never pays out less than the bet. A count of 0 means the choice is
-        impossible (e.g. "higher" on an Ace) and gets disabled by the view.
+        (stake / probability) scaled by the house edge, floored at 1.05 so a win
+        always pays out at least a bit more than the bet. A count of 0 means the
+        choice is impossible (e.g. "lower" on an Ace) and gets disabled by the view.
         """
         deck = game["deck"]
         if not deck:
@@ -811,7 +811,7 @@ class Gambling(commands.Cog):
                 counts["equal"] += 1
         odds = {}
         for choice, count in counts.items():
-            mult = max(1.0, (total / count) * HL_HOUSE_EDGE) if count else 0.0
+            mult = max(1.05, (total / count) * HL_HOUSE_EDGE) if count else 0.0
             odds[choice] = (count, round(mult, 2))
         return odds
 
@@ -884,7 +884,7 @@ class Gambling(commands.Cog):
             embed.description = f"**{sign}{net}**{cur.emoji}"
         else:
             embed.description = f"Bet: **{game['bet']}**{cur.emoji}"
-            embed.set_footer(text="Aces are high")
+            embed.set_footer(text="Aces are low")
         return file, embed
 
     @commands.command(aliases=["hl", "highlow"])
@@ -920,7 +920,12 @@ class Gambling(commands.Cog):
     @commands.command(extras={"example": ".roulette red 100"})
     @require_channel("gambling_channel")
     async def roulette(self, ctx, option: str, bet: str):
-        """Place a bet on the roulette table. Usage: .roulette <option> <amount>. Options: red, black, odd, even, low, high, dozen1-3, col1-3, or a number 0–36. The wheel spins 10 seconds after the last bet."""
+        """Place a bet on the roulette table. Usage: .roulette <option> <amount>. Options: red, black, odd, even, low, high, dozen1-3, col1-3, or a number 0–36. The wheel spins 10 seconds after the last bet.
+
+        Payouts:
+        - Straight number (0-36): ×36
+        - Red / black / odd / even / low (1-18) / high (19-36): ×2
+        - Dozen (dozen1-3) / column (col1-3): ×3"""
         _valid_outside = {k for k, _ in OUTSIDE_BETS}
         if option.isdigit():
             n = int(option)
