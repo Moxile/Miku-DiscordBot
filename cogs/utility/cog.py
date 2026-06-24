@@ -24,10 +24,25 @@ class Utility(commands.Cog):
         extras={"example": ".calc sin(pi/4) + sqrt(2)"},
     )
     async def calc(self, ctx: commands.Context, *, expression: str):
-        """Calculate a math expression. Supports functions (sin, log, sqrt…),
-        constants (pi, e), exact fractions and big numbers, and renders the
-        result as an image. Subcommands: solve, diff, integrate, simplify.
-        Example: .calc sin(pi/4) + sqrt(2)"""
+        """Evaluate a math expression and render the result as an image.
+
+        **Operators**
+        `+` `-` `*` `/` · `^` or `**` power · `%` modulo · `//` floor division · `!` factorial · `( )` to group
+
+        **Implicit multiplication** — `2x`, `3(4+1)` and `2pi` all work.
+
+        **Functions** — `sqrt` `cbrt` `exp` `log` (`log(x)` natural, `log(x, b)` base-b) `ln` `abs` `floor` `ceil` `sin` `cos` `tan` `asin` `acos` `atan` `sinh` `cosh` `tanh` `factorial` `gamma` `gcd` `lcm` `min` `max` `sign`
+
+        **Constants** — `pi`, `e`, `oo` (infinity), `I` (imaginary unit)
+
+        **Numbers** — integers, decimals, scientific (`1.5e3`); fractions stay exact (`1/3`) and a decimal is shown alongside.
+
+        **Subcommands** (use a variable like `x`):
+        `solve` solve = 0 · `diff` differentiate · `integrate` integrate · `simplify`
+
+        **Examples**
+        `.calc sin(pi/4) + sqrt(2)` · `.calc (10+67/7)^2` · `.calc 5!`
+        `.calc solve x^2 - 4` · `.calc diff sin(x)*x^2` · `.calc integrate x^2`"""
         await self._run_calc(ctx, "eval", expression)
 
     @calc.command(name="solve", extras={"example": ".calc solve x^2 - 4"})
@@ -62,7 +77,7 @@ class Utility(commands.Cog):
                 await ctx.send(str(exc))
                 return
             except Exception:
-                await ctx.send("Invalid expression. Supports functions, constants, fractions and more.")
+                await ctx.send("Invalid expression. See `.help calc` for the supported syntax.")
                 return
 
         # Discord embed descriptions cap at 4096 chars; keep the plaintext sane.
