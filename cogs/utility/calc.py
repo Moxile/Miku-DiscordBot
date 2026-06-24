@@ -8,6 +8,8 @@ Rendering uses matplotlib's mathtext so no LaTeX install is required.
 from __future__ import annotations
 
 import io
+import multiprocessing
+import queue as _queue
 
 import matplotlib
 
@@ -220,3 +222,74 @@ def render_latex(body: str) -> io.BytesIO:
         plt.close(fig)
     buf.seek(0)
     return buf
+
+
+# ── Process isolation ──
+# SymPy/matplotlib work is CPU-bound pure Python that holds the GIL, so running
+# it in a thread would still freeze the bot's event loop and couldn't be killed.
+# Instead we run each job in a child process we can terminate on timeout.
+#
+# We avoid the "fork" start method: forking a multithreaded process (the bot has
+# the asyncio loop + thread pool) risks deadlocks from copied locks. "forkserver"
+# forks from a clean single-threaded helper; "spawn" is the portable fallback.
+# Neither re-runs main.py's bot startup (forkserver imports only this module;
+# spawn relies on main.py's __main__ guard).
+
+def _pick_context() -> multiprocessing.context.BaseContext:
+    for method in ("forkserver", "spawn"):
+        try:
+            ctx = multiprocessing.get_context(method)
+        except ValueError:
+            continue
+        if method == "forkserver":
+            try:
+                ctx.set_forkserver_preload(["cogs.utility.calc"])
+            except Exception:
+                pass
+        return ctx
+    return multiprocessing.get_context()
+
+
+_MP_CTX = _pick_context()
+
+
+def _job_worker(mode: str, expression: str, out) -> None:
+    """Child-process entry point: compute + render, push result to the queue."""
+    try:
+        plain, body = compute(mode, expression)
+        png = render_latex(body).getvalue()
+        out.put(("ok", plain, png))
+    except CalcError as exc:
+        out.put(("error", str(exc)))
+    except Exception:
+        out.put(("error", "Invalid expression. Supports functions, constants, fractions and more."))
+
+
+def run_job(mode: str, expression: str, timeout: float) -> tuple[str, bytes]:
+    """Run a calc job in a killable child process. Returns ``(plain, png_bytes)``.
+
+    Blocking — call via ``asyncio.to_thread`` so the event loop stays free.
+    Raises CalcError on failure, timeout, or a crashed worker.
+    """
+    out = _MP_CTX.Queue()
+    proc = _MP_CTX.Process(target=_job_worker, args=(mode, expression, out), daemon=True)
+    proc.start()
+    try:
+        # Read before join so a large PNG can't deadlock on a full pipe.
+        result = out.get(timeout=timeout)
+    except _queue.Empty:
+        result = None
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+        proc.join(timeout=2)
+        if proc.is_alive():  # didn't honor SIGTERM — force it
+            proc.kill()
+            proc.join()
+        out.close()
+
+    if result is None:
+        raise CalcError("That calculation took too long.")
+    if result[0] == "error":
+        raise CalcError(result[1])
+    return result[1], result[2]

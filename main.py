@@ -145,6 +145,9 @@ class MikuBot(commands.Bot):
         await super().close()
 
 
-bot = MikuBot()
-bot.help_command = Help(verify_checks=False, command_attrs={"aliases": ["h"]})
-bot.run(os.getenv("DISCORD_TOKEN"))
+# Guarded so child processes (e.g. the calc worker under the multiprocessing
+# "spawn" start method, which re-imports this module) don't start a second bot.
+if __name__ == "__main__":
+    bot = MikuBot()
+    bot.help_command = Help(verify_checks=False, command_attrs={"aliases": ["h"]})
+    bot.run(os.getenv("DISCORD_TOKEN"))

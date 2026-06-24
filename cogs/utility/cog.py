@@ -53,19 +53,13 @@ class Utility(commands.Cog):
     async def _run_calc(self, ctx: commands.Context, mode: str, expression: str):
         async with ctx.typing():
             try:
-                plain, body = await asyncio.wait_for(
-                    asyncio.to_thread(calc.compute, mode, expression),
-                    timeout=_CALC_TIMEOUT,
-                )
-                image = await asyncio.wait_for(
-                    asyncio.to_thread(calc.render_latex, body),
-                    timeout=_CALC_TIMEOUT,
+                # run_job offloads the CPU-bound work to a killable child
+                # process, so a runaway expression can't freeze the bot.
+                plain, png = await asyncio.to_thread(
+                    calc.run_job, mode, expression, _CALC_TIMEOUT
                 )
             except calc.CalcError as exc:
                 await ctx.send(str(exc))
-                return
-            except asyncio.TimeoutError:
-                await ctx.send("That calculation took too long.")
                 return
             except Exception:
                 await ctx.send("Invalid expression. Supports functions, constants, fractions and more.")
@@ -75,7 +69,7 @@ class Utility(commands.Cog):
         if len(plain) > 1000:
             plain = plain[:1000] + "…"
 
-        file = discord.File(image, filename="calc.png")
+        file = discord.File(io.BytesIO(png), filename="calc.png")
         embed = discord.Embed(
             description=f"```{plain}```",
             color=discord.Color.blurple(),
