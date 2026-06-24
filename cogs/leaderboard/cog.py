@@ -3,6 +3,8 @@ import math
 import discord
 from discord.ext import commands
 
+from core.names import format_name
+
 
 _VALID_MODES = {"wallet", "bank", "port", "portfolio", "waifu"}
 
@@ -43,7 +45,7 @@ class LeaderboardPaginator(discord.ui.View):
         for rank, row in enumerate(page_rows, start + 1):
             uid = row["user_id"]
             member = self.ctx.guild.get_member(uid)
-            name = member.display_name if member else f"User {uid}"
+            name = format_name(member, self.ctx.guild, fallback=f"User {uid}")
             prefix = medals.get(rank, f"`{rank}.`")
             lines.append(f"{prefix} **{name}** — {self.currency.emoji} {row['score']:,}")
         embed.description = "\n".join(lines)

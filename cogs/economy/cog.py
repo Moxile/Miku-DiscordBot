@@ -22,6 +22,7 @@ from config import (
 )
 from core.currency import Currency
 from core.checks import require_channel, invalidate, require_not_locked, invalidate_lock
+from core.names import format_name
 
 PER_PAGE = 10
 
@@ -46,7 +47,7 @@ class TransactionPaginator(discord.ui.View):
         start = self.page * PER_PAGE
         page_rows = self.rows[start:start + PER_PAGE]
         embed = discord.Embed(
-            title=f"{self.member.display_name}'s Transactions",
+            title=f"{format_name(self.member)}'s Transactions",
             color=discord.Color.green(),
         )
         lines = []
@@ -154,7 +155,7 @@ class Economy(commands.Cog):
         bank = bal["bank"]
 
         cur = self.bot.get_currency(ctx.guild.id)
-        embed = discord.Embed(title=f"{member.display_name}'s Balance", color=discord.Color.green())
+        embed = discord.Embed(title=f"{format_name(member)}'s Balance", color=discord.Color.green())
         embed.add_field(name=f"Wallet ({cur.name})", value=f"{wallet}{cur.emoji}")
         embed.add_field(name=f"Bank ({cur.name})", value=f"{bank}{cur.emoji}")
         embed.add_field(name="Total", value=f"{wallet + bank}{cur.emoji}")
@@ -517,7 +518,7 @@ class Economy(commands.Cog):
                 ctx.guild.id, member.id,
             )
             if not rows:
-                await ctx.send(f"{member.display_name} has no counting transactions.")
+                await ctx.send(f"{format_name(member)} has no counting transactions.")
                 return
             rows = [dict(r) for r in rows]
             view = TransactionPaginator(rows, member, ctx.author.id, self.bot.get_currency(ctx.guild.id))
@@ -549,7 +550,7 @@ class Economy(commands.Cog):
             rows.sort(key=lambda r: r["created_at"], reverse=True)
 
         if not rows:
-            await ctx.send(f"{member.display_name} has no transactions.")
+            await ctx.send(f"{format_name(member)} has no transactions.")
             return
 
         view = TransactionPaginator(rows, member, ctx.author.id, self.bot.get_currency(ctx.guild.id), counting_note=has_counting)
@@ -581,7 +582,7 @@ class Economy(commands.Cog):
         if "--delete" in flags:
             if not await confirm(
                 ctx,
-                f"⚠️ Lock **{member.display_name}**, **zero their balance**, and return all their shares to IPO?",
+                f"⚠️ Lock **{format_name(member)}**, **zero their balance**, and return all their shares to IPO?",
             ):
                 return
 
@@ -616,7 +617,7 @@ class Economy(commands.Cog):
                     )
 
         cur = self.bot.get_currency(ctx.guild.id)
-        parts = [f"**{member.display_name}** has been locked from the economy."]
+        parts = [f"**{format_name(member)}** has been locked from the economy."]
         if open_orders:
             parts.append(f"{len(open_orders)} open order(s) cancelled" + (f", {refund}{cur.emoji} escrowed gold refunded." if refund else "."))
         if "--delete" in flags:
@@ -634,9 +635,9 @@ class Economy(commands.Cog):
         )
         invalidate_lock(ctx.guild.id, member.id)
         if result == "DELETE 0":
-            await ctx.send(f"**{member.display_name}** was not locked.")
+            await ctx.send(f"**{format_name(member)}** was not locked.")
         else:
-            await ctx.send(f"**{member.display_name}** has been unlocked.")
+            await ctx.send(f"**{format_name(member)}** has been unlocked.")
 
     @commands.command()
     @commands.is_owner()
@@ -710,7 +711,7 @@ class Economy(commands.Cog):
         cur = self.bot.get_currency(ctx.guild.id)
         bal = await ensure_wallet(self.pool, ctx.guild.id, member.id)
         if bal["wallet"] + bal["bank"] < amount:
-            await ctx.send(f"{member.display_name} only has {bal['wallet'] + bal['bank']}{cur.emoji} total.")
+            await ctx.send(f"{format_name(member)} only has {bal['wallet'] + bal['bank']}{cur.emoji} total.")
             return
 
         if not await confirm(ctx, f"⚠️ Remove **{amount:,}**{cur.emoji} from {member.mention}'s wallet/bank?"):
@@ -718,7 +719,7 @@ class Economy(commands.Cog):
 
         bal = await ensure_wallet(self.pool, ctx.guild.id, member.id)
         if bal["wallet"] + bal["bank"] < amount:
-            await ctx.send(f"{member.display_name} only has {bal['wallet'] + bal['bank']}{cur.emoji} total.")
+            await ctx.send(f"{format_name(member)} only has {bal['wallet'] + bal['bank']}{cur.emoji} total.")
             return
 
         from_wallet = min(amount, bal["wallet"])

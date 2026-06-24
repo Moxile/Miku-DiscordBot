@@ -14,6 +14,7 @@ from cogs.waifu.db import (
 )
 from core.checks import require_not_locked
 from core.money import parse_amount, AmountError
+from core.names import format_name
 
 
 class Waifu(commands.Cog):
@@ -57,10 +58,10 @@ class Waifu(commands.Cog):
     async def _get_display_name(self, guild: discord.Guild, user_id: int) -> str:
         member = guild.get_member(user_id)
         if member:
-            return member.display_name
+            return format_name(member, guild)
         try:
             user = await self.bot.fetch_user(user_id)
-            return user.name
+            return format_name(user, guild)
         except Exception:
             return f"User {user_id}"
 
@@ -101,7 +102,7 @@ class Waifu(commands.Cog):
                 target_row = await ensure_waifu(conn, ctx.guild.id, member.id)
 
                 if target_row["spouse_id"] is not None:
-                    await ctx.send(f"**{member.display_name}** is married and cannot be bought.")
+                    await ctx.send(f"**{format_name(member)}** is married and cannot be bought.")
                     return
 
                 current_value = target_row["value"]
@@ -109,7 +110,7 @@ class Waifu(commands.Cog):
 
                 if pay < current_value:
                     await ctx.send(
-                        f"**{member.display_name}** is worth {cur.emoji} **{current_value:,}**. "
+                        f"**{format_name(member)}** is worth {cur.emoji} **{current_value:,}**. "
                         f"You must pay at least that much."
                     )
                     return
@@ -159,13 +160,13 @@ class Waifu(commands.Cog):
             rows = await get_harem(conn, ctx.guild.id, target.id)
 
         if not rows:
-            who = "You don't" if target == ctx.author else f"{target.display_name} doesn't"
+            who = "You don't" if target == ctx.author else f"{format_name(target)} doesn't"
             await ctx.send(f"{who} own any waifus.")
             return
 
         total_value = sum(r["value"] for r in rows)
         embed = discord.Embed(
-            title=f"{target.display_name}'s Harem",
+            title=f"{format_name(target)}'s Harem",
             color=discord.Color.from_rgb(255, 105, 180),
         )
         lines = []
@@ -187,7 +188,7 @@ class Waifu(commands.Cog):
             row = await ensure_waifu(conn, ctx.guild.id, target.id)
 
         embed = discord.Embed(
-            title=f"{target.display_name}'s Waifu Info",
+            title=f"{format_name(target)}'s Waifu Info",
             color=discord.Color.from_rgb(255, 105, 180),
         )
         embed.set_thumbnail(url=target.display_avatar.url)
@@ -209,7 +210,7 @@ class Waifu(commands.Cog):
             embed.add_field(name="Status", value="Single", inline=False)
 
         if not row["owner_id"] and not row["spouse_id"]:
-            embed.set_footer(text=f"Buy them with .waifubuy @{target.display_name}")
+            embed.set_footer(text=f"Buy them with .waifubuy @{format_name(target)}")
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["wgift"])
@@ -230,15 +231,15 @@ class Waifu(commands.Cog):
         async with self.pool.acquire() as conn:
             row = await get_waifu(conn, ctx.guild.id, waifu.id)
             if not row or row["owner_id"] != ctx.author.id:
-                await ctx.send(f"You don't own **{waifu.display_name}**.")
+                await ctx.send(f"You don't own **{format_name(waifu)}**.")
                 return
             if row["spouse_id"] is not None:
-                await ctx.send(f"**{waifu.display_name}** is married — they cannot be gifted.")
+                await ctx.send(f"**{format_name(waifu)}** is married — they cannot be gifted.")
                 return
             await set_waifu_owner(conn, ctx.guild.id, waifu.id, recipient.id, row["value"])
 
         embed = discord.Embed(
-            description=f"{ctx.author.mention} gifted **{waifu.display_name}** to {recipient.mention}! 🎁",
+            description=f"{ctx.author.mention} gifted **{format_name(waifu)}** to {recipient.mention}! 🎁",
             color=discord.Color.from_rgb(255, 105, 180),
         )
         embed.add_field(name="Value", value=f"{cur.emoji} {row['value']:,}", inline=True)
@@ -303,7 +304,7 @@ class Waifu(commands.Cog):
             title="💍 Marriage Proposal!",
             description=(
                 f"{ctx.author.mention} is proposing to {member.mention}!\n\n"
-                f"**{member.display_name}**, use `.accept` or `.deny` within 60 seconds."
+                f"**{format_name(member)}**, use `.accept` or `.deny` within 60 seconds."
             ),
             color=discord.Color.from_rgb(255, 105, 180),
         )

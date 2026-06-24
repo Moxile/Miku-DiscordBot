@@ -12,6 +12,7 @@ from cogs.shop.db import (
 from core.checks import require_not_locked, user_is_locked
 from core.money import parse_amount, AmountError
 from core.time_utils import parse_duration, humanize_duration
+from core.names import format_name
 
 SHOP_COLOR = discord.Color.from_rgb(57, 197, 187)  # Miku teal
 MIN_TEMP_ROLE_SECONDS = 60
@@ -255,10 +256,10 @@ class Shop(commands.Cog):
         member = member or ctx.author
         items = await get_inventory(self.pool, ctx.guild.id, member.id)
         if not items:
-            await ctx.send(f"{member.display_name} has no items.")
+            await ctx.send(f"{format_name(member)} has no items.")
             return
 
-        embed = discord.Embed(title=f"{member.display_name}'s Inventory", color=SHOP_COLOR)
+        embed = discord.Embed(title=f"{format_name(member)}'s Inventory", color=SHOP_COLOR)
         for item in items:
             embed.add_field(
                 name=f"{item['name']} x{item['quantity']}",

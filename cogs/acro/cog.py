@@ -7,6 +7,7 @@ from discord.ext import commands
 
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 from core.money import parse_amount, AmountError
+from core.names import format_name
 
 
 class Acro(commands.Cog):
@@ -155,7 +156,7 @@ class Acro(commands.Cog):
         results_lines = []
         for i, uid in enumerate(order):
             member = channel.guild.get_member(uid)
-            name = member.display_name if member else f"User {uid}"
+            name = format_name(member, channel.guild, fallback=f"User {uid}")
             marker = " 🏆" if uid in winners else ""
             if num_submissions == 1:
                 results_lines.append(f"**1.** {game['guesses'][uid]} — *{name}*{marker}")
@@ -171,7 +172,7 @@ class Acro(commands.Cog):
             winner_names = []
             for uid in winners:
                 m = channel.guild.get_member(uid)
-                winner_names.append(m.display_name if m else f"User {uid}")
+                winner_names.append(format_name(m, channel.guild, fallback=f"User {uid}"))
             if len(winners) == 1:
                 embed.add_field(
                     name="Winner",
@@ -191,7 +192,7 @@ class Acro(commands.Cog):
             winner_names = []
             for uid in winners:
                 m = channel.guild.get_member(uid)
-                winner_names.append(m.display_name if m else f"User {uid}")
+                winner_names.append(format_name(m, channel.guild, fallback=f"User {uid}"))
             embed.add_field(
                 name="Winner" if len(winners) == 1 else "Tie!",
                 value=f"**{', '.join(winner_names)}** wins!",

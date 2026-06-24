@@ -29,6 +29,7 @@ from cogs.market.db import (
 from core.checks import require_channel, invalidate, require_not_locked, user_is_locked
 from core.money import parse_amount, AmountError
 from core.confirm import confirm
+from core.names import format_name
 from config import (
     LEVEL_BASE_THRESHOLD,
     DIVIDEND_PROFIT_SHARE,
@@ -506,11 +507,11 @@ class Market(commands.Cog):
         holdings = await get_portfolio(self.pool, ctx.guild.id, member.id)
         orders = await get_user_orders(self.pool, ctx.guild.id, member.id)
         if not holdings and not orders:
-            await ctx.send(f"{member.display_name} has no holdings or open orders.")
+            await ctx.send(f"{format_name(member)} has no holdings or open orders.")
             return
 
         cur = self.bot.get_currency(ctx.guild.id)
-        embed = discord.Embed(title=f"{member.display_name}'s Portfolio", color=discord.Color.green())
+        embed = discord.Embed(title=f"{format_name(member)}'s Portfolio", color=discord.Color.green())
         total_value = 0
         total_cost = 0
         total_divs = 0
@@ -568,13 +569,13 @@ class Market(commands.Cog):
             ctx.guild.id, member.id,
         )
         if not rows:
-            await ctx.send(f"{member.display_name} has not received any dividends.")
+            await ctx.send(f"{format_name(member)} has not received any dividends.")
             return
 
         total = sum(r["amount"] for r in rows)
         cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(
-            title=f"{member.display_name}'s Dividend History",
+            title=f"{format_name(member)}'s Dividend History",
             color=discord.Color.blue(),
         )
         lines = []
@@ -642,7 +643,7 @@ class Market(commands.Cog):
             owners_lines = []
             for row in top_holders:
                 member = ctx.guild.get_member(row["user_id"])
-                name = member.display_name if member else f"<@{row['user_id']}>"
+                name = format_name(member, ctx.guild, fallback=f"<@{row['user_id']}>")
                 pct = row["quantity"] / total_shares * 100
                 owners_lines.append(f"{name} — {row['quantity']:,} ({pct:.1f}%)")
             owners_value = "\n".join(owners_lines)
@@ -690,7 +691,7 @@ class Market(commands.Cog):
         if sell_orders:
             for o in sell_orders[:10]:
                 member = ctx.guild.get_member(o["user_id"])
-                name = member.display_name if member else str(o["user_id"])
+                name = format_name(member, ctx.guild, fallback=str(o["user_id"]))
                 sell_lines.append(f"{o['remaining']:,}x @ {o['price']:,}{cur.emoji} — {name}")
         embed.add_field(name="Sell Orders (Asks)", value="\n".join(sell_lines) if sell_lines else "None", inline=False)
 
@@ -698,7 +699,7 @@ class Market(commands.Cog):
             buy_lines = []
             for o in buy_orders[:10]:
                 member = ctx.guild.get_member(o["user_id"])
-                name = member.display_name if member else str(o["user_id"])
+                name = format_name(member, ctx.guild, fallback=str(o["user_id"]))
                 buy_lines.append(f"{o['remaining']:,}x @ {o['price']:,}{cur.emoji} — {name}")
             embed.add_field(name="Buy Orders (Bids)", value="\n".join(buy_lines), inline=False)
         else:
@@ -1496,13 +1497,13 @@ class Market(commands.Cog):
                 await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -quantity)
                 await update_holding(conn, ctx.guild.id, member.id, stock.id, quantity)
                 await add_transaction(conn, ctx.guild.id, ctx.author.id, 0, "gift_send",
-                                      f"Gifted {quantity}x {company['name']} to {member.display_name}")
+                                      f"Gifted {quantity}x {company['name']} to {format_name(member)}")
                 await add_transaction(conn, ctx.guild.id, member.id, 0, "gift_receive",
-                                      f"Received {quantity}x {company['name']} from {ctx.author.display_name}")
+                                      f"Received {quantity}x {company['name']} from {format_name(ctx.author)}")
 
         embed = discord.Embed(title="Stocks Gifted", color=discord.Color.purple())
-        embed.add_field(name="From", value=ctx.author.display_name, inline=True)
-        embed.add_field(name="To", value=member.display_name, inline=True)
+        embed.add_field(name="From", value=format_name(ctx.author), inline=True)
+        embed.add_field(name="To", value=format_name(member), inline=True)
         embed.add_field(name="Stock", value=company["name"], inline=True)
         embed.add_field(name="Quantity", value=str(quantity), inline=True)
         await ctx.send(embed=embed)

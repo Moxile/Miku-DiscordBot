@@ -14,6 +14,7 @@ from discord.ext import commands, tasks
 from config import LICHESS_RATING_ROLE_DEFAULTS, LICHESS_VARIANTS, RATING_SEPARATOR_ROLE
 from cogs.lichess.api import exchange_code, extract_ratings, fetch_account
 from core.checks import has_permissions_or_owner
+from core.names import format_name
 from cogs.lichess.db import (
     delete_account,
     get_account,
@@ -448,7 +449,7 @@ class Lichess(commands.Cog, name="Lichess"):
         async with self.pool.acquire() as conn:
             account = await get_account(conn, target.id)
             if account is None:
-                who = "You don't have" if target == ctx.author else f"{target.display_name} doesn't have"
+                who = "You don't have" if target == ctx.author else f"{format_name(target)} doesn't have"
                 await ctx.send(f"{who} a linked Lichess account.")
                 return
             ratings_rows = await get_ratings(conn, target.id)

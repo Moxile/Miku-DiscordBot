@@ -8,6 +8,7 @@ from discord.ext import commands
 from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
 from core.checks import require_channel, invalidate, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
+from core.names import format_name
 from config import PREFIX
 from . import cards, coins, wheel, board
 
@@ -1007,7 +1008,7 @@ class Gambling(commands.Cog):
             lines = []
             for uid, bets in game["bets"].items():
                 member = guild.get_member(uid) if guild else None
-                name = member.display_name if member else str(uid)
+                name = format_name(member, guild, fallback=str(uid))
                 staked = sum(b for _, b in bets)
                 summary = ", ".join(f"{bet}{cur.emoji} {_bet_label(c)}" for c, bet in bets)
                 lines.append(f"**{name}** — {summary}  *(staked {staked}{cur.emoji})*")
@@ -1069,7 +1070,7 @@ class Gambling(commands.Cog):
                 await add_transaction(self.pool, game["guild_id"], user_id, net, tx_type)
 
             member = guild.get_member(user_id) if guild else None
-            name = member.display_name if member else str(user_id)
+            name = format_name(member, guild, fallback=str(user_id))
             sign = "+" if net >= 0 else ""
             embed.add_field(name=name, value=f"{sign}{net}{cur.emoji}", inline=True)
 
@@ -1173,11 +1174,11 @@ class Gambling(commands.Cog):
 
         embed=discord.Embed(
             title="Russian Roulette",
-            description=f"{ctx.author.display_name} has joined the game with a bet of {bet}{cur.emoji}!\n\nType `{PREFIX}rr {bet}` to join. Spinning in **30 seconds**...",
+            description=f"{format_name(ctx.author)} has joined the game with a bet of {bet}{cur.emoji}!\n\nType `{PREFIX}rr {bet}` to join. Spinning in **30 seconds**...",
             color=discord.Color.dark_red()
         )
         embed.add_field(name="Players Joined", value="\n".join(
-            f"- {ctx.guild.get_member(pid).display_name if ctx.guild.get_member(pid) else str(pid)}" for pid in self.games[key]["players"]
+            f"- {format_name(ctx.guild.get_member(pid), ctx.guild, fallback=str(pid))}" for pid in self.games[key]["players"]
         ), inline=False)
         await ctx.send(embed=embed)
 
@@ -1212,14 +1213,14 @@ class Gambling(commands.Cog):
                 if secrets.randbelow(1_000_000) < int(chance_hit * 1_000_000):
                     alive.remove(pid)
                     member = channel.guild.get_member(pid)
-                    name = member.display_name if member else str(pid)
+                    name = format_name(member, channel.guild, fallback=str(pid))
                     await channel.send(f"**{name}** has been hit and died! 💀")
                     await add_transaction(self.pool, game["guild_id"], pid, -game["bet"], "russian_roulette_loss")
                     if len(alive) == 1:
                         break
                 else:
                     member = channel.guild.get_member(pid)
-                    name = member.display_name if member else str(pid)
+                    name = format_name(member, channel.guild, fallback=str(pid))
                     await channel.send(f"**{name}** survived round {round_num}! 😅")
 
         winner = alive[0]
@@ -1227,14 +1228,14 @@ class Gambling(commands.Cog):
         await update_wallet(self.pool, game["guild_id"], winner, game["bet"] * playercount)
         await add_transaction(self.pool, game["guild_id"], winner, game["bet"] * (playercount - 1), "russian_roulette_win")
         member = channel.guild.get_member(winner)
-        name = member.display_name if member else str(winner)
+        name = format_name(member, channel.guild, fallback=str(winner))
         embed = discord.Embed(
             title="Russian Roulette - Game Over",
             description=f"🎉 **{name}** is the last survivor and wins {game['bet'] * playercount}{cur.emoji} after {round_num} devastating rounds! 🎉",
             color=discord.Color.green()
         )
         embed.add_field(name="Players", value="\n".join(
-            f"- {channel.guild.get_member(pid).display_name if channel.guild.get_member(pid) else str(pid)} {'🏆' if pid == winner else '💀'}" for pid in players
+            f"- {format_name(channel.guild.get_member(pid), channel.guild, fallback=str(pid))} {'🏆' if pid == winner else '💀'}" for pid in players
         ), inline=False)
         await channel.send(embed=embed)
 

@@ -6,6 +6,7 @@ import asyncpg
 import discord
 
 from config import LICHESS_VARIANTS
+from core.names import format_name
 
 VARIANT_EMOJI: Dict[str, str] = {
     "bullet":     "🔫",
@@ -33,7 +34,7 @@ def build_profile_embed(
     ratings_by_variant: Dict[str, asyncpg.Record] = {r["variant"]: r for r in ratings_rows}
 
     embed = discord.Embed(
-        title=f"{member.display_name}'s Chess Profile",
+        title=f"{format_name(member)}'s Chess Profile",
         color=color,
     )
     embed.set_thumbnail(url=member.display_avatar.url)

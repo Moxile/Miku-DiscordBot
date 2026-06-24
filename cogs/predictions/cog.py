@@ -10,6 +10,7 @@ from cogs.predictions.db import (
 )
 from core.checks import require_not_locked
 from core.money import parse_amount, AmountError
+from core.names import format_name
 
 # In-memory cache: guild_id -> role_id
 _predictor_roles: dict[int, int] = {}
@@ -136,7 +137,7 @@ class Predictions(commands.Cog):
                               f"Bet on prediction #{prediction_id}")
         await place_prediction_bet(self.pool, prediction_id, target["id"], ctx.guild.id, ctx.author.id, amount)
 
-        await ctx.send(f"{ctx.author.display_name} bet {amount}{cur.emoji} on **{target['label']}**!")
+        await ctx.send(f"{format_name(ctx.author)} bet {amount}{cur.emoji} on **{target['label']}**!")
 
     @commands.command()
     async def pclose(self, ctx, prediction_id: int):
@@ -219,7 +220,7 @@ class Predictions(commands.Cog):
                 await add_transaction(self.pool, ctx.guild.id, bet["user_id"], payout, "prediction_win",
                                       f"Won prediction #{prediction_id}")
                 member = ctx.guild.get_member(bet["user_id"])
-                name = member.display_name if member else str(bet["user_id"])
+                name = format_name(member, ctx.guild, fallback=str(bet["user_id"]))
                 profit = payout - bet["amount"]
                 payout_lines.append(f"{name}: +{profit}{cur.emoji} (bet {bet['amount']}, got {payout})")
             embed.add_field(name="Payouts", value="\n".join(payout_lines) or "None", inline=False)

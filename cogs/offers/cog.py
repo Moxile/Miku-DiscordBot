@@ -8,6 +8,7 @@ from cogs.offers.db import (
 )
 from core.checks import require_not_locked
 from core.money import parse_amount, AmountError
+from core.names import format_name
 
 
 def _format_odds(odds: float) -> str:
@@ -277,7 +278,7 @@ class Offers(commands.Cog):
             lines = []
             for user_id, stake_amt, payout in payout_lines:
                 member = ctx.guild.get_member(user_id)
-                name = member.display_name if member else str(user_id)
+                name = format_name(member, ctx.guild, fallback=str(user_id))
                 profit = payout - stake_amt
                 lines.append(f"{name}: +{profit}{cur.emoji} (staked {stake_amt}, got {payout})")
             embed.add_field(name="Payouts", value="\n".join(lines) or "No takes.", inline=False)
@@ -338,7 +339,7 @@ class Offers(commands.Cog):
         embed = discord.Embed(title="Open Offers", color=discord.Color.dark_gold())
         for o in rows:
             host = ctx.guild.get_member(o["host_id"])
-            host_name = host.display_name if host else str(o["host_id"])
+            host_name = format_name(host, ctx.guild, fallback=str(o["host_id"]))
             stake_range = f"{o['min_stake']}" if o["min_stake"] == o["max_stake"] \
                 else f"{o['min_stake']}-{o['max_stake']}"
             embed.add_field(
@@ -361,7 +362,7 @@ class Offers(commands.Cog):
         takes = await get_offer_takes(self.pool_conn, offer_id)
 
         host = ctx.guild.get_member(offer["host_id"])
-        host_name = host.display_name if host else str(offer["host_id"])
+        host_name = format_name(host, ctx.guild, fallback=str(offer["host_id"]))
         stake_range = f"{offer['min_stake']}" if offer["min_stake"] == offer["max_stake"] \
             else f"{offer['min_stake']}-{offer['max_stake']}"
 
@@ -380,7 +381,7 @@ class Offers(commands.Cog):
             lines = []
             for t in takes[:15]:
                 member = ctx.guild.get_member(t["user_id"])
-                name = member.display_name if member else str(t["user_id"])
+                name = format_name(member, ctx.guild, fallback=str(t["user_id"]))
                 potential = int(t["stake"] * float(offer["odds"]))
                 lines.append(f"{name}: {t['stake']}{cur.emoji} (wins {potential})")
             if len(takes) > 15:

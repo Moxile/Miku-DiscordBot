@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 
 from core.time_utils import parse_duration
+from core.names import format_name
 from cogs.economy.db import ensure_wallet, update_wallet, lock_wallet, add_transaction
 
 
@@ -190,7 +191,7 @@ class GTE(commands.Cog):
             title="Guess the Elo!",
             description=(
                 f"**Variant:** {variant.capitalize()} | **Time:** {tc_str}\n"
-                f"**Award:** {cur.emoji} **{award:,}** (funded by {ctx.author.display_name})\n\n"
+                f"**Award:** {cur.emoji} **{award:,}** (funded by {format_name(ctx.author)})\n\n"
                 f"Guess both players' ratings!\n"
                 f"Type `<white> vs <black>` (e.g. `1500 vs 1800`)\n"
                 f"Guessing ends <t:{ends_at}:R>"
@@ -268,7 +269,7 @@ class GTE(commands.Cog):
         lines = []
         for uid, gw, gb, dist in results:
             member = channel.guild.get_member(uid)
-            name = member.display_name if member else f"User {uid}"
+            name = format_name(member, channel.guild, fallback=f"User {uid}")
             marker = " 🏆" if dist == min_dist else ""
             lines.append(f"**{name}** — guessed {gw} / {gb} (off by {dist}){marker}")
 
@@ -276,7 +277,7 @@ class GTE(commands.Cog):
 
         if len(winners) == 1:
             winner_member = channel.guild.get_member(winners[0][0])
-            winner_name = winner_member.display_name if winner_member else f"User {winners[0][0]}"
+            winner_name = format_name(winner_member, channel.guild, fallback=f"User {winners[0][0]}")
             embed.add_field(
                 name="Winner",
                 value=f"**{winner_name}** wins {cur.emoji} **{award:,}**!",
@@ -287,7 +288,7 @@ class GTE(commands.Cog):
             winner_names = []
             for uid, _, _, _ in winners:
                 m = channel.guild.get_member(uid)
-                winner_names.append(m.display_name if m else f"User {uid}")
+                winner_names.append(format_name(m, channel.guild, fallback=f"User {uid}"))
             embed.add_field(
                 name="Tie!",
                 value=f"**{', '.join(winner_names)}** split the award — {cur.emoji} **{share:,}** each.",
