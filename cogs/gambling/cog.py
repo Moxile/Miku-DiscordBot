@@ -612,7 +612,7 @@ class Gambling(commands.Cog):
     @commands.command(aliases=["bj"])
     @require_channel("gambling_channel")
     async def blackjack(self, ctx, bet: str):
-        """Start a game of blackjack by placing a bet, then play with the Hit / Stand / Double / Split buttons. You can specify an amount or use 'all' to bet everything."""
+        """Start a game of blackjack by placing a bet, then play with the Hit / Stand / Double / Split buttons. You can specify an amount or use 'all' to bet everything. Card values: 2-10 are face value, J/Q/K count as 10, Ace counts as 1 or 11."""
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         try:
             bet = parse_amount(bet, wallet_balance=wallet["wallet"])
@@ -885,7 +885,7 @@ class Gambling(commands.Cog):
             embed.description = f"**{sign}{net}**{cur.emoji}"
         else:
             embed.description = f"Bet: **{game['bet']}**{cur.emoji}"
-            embed.set_footer(text="Aces are low")
+            embed.set_footer(text="Order: A < 2 < 3 < 4 < 5 < 6 < 7 < 8 < 9 < 10 < J < Q < K")
         return file, embed
 
     @commands.command(aliases=["hl", "highlow"])

@@ -10,6 +10,7 @@ from discord.ext import commands
 from config import PREFIX
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
 from core.checks import has_permissions_or_owner, user_is_locked
+from core.names import format_name
 
 _OPS = {
     ast.Add: operator.add,
@@ -192,6 +193,35 @@ class Counting(commands.Cog):
             self._cache[guild_id]["count"] = new_count
             self._cache[guild_id]["last_user"] = user_id
 
+    async def _record_fail(self, guild_id: int, user_id: int) -> int:
+        row = await self.pool.fetchrow(
+            """
+            INSERT INTO counting_fails (guild_id, user_id, fails)
+            VALUES ($1, $2, 1)
+            ON CONFLICT (guild_id, user_id) DO UPDATE SET fails = counting_fails.fails + 1
+            RETURNING fails
+            """,
+            guild_id, user_id,
+        )
+        return row["fails"]
+
+    async def _maybe_assign_fail_role(self, guild: discord.Guild, member: discord.Member | None, fails: int):
+        if member is None:
+            return
+        row = await self.pool.fetchrow(
+            "SELECT role_id, threshold FROM counting_fail_roles WHERE guild_id = $1",
+            guild.id,
+        )
+        if row is None or fails < row["threshold"]:
+            return
+        role = guild.get_role(row["role_id"])
+        if role is None or role in member.roles:
+            return
+        try:
+            await member.add_roles(role, reason=f"Reached {row['threshold']} counting fails")
+        except discord.Forbidden:
+            pass
+
     @commands.group(invoke_without_command=True)
     async def counting(self, ctx: commands.Context):
         """Show the current counting state."""
@@ -232,6 +262,60 @@ class Counting(commands.Cog):
         self._cache.pop(ctx.guild.id, None)
         await ctx.send("Counting channel unbound.")
 
+    @commands.command(name="countfails")
+    async def countfails(self, ctx: commands.Context):
+        """Show the server's counting fail leaderboard."""
+        rows = await self.pool.fetch(
+            "SELECT user_id, fails FROM counting_fails WHERE guild_id = $1 ORDER BY fails DESC LIMIT 10",
+            ctx.guild.id,
+        )
+        if not rows:
+            await ctx.send("No one has broken the count yet.")
+            return
+
+        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+        lines = []
+        for rank, row in enumerate(rows, start=1):
+            member = ctx.guild.get_member(row["user_id"])
+            name = format_name(member, ctx.guild, fallback=f"User {row['user_id']}")
+            prefix = medals.get(rank, f"`{rank}.`")
+            fails = row["fails"]
+            lines.append(f"{prefix} **{name}** — {fails} fail{'s' if fails != 1 else ''}")
+
+        embed = discord.Embed(
+            title="📉 Counting Fail Leaderboard",
+            description="\n".join(lines),
+            color=discord.Color.red(),
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command(name="countfailrole")
+    @has_permissions_or_owner(manage_roles=True)
+    async def countfailrole(self, ctx: commands.Context, role: discord.Role = None, threshold: int = None):
+        """Admin: bind a role to be auto-granted once a member reaches X counting fails.
+
+        Usage: `.countfailrole @Role 10` to bind, or `.countfailrole` with no
+        arguments to remove the current binding.
+        """
+        if role is None:
+            await self.pool.execute("DELETE FROM counting_fail_roles WHERE guild_id = $1", ctx.guild.id)
+            await ctx.send("Counting fail role binding removed.")
+            return
+
+        if threshold is None or threshold <= 0:
+            await ctx.send("Please provide a positive fail threshold, e.g. `.countfailrole @Role 10`.")
+            return
+
+        await self.pool.execute(
+            """
+            INSERT INTO counting_fail_roles (guild_id, role_id, threshold)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (guild_id) DO UPDATE SET role_id = $2, threshold = $3
+            """,
+            ctx.guild.id, role.id, threshold,
+        )
+        await ctx.send(f"✅ Members will now receive {role.mention} after **{threshold}** counting fails.")
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.guild is None:
@@ -257,6 +341,8 @@ class Counting(commands.Cog):
         if user_id == state["last_user"]:
             await message.add_reaction("❌")
             await self._reset(guild_id)
+            fails = await self._record_fail(guild_id, user_id)
+            await self._maybe_assign_fail_role(message.guild, message.author, fails)
             await message.channel.send(
                 f"{message.author.mention} can't count twice in a row! Back to **0**."
             )
@@ -265,6 +351,8 @@ class Counting(commands.Cog):
         if value != current + 1:
             await message.add_reaction("❌")
             await self._reset(guild_id)
+            fails = await self._record_fail(guild_id, user_id)
+            await self._maybe_assign_fail_role(message.guild, message.author, fails)
             await message.channel.send(
                 f"{message.author.mention} broke the count at **{current}**! "
                 f"Expected **{current + 1}**. Back to **0**."
