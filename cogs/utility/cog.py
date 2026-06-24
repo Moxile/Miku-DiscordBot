@@ -1,7 +1,6 @@
 from __future__ import annotations
-import ast
+import asyncio
 import io
-import operator
 import re
 import struct
 import zlib
@@ -9,48 +8,9 @@ import zlib
 import discord
 from discord.ext import commands
 
+from . import calc
 
-# ── Safe math evaluator ──
-# Supports: +, -, *, /, //, %, ** (or ^), parentheses, unary minus
-# No access to builtins, variables, or function calls.
-
-_OPS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.FloorDiv: operator.floordiv,
-    ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
-    ast.USub: operator.neg,
-    ast.UAdd: operator.pos,
-}
-
-
-def _safe_eval(node):
-    if isinstance(node, ast.Expression):
-        return _safe_eval(node.body)
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-        return node.value
-    if isinstance(node, ast.BinOp) and type(node.op) in _OPS:
-        left = _safe_eval(node.left)
-        right = _safe_eval(node.right)
-        if isinstance(node.op, ast.Pow) and right > 1000:
-            raise ValueError("Exponent too large.")
-        return _OPS[type(node.op)](left, right)
-    if isinstance(node, ast.UnaryOp) and type(node.op) in _OPS:
-        return _OPS[type(node.op)](_safe_eval(node.operand))
-    raise ValueError("Unsupported expression.")
-
-
-def safe_calc(expr: str) -> float | int:
-    expr = expr.replace("^", "**")
-    tree = ast.parse(expr, mode="eval")
-    result = _safe_eval(tree)
-    if isinstance(result, float) and result.is_integer():
-        return int(result)
-    return result
-
+_CALC_TIMEOUT = 10  # seconds; symbolic work can be slow, so cap it
 
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
@@ -59,28 +19,69 @@ class Utility(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.command(extras={"example": ".calc (10+67/7)^2"})
+    @commands.group(
+        invoke_without_command=True,
+        extras={"example": ".calc sin(pi/4) + sqrt(2)"},
+    )
     async def calc(self, ctx: commands.Context, *, expression: str):
-        """Calculate a math expression. Supports +, -, *, /, ^, %, parentheses. Example: .calc (10+67/7)^2"""
-        try:
-            result = safe_calc(expression)
-        except ZeroDivisionError:
-            await ctx.send("Division by zero.")
-            return
-        except Exception:
-            await ctx.send("Invalid expression. Supports: `+`, `-`, `*`, `/`, `^`, `%`, parentheses.")
-            return
+        """Calculate a math expression. Supports functions (sin, log, sqrt…),
+        constants (pi, e), exact fractions and big numbers, and renders the
+        result as an image. Subcommands: solve, diff, integrate, simplify.
+        Example: .calc sin(pi/4) + sqrt(2)"""
+        await self._run_calc(ctx, "eval", expression)
 
-        if isinstance(result, float):
-            display = f"{result:,.6g}"
-        else:
-            display = f"{result:,}"
+    @calc.command(name="solve", extras={"example": ".calc solve x^2 - 4"})
+    async def calc_solve(self, ctx: commands.Context, *, expression: str):
+        """Solve an equation for its variable (expr = 0). Example: .calc solve x^2 - 4"""
+        await self._run_calc(ctx, "solve", expression)
 
+    @calc.command(name="diff", aliases=["derivative"], extras={"example": ".calc diff sin(x)*x^2"})
+    async def calc_diff(self, ctx: commands.Context, *, expression: str):
+        """Differentiate an expression. Example: .calc diff sin(x)*x^2"""
+        await self._run_calc(ctx, "diff", expression)
+
+    @calc.command(name="integrate", aliases=["integral"], extras={"example": ".calc integrate x^2"})
+    async def calc_integrate(self, ctx: commands.Context, *, expression: str):
+        """Integrate an expression (indefinite). Example: .calc integrate x^2"""
+        await self._run_calc(ctx, "integrate", expression)
+
+    @calc.command(name="simplify", extras={"example": ".calc simplify (x^2-1)/(x-1)"})
+    async def calc_simplify(self, ctx: commands.Context, *, expression: str):
+        """Simplify an expression. Example: .calc simplify (x^2-1)/(x-1)"""
+        await self._run_calc(ctx, "simplify", expression)
+
+    async def _run_calc(self, ctx: commands.Context, mode: str, expression: str):
+        async with ctx.typing():
+            try:
+                plain, body = await asyncio.wait_for(
+                    asyncio.to_thread(calc.compute, mode, expression),
+                    timeout=_CALC_TIMEOUT,
+                )
+                image = await asyncio.wait_for(
+                    asyncio.to_thread(calc.render_latex, body),
+                    timeout=_CALC_TIMEOUT,
+                )
+            except calc.CalcError as exc:
+                await ctx.send(str(exc))
+                return
+            except asyncio.TimeoutError:
+                await ctx.send("That calculation took too long.")
+                return
+            except Exception:
+                await ctx.send("Invalid expression. Supports functions, constants, fractions and more.")
+                return
+
+        # Discord embed descriptions cap at 4096 chars; keep the plaintext sane.
+        if len(plain) > 1000:
+            plain = plain[:1000] + "…"
+
+        file = discord.File(image, filename="calc.png")
         embed = discord.Embed(
-            description=f"```{expression} = {display}```",
+            description=f"```{plain}```",
             color=discord.Color.blurple(),
         )
-        await ctx.send(embed=embed)
+        embed.set_image(url="attachment://calc.png")
+        await ctx.send(file=file, embed=embed)
 
     @commands.command()
     async def color(self, ctx: commands.Context, hex_code: str):
