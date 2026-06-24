@@ -15,6 +15,7 @@ from cogs.market import schema as market_schema
 from cogs.shop import schema as shop_schema
 from cogs.predictions import schema as predictions_schema
 from cogs.offers import schema as offers_schema
+from cogs.dailywheel import schema as dailywheel_schema
 from cogs.reminders import schema as reminders_schema
 from cogs.waifu import schema as waifu_schema
 from cogs.reaction_roles import schema as reaction_roles_schema
@@ -33,6 +34,7 @@ _FEATURE_MODULES = [
     shop_schema,
     predictions_schema,
     offers_schema,
+    dailywheel_schema,
     reminders_schema,
     waifu_schema,
     reaction_roles_schema,
