@@ -6,7 +6,7 @@ from discord.ext import commands
 
 from cogs.economy.db import update_wallet, add_transaction
 from cogs.dailywheel.db import (
-    get_prizes, add_currency_prize, add_message_prize, remove_prize,
+    get_prizes, add_currency_prize, add_message_prize, add_role_prize, remove_prize,
     get_last_spin, record_spin, remove_member_data,
 )
 from core.checks import require_channel, invalidate, has_permissions_or_owner
@@ -62,6 +62,17 @@ class DailyWheel(commands.Cog):
             await update_wallet(self.pool, ctx.guild.id, ctx.author.id, prize["amount"])
             await add_transaction(self.pool, ctx.guild.id, ctx.author.id, prize["amount"], "dailywheel_win")
             await ctx.send(f"🎡 You win **{prize['amount']:,}**{cur.emoji}!\n{prize['text']}")
+        elif prize["kind"] == "role":
+            role = ctx.guild.get_role(prize["role_id"])
+            if role is None:
+                await ctx.send(f"🎡 {prize['text']}\n(Role prize could not be granted — role no longer exists.)")
+                return
+            try:
+                await ctx.author.add_roles(role, reason="Daily wheel prize")
+            except discord.Forbidden:
+                await ctx.send(f"🎡 {prize['text']}\n(Couldn't grant {role.mention} — missing permissions.)")
+                return
+            await ctx.send(f"🎡 You win the {role.mention} role!\n{prize['text']}")
         else:
             await ctx.send(f"🎡 {prize['text']}")
 
@@ -70,7 +81,7 @@ class DailyWheel(commands.Cog):
     @commands.command()
     @has_permissions_or_owner(administrator=True)
     async def wheeladd(self, ctx, weight: int, kind: str, *, rest: str):
-        """Add a wheel prize. Usage: .wheeladd <weight> currency <amount> <message> or .wheeladd <weight> message <text>"""
+        """Add a wheel prize. Usage: .wheeladd <weight> currency <amount> <message> or .wheeladd <weight> message <text> or .wheeladd <weight> role <@role> <message>"""
         if weight <= 0:
             await ctx.send("Weight must be a positive integer.")
             return
@@ -95,8 +106,24 @@ class DailyWheel(commands.Cog):
         elif kind == "message":
             await add_message_prize(self.pool, ctx.guild.id, weight, rest)
             await ctx.send(f"Added message prize (weight {weight}): {rest}")
+        elif kind == "role":
+            parts = rest.split(maxsplit=1)
+            if not parts:
+                await ctx.send("Usage: `.wheeladd <weight> role <@role> <message>`")
+                return
+            try:
+                role = await commands.RoleConverter().convert(ctx, parts[0])
+            except commands.BadArgument:
+                await ctx.send("Usage: `.wheeladd <weight> role <@role> <message>` — couldn't find that role.")
+                return
+            text = parts[1] if len(parts) > 1 else ""
+            if not text:
+                await ctx.send("Usage: `.wheeladd <weight> role <@role> <message>`")
+                return
+            await add_role_prize(self.pool, ctx.guild.id, weight, role.id, text)
+            await ctx.send(f"Added role prize: {role.mention} (weight {weight}) — {text}")
         else:
-            await ctx.send("Kind must be `currency` or `message`.")
+            await ctx.send("Kind must be `currency`, `message`, or `role`.")
 
     @commands.command()
     @has_permissions_or_owner(administrator=True)
@@ -121,6 +148,10 @@ class DailyWheel(commands.Cog):
         for prize in prizes:
             if prize["kind"] == "currency":
                 value = f"**{prize['amount']:,}**{cur.emoji} — {prize['text']}"
+            elif prize["kind"] == "role":
+                role = ctx.guild.get_role(prize["role_id"])
+                role_label = role.mention if role else f"deleted role ({prize['role_id']})"
+                value = f"{role_label} — {prize['text']}"
             else:
                 value = prize["text"]
             embed.add_field(name=f"#{prize['id']} · weight {prize['weight']}", value=value, inline=False)

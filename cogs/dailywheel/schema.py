@@ -5,6 +5,7 @@ SCHEMA = """
         kind        TEXT NOT NULL,
         weight      INT NOT NULL DEFAULT 1,
         amount      BIGINT,
+        role_id     BIGINT,
         text        TEXT NOT NULL,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -17,8 +18,15 @@ SCHEMA = """
     );
 """
 
+MIGRATIONS = [
+    "ALTER TABLE wheel_prizes ADD COLUMN IF NOT EXISTS role_id BIGINT",
+    # Widen the kind check to allow 'role' prizes; the constraint name is fixed so we can
+    # drop it by name before re-adding with the extra value.
+    "ALTER TABLE wheel_prizes DROP CONSTRAINT IF EXISTS wheel_prizes_kind_check",
+]
+
 CONSTRAINTS = [
     "ALTER TABLE wheel_prizes ADD CONSTRAINT wheel_prizes_kind_check "
-    "CHECK (kind IN ('currency', 'message'))",
+    "CHECK (kind IN ('currency', 'message', 'role'))",
     "ALTER TABLE wheel_prizes ADD CONSTRAINT wheel_prizes_weight_positive CHECK (weight > 0)",
 ]

@@ -23,6 +23,14 @@ async def add_message_prize(conn: Conn, guild_id: int, weight: int, text: str):
     )
 
 
+async def add_role_prize(conn: Conn, guild_id: int, weight: int, role_id: int, text: str):
+    return await conn.fetchrow(
+        """INSERT INTO wheel_prizes (guild_id, kind, weight, role_id, text)
+           VALUES ($1, 'role', $2, $3, $4) RETURNING *""",
+        guild_id, weight, role_id, text,
+    )
+
+
 async def remove_prize(conn: Conn, guild_id: int, prize_id: int):
     return await conn.fetchrow(
         "DELETE FROM wheel_prizes WHERE guild_id = $1 AND id = $2 RETURNING *",
