@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import io
+import random
 import re
 import struct
 import zlib
@@ -130,3 +131,16 @@ class Utility(commands.Cog):
         )
         embed.set_image(url="attachment://color.png")
         await ctx.send(file=file, embed=embed)
+
+    @commands.command()
+    async def dice(self, ctx: commands.Context, sides: int = 20):
+        """Roll a dice with the given number of sides (default 20). Example: .dice 6"""
+        if sides < 2:
+            await ctx.send("A dice needs at least 2 sides.")
+            return
+        if sides > 1_000_000:
+            await ctx.send("That dice is too large to roll.")
+            return
+
+        result = random.randint(1, sides)
+        await ctx.send(f"🎲 You rolled a **{result}** (d{sides})")
