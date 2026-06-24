@@ -107,6 +107,29 @@ def _guard(expr: sympy.Basic) -> None:
                 raise CalcError("Factorial argument too large.")
 
 
+def _split_args(expression: str) -> list[str]:
+    """Split on top-level commas, ignoring commas nested inside parentheses.
+
+    Lets ``integrate x^2, 0, 1`` separate into bounds while
+    ``integrate atan2(y, x)`` keeps its inner comma intact.
+    """
+    parts = []
+    depth = 0
+    current = []
+    for ch in expression:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return [p.strip() for p in parts]
+
+
 def _free_symbol(expr: sympy.Basic) -> sympy.Symbol:
     """Pick the variable to operate on for solve/diff/integrate."""
     symbols = sorted(expr.free_symbols, key=lambda s: s.name)
@@ -133,12 +156,85 @@ def _numeric(expr: sympy.Basic) -> str | None:
     return None
 
 
+def _compute_diff(expression: str) -> tuple[str, str]:
+    """Differentiate ``expr``, or ``expr, point`` to evaluate the derivative there."""
+    parts = _split_args(expression)
+    if len(parts) not in (1, 2):
+        raise CalcError("diff takes an expression, or expression, point.")
+
+    raw, expr = _parse(parts[0])
+    raw_latex = sympy.latex(raw)
+    var = _free_symbol(expr)
+    derivative = sympy.diff(expr, var)
+    var_latex = sympy.latex(var)
+
+    if len(parts) == 1:
+        body = rf"\frac{{d}}{{d{var_latex}}}\left({raw_latex}\right) = {sympy.latex(derivative)}"
+        return f"d/d{var} ({expr}) = {derivative}", body
+
+    _, point = _parse(parts[1])
+    try:
+        value = sympy.simplify(derivative.subs(var, point))
+    except Exception:
+        raise CalcError("Could not evaluate the derivative at that point.")
+    point_latex = sympy.latex(point)
+    value_latex = sympy.latex(value)
+    approx = _numeric(value)
+    body = rf"\frac{{d}}{{d{var_latex}}}\left({raw_latex}\right)\Bigg|_{{{var_latex}={point_latex}}} = {value_latex}"
+    plain = f"d/d{var} ({expr}) at {var}={point} = {value}"
+    if approx is not None and approx != str(value):
+        body += rf" \approx {approx}"
+        plain += f" ≈ {approx}"
+    return plain, body
+
+
+def _compute_integrate(expression: str) -> tuple[str, str]:
+    """Indefinite integral of ``expr``, or definite integral over ``expr, lower, upper``."""
+    parts = _split_args(expression)
+    if len(parts) not in (1, 3):
+        raise CalcError("integrate takes an expression, or expression, lower, upper.")
+
+    raw, expr = _parse(parts[0])
+    raw_latex = sympy.latex(raw)
+    var = _free_symbol(expr)
+    var_latex = sympy.latex(var)
+
+    if len(parts) == 1:
+        result = sympy.integrate(expr, var)
+        body = rf"\int {raw_latex}\,d{var_latex} = {sympy.latex(result)} + C"
+        return f"∫ {expr} d{var} = {result} + C", body
+
+    _, lower = _parse(parts[1])
+    _, upper = _parse(parts[2])
+    try:
+        result = sympy.simplify(sympy.integrate(expr, (var, lower, upper)))
+    except Exception:
+        raise CalcError("Could not evaluate that integral.")
+    if result.has(sympy.zoo, sympy.nan):
+        raise CalcError("That integral is undefined over the given bounds.")
+    lower_latex = sympy.latex(lower)
+    upper_latex = sympy.latex(upper)
+    result_latex = sympy.latex(result)
+    approx = _numeric(result)
+    body = rf"\int_{{{lower_latex}}}^{{{upper_latex}}} {raw_latex}\,d{var_latex} = {result_latex}"
+    plain = f"∫[{lower},{upper}] {expr} d{var} = {result}"
+    if approx is not None and approx != str(result):
+        body += rf" \approx {approx}"
+        plain += f" ≈ {approx}"
+    return plain, body
+
+
 def compute(mode: str, expression: str) -> tuple[str, str]:
     """Run a calculation.
 
     Returns ``(plain_text, latex)`` where ``plain_text`` is a copy-pasteable
     summary and ``latex`` is the body to render as an image.
     """
+    if mode == "diff":
+        return _compute_diff(expression)
+    if mode == "integrate":
+        return _compute_integrate(expression)
+
     raw, expr = _parse(expression)
     raw_latex = sympy.latex(raw)
 
@@ -157,18 +253,6 @@ def compute(mode: str, expression: str) -> tuple[str, str]:
         )
         plain = ", ".join(f"{var} = {s}" for s in solutions)
         return plain, body
-
-    if mode == "diff":
-        var = _free_symbol(expr)
-        result = sympy.diff(expr, var)
-        body = rf"\frac{{d}}{{d{sympy.latex(var)}}}\left({raw_latex}\right) = {sympy.latex(result)}"
-        return f"d/d{var} ({expr}) = {result}", body
-
-    if mode == "integrate":
-        var = _free_symbol(expr)
-        result = sympy.integrate(expr, var)
-        body = rf"\int {raw_latex}\,d{sympy.latex(var)} = {sympy.latex(result)} + C"
-        return f"∫ {expr} d{var} = {result} + C", body
 
     if mode == "simplify":
         result = sympy.simplify(expr)

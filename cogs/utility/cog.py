@@ -38,11 +38,12 @@ class Utility(commands.Cog):
         **Numbers** — integers, decimals, scientific (`1.5e3`); fractions stay exact (`1/3`) and a decimal is shown alongside.
 
         **Subcommands** (use a variable like `x`):
-        `solve` solve = 0 · `diff` differentiate · `integrate` integrate · `simplify`
+        `solve` solve = 0 · `diff` differentiate (add `, point` to evaluate there) · `integrate` integrate (add `, lower, upper` for a definite integral) · `simplify`
 
         **Examples**
         `.calc sin(pi/4) + sqrt(2)` · `.calc (10+67/7)^2` · `.calc 5!`
-        `.calc solve x^2 - 4` · `.calc diff sin(x)*x^2` · `.calc integrate x^2`"""
+        `.calc solve x^2 - 4` · `.calc diff sin(x)*x^2` · `.calc diff x^2, 3`
+        `.calc integrate x^2` · `.calc integrate x^2, 0, 1`"""
         await self._run_calc(ctx, "eval", expression)
 
     @calc.command(name="solve", extras={"example": ".calc solve x^2 - 4"})
@@ -50,14 +51,16 @@ class Utility(commands.Cog):
         """Solve an equation for its variable (expr = 0). Example: .calc solve x^2 - 4"""
         await self._run_calc(ctx, "solve", expression)
 
-    @calc.command(name="diff", aliases=["derivative"], extras={"example": ".calc diff sin(x)*x^2"})
+    @calc.command(name="diff", aliases=["derivative"], extras={"example": ".calc diff sin(x)*x^2, 3"})
     async def calc_diff(self, ctx: commands.Context, *, expression: str):
-        """Differentiate an expression. Example: .calc diff sin(x)*x^2"""
+        """Differentiate an expression. Add ", point" to evaluate the derivative there.
+        Examples: .calc diff sin(x)*x^2 · .calc diff x^2, 3"""
         await self._run_calc(ctx, "diff", expression)
 
-    @calc.command(name="integrate", aliases=["integral"], extras={"example": ".calc integrate x^2"})
+    @calc.command(name="integrate", aliases=["integral"], extras={"example": ".calc integrate x^2, 0, 1"})
     async def calc_integrate(self, ctx: commands.Context, *, expression: str):
-        """Integrate an expression (indefinite). Example: .calc integrate x^2"""
+        """Integrate an expression. Add ", lower, upper" for a definite integral.
+        Examples: .calc integrate x^2 · .calc integrate x^2, 0, 1"""
         await self._run_calc(ctx, "integrate", expression)
 
     @calc.command(name="simplify", extras={"example": ".calc simplify (x^2-1)/(x-1)"})
