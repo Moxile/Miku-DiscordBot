@@ -18,6 +18,10 @@ BLACKJACK_SHOE_DECKS = 6  # number of 52-card decks in each guild's shared shoe
 
 HIGHERLOWER_TIMEOUT = 120
 HL_HOUSE_EDGE = 0.92  # fair-odds payout is scaled by this to give the house an advantage
+
+COINFLIP_HOUSE_EDGE = 0.95  # fair (1:1) winnings are scaled by this — a 5% house edge
+RPS_HOUSE_EDGE = 0.95  # fair (1:1) winnings are scaled by this — a 5% house edge
+RPS_TIMEOUT = 60
 # High-low rank ordering — Aces are low.
 _HL_ORDER = {r: i for i, r in enumerate(
     ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
@@ -433,6 +437,93 @@ class RouletteAgainView(discord.ui.View):
             pass
 
 
+# ── Rock Paper Scissors ──
+
+RPS_EMOJI = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
+RPS_BEATS = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
+
+
+class RPSView(discord.ui.View):
+    """Single-shot rock/paper/scissors round. The bet is already deducted; the
+    bot's choice is only made once the player picks theirs."""
+
+    def __init__(self, cog, ctx, bet, *, timeout=RPS_TIMEOUT):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.ctx = ctx
+        self.bet = bet
+        self.player_id = ctx.author.id
+        self.message = None
+        self.resolved = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("This isn't your game!", ephemeral=True)
+            return False
+        return True
+
+    async def _resolve(self, interaction, choice):
+        if self.resolved:
+            await interaction.response.defer()
+            return
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+
+        guild_id, user_id = self.ctx.guild.id, self.player_id
+        cur = self.cog.bot.get_currency(guild_id)
+        bot_choice = ["rock", "paper", "scissors"][secrets.randbelow(3)]
+
+        if choice == bot_choice:
+            net = 0
+            await update_wallet(self.cog.pool, guild_id, user_id, self.bet)
+            title, color = "Push", discord.Color.dark_gray()
+        elif RPS_BEATS[choice] == bot_choice:
+            net = int(self.bet * RPS_HOUSE_EDGE)
+            await update_wallet(self.cog.pool, guild_id, user_id, self.bet + net)
+            title, color = "Win", discord.Color.green()
+        else:
+            net = -self.bet
+            title, color = "Loss", discord.Color.red()
+
+        if net != 0:
+            tx_type = "rps_win" if net > 0 else "rps_loss"
+            await add_transaction(self.cog.pool, guild_id, user_id, net, tx_type)
+
+        sign = "+" if net >= 0 else ""
+        embed = discord.Embed(title=f"Rock Paper Scissors — {title}", color=color)
+        embed.description = (
+            f"You chose {RPS_EMOJI[choice]} **{choice.title()}** — "
+            f"I chose {RPS_EMOJI[bot_choice]} **{bot_choice.title()}**.\n"
+            f"Net: **{sign}{net}**{cur.emoji}"
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+    @discord.ui.button(label="Rock", emoji="🪨", style=discord.ButtonStyle.secondary)
+    async def rock_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._resolve(interaction, "rock")
+
+    @discord.ui.button(label="Paper", emoji="📄", style=discord.ButtonStyle.secondary)
+    async def paper_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._resolve(interaction, "paper")
+
+    @discord.ui.button(label="Scissors", emoji="✂️", style=discord.ButtonStyle.secondary)
+    async def scissors_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._resolve(interaction, "scissors")
+
+    async def on_timeout(self):
+        if self.resolved or self.message is None:
+            return
+        await update_wallet(self.cog.pool, self.ctx.guild.id, self.player_id, self.bet)
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(content="Timed out — bet refunded.", view=self)
+        except discord.HTTPException:
+            pass
+
+
 class Gambling(commands.Cog):
 
     ROULETTE_RED = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
@@ -528,7 +619,7 @@ class Gambling(commands.Cog):
             results.append(result)
 
         if total > 0:
-            total = int(0.85 * total)
+            total = int(COINFLIP_HOUSE_EDGE * total)
         cur = self.bot.get_currency(ctx.guild.id)
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, total)
         await add_transaction(self.pool, ctx.guild.id, ctx.author.id, total, "betflip", f"{tries} tries at {bet_per_try}{cur.emoji} each")
@@ -546,6 +637,31 @@ class Gambling(commands.Cog):
         # custom emoji (e.g. a guild's <:Dor:id> currency) in embed footers or titles.
         embed.description = f"Net: **{sign}{total}**{cur.emoji} · {wins}W/{losses}L"
         await ctx.send(embed=embed, file=file)
+
+    @commands.command(aliases=["rps"])
+    @require_channel("gambling_channel")
+    async def rockpaperscissors(self, ctx, bet: str):
+        """Play rock-paper-scissors against the bot. You can specify an amount or use 'all' to bet everything."""
+        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        try:
+            bet = parse_amount(bet, wallet_balance=wallet["wallet"])
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
+        is_valid, error = await self.check_bet(ctx, bet)
+        if not is_valid:
+            await ctx.send(error)
+            return
+
+        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
+        cur = self.bot.get_currency(ctx.guild.id)
+        view = RPSView(self, ctx, bet)
+        embed = discord.Embed(
+            title="Rock Paper Scissors",
+            description=f"Bet: **{bet}**{cur.emoji}\nPick your move!",
+            color=discord.Color.blue(),
+        )
+        view.message = await ctx.send(embed=embed, view=view)
 
     @staticmethod
     def create_deck(deckcount=0):
