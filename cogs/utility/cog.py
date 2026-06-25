@@ -39,12 +39,13 @@ class Utility(commands.Cog):
         **Numbers** — integers, decimals, scientific (`1.5e3`); fractions stay exact (`1/3`) and a decimal is shown alongside.
 
         **Subcommands** (use a variable like `x`):
-        `solve` solve = 0 · `diff` differentiate (add `, point` to evaluate there) · `integrate` integrate (add `, lower, upper` for a definite integral) · `simplify`
+        `solve` solve = 0 · `diff` differentiate (add `, point` to evaluate there) · `integrate` integrate (add `, lower, upper` for a definite integral) · `simplify` · `latex` render raw LaTeX
 
         **Examples**
         `.calc sin(pi/4) + sqrt(2)` · `.calc (10+67/7)^2` · `.calc 5!`
         `.calc solve x^2 - 4` · `.calc diff sin(x)*x^2` · `.calc diff x^2, 3`
-        `.calc integrate x^2` · `.calc integrate x^2, 0, 1`"""
+        `.calc integrate x^2` · `.calc integrate x^2, 0, 1`
+        `.calc latex \\frac{1}{2} + \\sqrt{x}`"""
         await self._run_calc(ctx, "eval", expression)
 
     @calc.command(name="solve", extras={"example": ".calc solve x^2 - 4"})
@@ -68,6 +69,12 @@ class Utility(commands.Cog):
     async def calc_simplify(self, ctx: commands.Context, *, expression: str):
         """Simplify an expression. Example: .calc simplify (x^2-1)/(x-1)"""
         await self._run_calc(ctx, "simplify", expression)
+
+    @calc.command(name="latex", extras={"example": ".calc latex \\frac{1}{2} + \\sqrt{x}"})
+    async def calc_latex(self, ctx: commands.Context, *, expression: str):
+        """Render raw LaTeX as an image, without evaluating it as math.
+        Example: .calc latex \\frac{1}{2} + \\sqrt{x}"""
+        await self._run_calc(ctx, "latex", expression)
 
     async def _run_calc(self, ctx: commands.Context, mode: str, expression: str):
         async with ctx.typing():

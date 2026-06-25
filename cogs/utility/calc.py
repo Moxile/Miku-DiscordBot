@@ -224,6 +224,14 @@ def _compute_integrate(expression: str) -> tuple[str, str]:
     return plain, body
 
 
+def _compute_latex(expression: str) -> tuple[str, str]:
+    """Render a raw LaTeX body directly, skipping SymPy parsing entirely."""
+    if len(expression) > 1000:
+        raise CalcError("LaTeX input is too long.")
+    body = expression.strip().strip("$")
+    return expression, body
+
+
 def compute(mode: str, expression: str) -> tuple[str, str]:
     """Run a calculation.
 
@@ -234,6 +242,8 @@ def compute(mode: str, expression: str) -> tuple[str, str]:
         return _compute_diff(expression)
     if mode == "integrate":
         return _compute_integrate(expression)
+    if mode == "latex":
+        return _compute_latex(expression)
 
     raw, expr = _parse(expression)
     raw_latex = sympy.latex(raw)
