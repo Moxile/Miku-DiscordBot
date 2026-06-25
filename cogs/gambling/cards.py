@@ -7,6 +7,7 @@ safe fallback to Pillow's built-in default font.
 from __future__ import annotations
 
 import io
+import math
 from functools import lru_cache
 
 from PIL import Image, ImageDraw
@@ -49,29 +50,63 @@ def _suit_kind(suit: str) -> str:
     return "club"
 
 
+@lru_cache(maxsize=1)
+def _heart_outline(n: int = 72):
+    """Unit-scale (longest axis = 1.0) heart silhouette, centered at the origin,
+    screen orientation (lobes up, point down) — from the classic parametric
+    heart curve, used directly for hearts and flipped for spades."""
+    pts = []
+    for i in range(n):
+        t = 2 * math.pi * i / n
+        x = 16 * math.sin(t) ** 3
+        y = -(13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t))
+        pts.append((x, y))
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    cx0, cy0 = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    scale = 1.0 / max(max(xs) - min(xs), max(ys) - min(ys))
+    return tuple(((x - cx0) * scale, (y - cy0) * scale) for x, y in pts)
+
+
 # ── Vector suit drawing (coords in the card's hi-res pixel space) ──
 def _draw_suit(draw: ImageDraw.ImageDraw, suit: str, cx: float, cy: float, s: float, color):
     kind = _suit_kind(suit)
     h = s / 2
     if kind == "heart":
-        draw.ellipse([cx - h, cy - s * 0.30, cx, cy + s * 0.08], fill=color)
-        draw.ellipse([cx, cy - s * 0.30, cx + h, cy + s * 0.08], fill=color)
-        draw.polygon([(cx - h, cy - s * 0.11), (cx + h, cy - s * 0.11), (cx, cy + h)], fill=color)
+        draw.polygon([(cx + nx * s, cy + ny * s) for nx, ny in _heart_outline()], fill=color)
     elif kind == "diamond":
         w = s * 0.34
         draw.polygon([(cx, cy - h), (cx + w, cy), (cx, cy + h), (cx - w, cy)], fill=color)
     elif kind == "spade":
-        # inverted heart + flared stem
-        draw.ellipse([cx - h, cy - s * 0.08, cx, cy + s * 0.30], fill=color)
-        draw.ellipse([cx, cy - s * 0.08, cx + h, cy + s * 0.30], fill=color)
-        draw.polygon([(cx - h, cy + s * 0.11), (cx + h, cy + s * 0.11), (cx, cy - h)], fill=color)
-        draw.polygon([(cx, cy + s * 0.05), (cx + s * 0.18, cy + h), (cx - s * 0.18, cy + h)], fill=color)
-    else:  # club
-        r = s * 0.26
-        draw.ellipse([cx - r, cy - h, cx + r, cy - h + 2 * r], fill=color)
-        draw.ellipse([cx - s * 0.40, cy - s * 0.06, cx - s * 0.40 + 2 * r, cy - s * 0.06 + 2 * r], fill=color)
-        draw.ellipse([cx + s * 0.40 - 2 * r, cy - s * 0.06, cx + s * 0.40, cy - s * 0.06 + 2 * r], fill=color)
-        draw.polygon([(cx, cy), (cx + s * 0.18, cy + h), (cx - s * 0.18, cy + h)], fill=color)
+        # body = heart flipped vertically and stretched taller (point up, lobes down)
+        # for a sharper tip, plus a small flared stem grown from its bottom cleft
+        outline = _heart_outline()
+        sy = 1.2
+        body_max_ny = max(ny for _, ny in outline)
+        draw.polygon([(cx + nx * s, cy - ny * s * sy) for nx, ny in outline], fill=color)
+        body_bottom = cy + body_max_ny * s * sy
+        stem_top = body_bottom - s * 0.03
+        stem_bottom = stem_top + s * 0.14
+        stem_w = s * 0.09
+        draw.polygon(
+            [(cx - stem_w, stem_top), (cx + stem_w, stem_top),
+             (cx + stem_w * 1.8, stem_bottom), (cx - stem_w * 1.8, stem_bottom)],
+            fill=color,
+        )
+    else:  # club — three overlapping lobes fused with a filler triangle, plus a stem
+        r = s * 0.30
+        top = (cx, cy - s * 0.22)
+        left = (cx - s * 0.26, cy + s * 0.12)
+        right = (cx + s * 0.26, cy + s * 0.12)
+        for ctr in (top, left, right):
+            draw.ellipse([ctr[0] - r, ctr[1] - r, ctr[0] + r, ctr[1] + r], fill=color)
+        draw.polygon([top, left, right], fill=color)
+        stem_w = s * 0.08
+        stem_top, stem_bottom = cy + s * 0.08, cy + h
+        draw.polygon(
+            [(cx - stem_w, stem_top), (cx + stem_w, stem_top),
+             (cx + stem_w * 2, stem_bottom), (cx - stem_w * 2, stem_bottom)],
+            fill=color,
+        )
 
 
 def _corner_tile(rank: str, suit: str, color) -> Image.Image:

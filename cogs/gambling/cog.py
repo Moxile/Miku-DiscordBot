@@ -32,12 +32,8 @@ def _hl_rank(card):
     return _HL_ORDER[card[0]]
 
 
-def _card_value(rank):
-    return 10 if rank in ("10", "J", "Q", "K") else rank
-
-
 def _is_pair(hand):
-    return len(hand) == 2 and _card_value(hand[0][0]) == _card_value(hand[1][0])
+    return len(hand) == 2 and hand[0][0] == hand[1][0]
 
 
 def _result_meta(net):
@@ -99,12 +95,14 @@ class BlackjackView(discord.ui.View):
             await interaction.response.defer()
             return
         busted = self.cog.deal_to_current(game)
-        if not busted:
+        hand = game["player_hands"][game["current_hand"]]
+        if not busted and self.cog.calculate_hand_value(hand) < 21:
             await self._show_turn(interaction, "Hit", discord.Color.green())
             return
         phase, net = await self.cog.advance_hand(self.key, game)
         if phase == "continue":
-            await self._show_turn(interaction, "Busted — next hand", discord.Color.orange())
+            title = "Busted — next hand" if busted else "21! — next hand"
+            await self._show_turn(interaction, title, discord.Color.orange())
         else:
             await self._finish(interaction, game, net)
 
