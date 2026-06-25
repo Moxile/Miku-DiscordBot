@@ -39,12 +39,13 @@ class Utility(commands.Cog):
         **Numbers** — integers, decimals, scientific (`1.5e3`); fractions stay exact (`1/3`) and a decimal is shown alongside.
 
         **Subcommands** (use a variable like `x`):
-        `solve` solve = 0 · `diff` differentiate (add `, point` to evaluate there) · `integrate` integrate (add `, lower, upper` for a definite integral) · `simplify` · `latex` render raw LaTeX
+        `solve` solve = 0 · `diff` differentiate (add `, point` to evaluate there) · `integrate` integrate (add `, lower, upper` for a definite integral) · `sum` summation over `, lower, upper` (upper can be `oo`) · `simplify` · `latex` render raw LaTeX
 
         **Examples**
         `.calc sin(pi/4) + sqrt(2)` · `.calc (10+67/7)^2` · `.calc 5!`
         `.calc solve x^2 - 4` · `.calc diff sin(x)*x^2` · `.calc diff x^2, 3`
         `.calc integrate x^2` · `.calc integrate x^2, 0, 1`
+        `.calc sum n^2, 1, 10` · `.calc sum 1/n^2, 1, oo`
         `.calc latex \\frac{1}{2} + \\sqrt{x}`"""
         await self._run_calc(ctx, "eval", expression)
 
@@ -64,6 +65,12 @@ class Utility(commands.Cog):
         """Integrate an expression. Add ", lower, upper" for a definite integral.
         Examples: .calc integrate x^2 · .calc integrate x^2, 0, 1"""
         await self._run_calc(ctx, "integrate", expression)
+
+    @calc.command(name="sum", aliases=["summation"], extras={"example": ".calc sum n^2, 1, 10"})
+    async def calc_sum(self, ctx: commands.Context, *, expression: str):
+        """Evaluate a summation: expression, lower, upper (upper can be "oo" for infinite series).
+        Examples: .calc sum n^2, 1, 10 · .calc sum 1/n^2, 1, oo"""
+        await self._run_calc(ctx, "sum", expression)
 
     @calc.command(name="simplify", extras={"example": ".calc simplify (x^2-1)/(x-1)"})
     async def calc_simplify(self, ctx: commands.Context, *, expression: str):

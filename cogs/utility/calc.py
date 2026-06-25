@@ -91,7 +91,18 @@ def _parse(expression: str) -> tuple[sympy.Expr, sympy.Expr]:
     # computed during parsing. Only once the guard passes do we evaluate.
     raw = _run(evaluate=False)
     _guard(raw)
-    return raw, _run(evaluate=True)
+    return _strip_identity_mul(raw), _run(evaluate=True)
+
+
+def _strip_identity_mul(expr: sympy.Basic) -> sympy.Basic:
+    """Drop the spurious ``1 *`` factor unevaluated parsing leaves on terms
+    like ``1/x**2`` (parsed as ``Mul(1, x**-2)``), which would otherwise
+    print as a stray "1" next to the fraction.
+    """
+    return expr.replace(
+        lambda n: isinstance(n, sympy.Mul) and len(n.args) == 2 and n.args[0] == 1,
+        lambda n: n.args[1],
+    )
 
 
 def _guard(expr: sympy.Basic) -> None:
@@ -224,6 +235,37 @@ def _compute_integrate(expression: str) -> tuple[str, str]:
     return plain, body
 
 
+def _compute_sum(expression: str) -> tuple[str, str]:
+    """Evaluate a summation ``expr, lower, upper`` (``upper`` may be ``oo``)."""
+    parts = _split_args(expression)
+    if len(parts) != 3:
+        raise CalcError("sum takes an expression, lower, upper.")
+
+    raw, expr = _parse(parts[0])
+    raw_latex = sympy.latex(raw)
+    var = _free_symbol(expr)
+    var_latex = sympy.latex(var)
+
+    _, lower = _parse(parts[1])
+    _, upper = _parse(parts[2])
+    try:
+        result = sympy.simplify(sympy.Sum(expr, (var, lower, upper)).doit())
+    except Exception:
+        raise CalcError("Could not evaluate that sum.")
+    if result.has(sympy.zoo, sympy.nan):
+        raise CalcError("That sum is undefined or does not converge over the given bounds.")
+    lower_latex = sympy.latex(lower)
+    upper_latex = sympy.latex(upper)
+    result_latex = sympy.latex(result)
+    approx = _numeric(result)
+    body = rf"\sum_{{{var_latex}={lower_latex}}}^{{{upper_latex}}} {raw_latex} = {result_latex}"
+    plain = f"sum[{var}={lower}..{upper}] {expr} = {result}"
+    if approx is not None and approx != str(result):
+        body += rf" \approx {approx}"
+        plain += f" ≈ {approx}"
+    return plain, body
+
+
 def _compute_latex(expression: str) -> tuple[str, str]:
     """Render a raw LaTeX body directly, skipping SymPy parsing entirely."""
     if len(expression) > 1000:
@@ -242,6 +284,8 @@ def compute(mode: str, expression: str) -> tuple[str, str]:
         return _compute_diff(expression)
     if mode == "integrate":
         return _compute_integrate(expression)
+    if mode == "sum":
+        return _compute_sum(expression)
     if mode == "latex":
         return _compute_latex(expression)
 
