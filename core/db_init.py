@@ -23,6 +23,7 @@ from cogs.counting import schema as counting_schema
 from cogs.lichess import schema as lichess_schema
 from cogs.bot_reactions import schema as bot_reactions_schema
 from cogs.missions import schema as missions_schema
+from cogs.leaderboard import schema as leaderboard_schema
 
 
 # Order matters: economy + market must run before features that reference balances/companies.
@@ -42,6 +43,7 @@ _FEATURE_MODULES = [
     lichess_schema,
     bot_reactions_schema,
     missions_schema,
+    leaderboard_schema,
 ]
 
 

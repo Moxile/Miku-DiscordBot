@@ -3,6 +3,7 @@ import math
 import discord
 from discord.ext import commands
 
+from core.checks import has_permissions_or_owner
 from core.names import format_name
 
 
@@ -94,6 +95,13 @@ class Leaderboard(commands.Cog):
         return self.bot.pool
 
     # ── Queries ──
+
+    async def _excluded_ids(self, guild_id: int) -> set:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id FROM lb_excluded WHERE guild_id = $1", guild_id,
+            )
+        return {r["user_id"] for r in rows}
 
     async def _lb_wallet(self, guild_id: int) -> list:
         async with self.pool.acquire() as conn:
@@ -238,9 +246,53 @@ class Leaderboard(commands.Cog):
                 rows = await self._lb_waifu(guild_id)
                 title = "Harem Value Leaderboard"
 
-        # Only rank players with something to show.
-        rows = [r for r in rows if (r["score"] or 0) > 0]
+        # Drop excluded players, then only rank those with something to show.
+        excluded = await self._excluded_ids(guild_id)
+        rows = [r for r in rows if r["user_id"] not in excluded and (r["score"] or 0) > 0]
 
         view = LeaderboardPaginator(ctx, title, rows, ctx.author.id, start_page=page - 1)
         view.message = await ctx.send(embed=view.build_embed(), view=view)
+
+    @commands.command(extras={"example": ".lbexclude @user"})
+    @has_permissions_or_owner(manage_guild=True)
+    async def lbexclude(self, ctx: commands.Context, member: discord.Member):
+        """Hide a member from all leaderboards. Requires Manage Server."""
+        await self.pool.execute(
+            """INSERT INTO lb_excluded (guild_id, user_id) VALUES ($1, $2)
+               ON CONFLICT DO NOTHING""",
+            ctx.guild.id, member.id,
+        )
+        await ctx.send(f"**{format_name(member, ctx.guild)}** is now hidden from leaderboards.")
+
+    @commands.command(extras={"example": ".lbinclude @user"})
+    @has_permissions_or_owner(manage_guild=True)
+    async def lbinclude(self, ctx: commands.Context, member: discord.Member):
+        """Re-add a previously excluded member to leaderboards. Requires Manage Server."""
+        result = await self.pool.execute(
+            "DELETE FROM lb_excluded WHERE guild_id = $1 AND user_id = $2",
+            ctx.guild.id, member.id,
+        )
+        if result == "DELETE 0":
+            await ctx.send(f"**{format_name(member, ctx.guild)}** wasn't excluded.")
+        else:
+            await ctx.send(f"**{format_name(member, ctx.guild)}** is back on the leaderboards.")
+
+    @commands.command()
+    @has_permissions_or_owner(manage_guild=True)
+    async def lbexcluded(self, ctx: commands.Context):
+        """List members currently hidden from leaderboards. Requires Manage Server."""
+        excluded = await self._excluded_ids(ctx.guild.id)
+        if not excluded:
+            await ctx.send("No one is excluded from the leaderboards.")
+            return
+        names = [
+            format_name(ctx.guild.get_member(uid), ctx.guild, fallback=f"User {uid}")
+            for uid in excluded
+        ]
+        embed = discord.Embed(
+            title="Excluded from leaderboards",
+            description="\n".join(f"• {n}" for n in names),
+            color=discord.Color.from_rgb(255, 215, 0),
+        )
+        await ctx.send(embed=embed)
 
