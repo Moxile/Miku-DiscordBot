@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import multiprocessing
+import os
 import queue as _queue
 import re
 import subprocess
@@ -401,6 +402,20 @@ def _friendly_tectonic_error(stderr: bytes) -> str:
     return "Could not compile that LaTeX. Check your syntax."
 
 
+# tectonic still does a metadata round-trip to its bundle server on every
+# run even with --only-cached, which dominates wall time (~1.7s) once the
+# package cache is warm. Our document template is fixed, so every resource
+# it could ever need is already cached after the first compile -- point it
+# at an unroutable proxy so that check fails immediately instead of
+# round-tripping the network, and skip the env's real proxy if set.
+_NETLESS_ENV = {
+    "PATH": os.environ.get("PATH", ""),
+    "HOME": os.environ.get("HOME", ""),
+    "http_proxy": "http://127.0.0.1:1",
+    "https_proxy": "http://127.0.0.1:1",
+}
+
+
 def render_full_latex(expression: str) -> bytes:
     """Compile arbitrary LaTeX (not just math) to a PNG.
 
@@ -418,10 +433,14 @@ def render_full_latex(expression: str) -> bytes:
         tex_path.write_text(document)
         try:
             proc = subprocess.run(
-                ["tectonic", "-X", "compile", "doc.tex", "--outfmt", "pdf"],
+                [
+                    "tectonic", "-X", "compile", "doc.tex", "--outfmt", "pdf",
+                    "--reruns", "0", "--only-cached",
+                ],
                 cwd=tmp,
                 capture_output=True,
                 timeout=_TECTONIC_TIMEOUT,
+                env=_NETLESS_ENV,
             )
         except FileNotFoundError:
             raise CalcError("LaTeX rendering is unavailable on this server.")
@@ -435,7 +454,7 @@ def render_full_latex(expression: str) -> bytes:
             raise CalcError("Could not render that LaTeX.")
         doc = fitz.open(pdf_path)
         try:
-            pix = doc[0].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=False)
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(6, 6), alpha=False)
             return pix.tobytes("png")
         finally:
             doc.close()
