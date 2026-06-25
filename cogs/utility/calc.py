@@ -3,14 +3,24 @@
 Parsing is locked down: expressions are evaluated against an explicit
 whitelist of SymPy functions/constants (``global_dict``), unknown names
 become free symbols, and there is no access to builtins or attributes.
-Rendering uses matplotlib's mathtext so no LaTeX install is required.
+
+Math-mode results (eval/solve/diff/...) render through matplotlib's
+mathtext, which needs no LaTeX install. The ``latex`` mode renders
+arbitrary LaTeX documents (text, lists, tables, etc., not just math) by
+shelling out to the ``tectonic`` engine and rasterizing the resulting PDF
+with PyMuPDF — this requires the ``tectonic`` binary to be on PATH.
 """
 from __future__ import annotations
 
 import io
 import multiprocessing
 import queue as _queue
+import re
+import subprocess
+import tempfile
+from pathlib import Path
 
+import fitz  # PyMuPDF, for rasterizing tectonic's PDF output
 import matplotlib
 
 matplotlib.use("Agg")  # headless, no display required
@@ -266,19 +276,14 @@ def _compute_sum(expression: str) -> tuple[str, str]:
     return plain, body
 
 
-def _compute_latex(expression: str) -> tuple[str, str]:
-    """Render a raw LaTeX body directly, skipping SymPy parsing entirely."""
-    if len(expression) > 1000:
-        raise CalcError("LaTeX input is too long.")
-    body = expression.strip().strip("$")
-    return expression, body
-
-
 def compute(mode: str, expression: str) -> tuple[str, str]:
     """Run a calculation.
 
     Returns ``(plain_text, latex)`` where ``plain_text`` is a copy-pasteable
     summary and ``latex`` is the body to render as an image.
+
+    Not used for ``mode == "latex"`` — that path renders a full LaTeX
+    document via ``render_full_latex`` instead, see ``_job_worker``.
     """
     if mode == "diff":
         return _compute_diff(expression)
@@ -286,8 +291,6 @@ def compute(mode: str, expression: str) -> tuple[str, str]:
         return _compute_integrate(expression)
     if mode == "sum":
         return _compute_sum(expression)
-    if mode == "latex":
-        return _compute_latex(expression)
 
     raw, expr = _parse(expression)
     raw_latex = sympy.latex(raw)
@@ -362,6 +365,82 @@ def render_latex(body: str) -> io.BytesIO:
     return buf
 
 
+_LATEX_MAX_LEN = 4000
+
+# Best-effort denylist for arbitrary LaTeX. tectonic has no shell-escape
+# support at all, so \write18 can't run commands, but \input/\openin etc.
+# can still read files from disk -- block the commands that read/write
+# files or duck typeset-time inspection tricks. Not bulletproof (catcode
+# games can rebuild a banned token), but raises the bar a lot for a bot
+# used among trusted users.
+_LATEX_FORBIDDEN_RE = re.compile(
+    r"\\(input|include|includegraphics|openin|openout|write\d*|read|catcode|csname|directlua|immediate)\b"
+)
+
+_LATEX_DOCUMENT = r"""\documentclass[border=4pt,varwidth=16cm]{standalone}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage[dvipsnames]{xcolor}
+\pagecolor[HTML]{313338}
+\color{white}
+\begin{document}
+%s
+\end{document}
+"""
+
+_TECTONIC_TIMEOUT = 12  # seconds; kept under the cog's outer per-job timeout
+
+
+def _friendly_tectonic_error(stderr: bytes) -> str:
+    text = stderr.decode("utf-8", "replace") if stderr else ""
+    errors = [line.strip() for line in text.splitlines() if line.strip().startswith("error:")]
+    if errors:
+        detail = errors[0]
+        if len(detail) > 200:
+            detail = detail[:200] + "…"
+        return f"Could not compile that LaTeX: {detail}"
+    return "Could not compile that LaTeX. Check your syntax."
+
+
+def render_full_latex(expression: str) -> bytes:
+    """Compile arbitrary LaTeX (not just math) to a PNG.
+
+    Wraps ``expression`` in a standalone document, compiles it with
+    tectonic, and rasterizes the resulting PDF with PyMuPDF.
+    """
+    if len(expression) > _LATEX_MAX_LEN:
+        raise CalcError("LaTeX input is too long.")
+    if _LATEX_FORBIDDEN_RE.search(expression):
+        raise CalcError("That LaTeX command is not allowed.")
+
+    document = _LATEX_DOCUMENT % expression
+    with tempfile.TemporaryDirectory() as tmp:
+        tex_path = Path(tmp) / "doc.tex"
+        tex_path.write_text(document)
+        try:
+            proc = subprocess.run(
+                ["tectonic", "-X", "compile", "doc.tex", "--outfmt", "pdf"],
+                cwd=tmp,
+                capture_output=True,
+                timeout=_TECTONIC_TIMEOUT,
+            )
+        except FileNotFoundError:
+            raise CalcError("LaTeX rendering is unavailable on this server.")
+        except subprocess.TimeoutExpired:
+            raise CalcError("That LaTeX document took too long to compile.")
+        if proc.returncode != 0:
+            raise CalcError(_friendly_tectonic_error(proc.stderr))
+
+        pdf_path = Path(tmp) / "doc.pdf"
+        if not pdf_path.exists():
+            raise CalcError("Could not render that LaTeX.")
+        doc = fitz.open(pdf_path)
+        try:
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=False)
+            return pix.tobytes("png")
+        finally:
+            doc.close()
+
+
 # ── Process isolation ──
 # SymPy/matplotlib work is CPU-bound pure Python that holds the GIL, so running
 # it in a thread would still freeze the bot's event loop and couldn't be killed.
@@ -394,8 +473,12 @@ _MP_CTX = _pick_context()
 def _job_worker(mode: str, expression: str, out) -> None:
     """Child-process entry point: compute + render, push result to the queue."""
     try:
-        plain, body = compute(mode, expression)
-        png = render_latex(body).getvalue()
+        if mode == "latex":
+            plain = expression.strip()
+            png = render_full_latex(expression)
+        else:
+            plain, body = compute(mode, expression)
+            png = render_latex(body).getvalue()
         out.put(("ok", plain, png))
     except CalcError as exc:
         out.put(("error", str(exc)))

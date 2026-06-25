@@ -5,3 +5,4 @@ aiohttp>=3.9
 Pillow>=10.1
 sympy>=1.13
 matplotlib>=3.8
+PyMuPDF>=1.24

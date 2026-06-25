@@ -12,6 +12,7 @@ from discord.ext import commands
 from . import calc
 
 _CALC_TIMEOUT = 10  # seconds; symbolic work can be slow, so cap it
+_LATEX_TIMEOUT = 15  # seconds; compiling a full LaTeX doc is slower than mathtext
 
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
@@ -39,14 +40,14 @@ class Utility(commands.Cog):
         **Numbers** — integers, decimals, scientific (`1.5e3`); fractions stay exact (`1/3`) and a decimal is shown alongside.
 
         **Subcommands** (use a variable like `x`):
-        `solve` solve = 0 · `diff` differentiate (add `, point` to evaluate there) · `integrate` integrate (add `, lower, upper` for a definite integral) · `sum` summation over `, lower, upper` (upper can be `oo`) · `simplify` · `latex` render raw LaTeX
+        `solve` solve = 0 · `diff` differentiate (add `, point` to evaluate there) · `integrate` integrate (add `, lower, upper` for a definite integral) · `sum` summation over `, lower, upper` (upper can be `oo`) · `simplify` · `latex` compile arbitrary LaTeX (text, lists, tables — not just math)
 
         **Examples**
         `.calc sin(pi/4) + sqrt(2)` · `.calc (10+67/7)^2` · `.calc 5!`
         `.calc solve x^2 - 4` · `.calc diff sin(x)*x^2` · `.calc diff x^2, 3`
         `.calc integrate x^2` · `.calc integrate x^2, 0, 1`
         `.calc sum n^2, 1, 10` · `.calc sum 1/n^2, 1, oo`
-        `.calc latex \\frac{1}{2} + \\sqrt{x}`"""
+        `.calc latex \\textbf{Hello} $\\int_0^1 x^2\\,dx$`"""
         await self._run_calc(ctx, "eval", expression)
 
     @calc.command(name="solve", extras={"example": ".calc solve x^2 - 4"})
@@ -77,19 +78,21 @@ class Utility(commands.Cog):
         """Simplify an expression. Example: .calc simplify (x^2-1)/(x-1)"""
         await self._run_calc(ctx, "simplify", expression)
 
-    @calc.command(name="latex", extras={"example": ".calc latex \\frac{1}{2} + \\sqrt{x}"})
+    @calc.command(name="latex", extras={"example": ".calc latex \\textbf{Hello} $\\int_0^1 x^2\\,dx$"})
     async def calc_latex(self, ctx: commands.Context, *, expression: str):
-        """Render raw LaTeX as an image, without evaluating it as math.
-        Example: .calc latex \\frac{1}{2} + \\sqrt{x}"""
+        """Compile arbitrary LaTeX to an image — not just math. Supports text
+        formatting, lists, tables, amsmath/amssymb, etc., not just SymPy expressions.
+        Example: .calc latex \\textbf{Hello} $\\int_0^1 x^2\\,dx$"""
         await self._run_calc(ctx, "latex", expression)
 
     async def _run_calc(self, ctx: commands.Context, mode: str, expression: str):
+        timeout = _LATEX_TIMEOUT if mode == "latex" else _CALC_TIMEOUT
         async with ctx.typing():
             try:
                 # run_job offloads the CPU-bound work to a killable child
                 # process, so a runaway expression can't freeze the bot.
                 plain, png = await asyncio.to_thread(
-                    calc.run_job, mode, expression, _CALC_TIMEOUT
+                    calc.run_job, mode, expression, timeout
                 )
             except calc.CalcError as exc:
                 await ctx.send(str(exc))
