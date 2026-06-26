@@ -207,23 +207,25 @@ class PlayAgainView(discord.ui.View):
         await update_wallet(self.cog.pool, guild_id, self.player_id, -self.bet)
         game = self.cog.new_blackjack_game(self.key, guild_id, self.bet)
 
+        # Retire the old message's button and post the new game as a fresh embed.
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
         if self.cog.calculate_hand_value(game["player_hands"][0]) == 21:
             game["state"] = "dealer_turn"
             net = await self.cog.settle(self.key, game)
             title, color = _result_meta(net)
             file, embed = await self.cog.build_state(game, title=title, color=color, hide_dealer=False, result=net)
             new_view = PlayAgainView(self.cog, self.key, self.bet)
-            await interaction.response.edit_message(attachments=[file], embed=embed, view=new_view)
-            new_view.message = self.message
-            self.stop()
+            new_view.message = await interaction.followup.send(embed=embed, file=file, view=new_view)
             return
 
         new_view = BlackjackView(self.cog, self.key)
         await new_view._sync_buttons(game)
         file, embed = await self.cog.build_state(game, title="Game Started", color=discord.Color.blue(), hide_dealer=True)
-        await interaction.response.edit_message(attachments=[file], embed=embed, view=new_view)
-        new_view.message = self.message
-        self.stop()
+        new_view.message = await interaction.followup.send(embed=embed, file=file, view=new_view)
 
     async def on_timeout(self):
         if self.message is None:
@@ -342,14 +344,18 @@ class HLPlayAgainView(discord.ui.View):
         await update_wallet(self.cog.pool, guild_id, self.player_id, -self.bet)
         game = self.cog.new_higherlower_game(self.key, guild_id, self.bet)
 
+        # Retire the old message's button and post the new game as a fresh embed.
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
         new_view = HighLowView(self.cog, self.key)
         new_view.configure(game["odds"])
         file, embed = await self.cog.build_hl_state(
             game, title="Higher, Lower or Equal?", color=discord.Color.blue(), reveal=False
         )
-        await interaction.response.edit_message(attachments=[file], embed=embed, view=new_view)
-        new_view.message = self.message
-        self.stop()
+        new_view.message = await interaction.followup.send(embed=embed, file=file, view=new_view)
 
     async def on_timeout(self):
         if self.message is None:
