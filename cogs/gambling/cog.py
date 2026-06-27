@@ -752,7 +752,9 @@ class Gambling(commands.Cog):
         await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -bet)
         game = self.new_blackjack_game(key, ctx.guild.id, bet)
 
-        if self.calculate_hand_value(game["player_hands"][0]) == 21:
+        player_blackjack = self.calculate_hand_value(game["player_hands"][0]) == 21
+        dealer_blackjack = self.calculate_hand_value(game["dealer_cards"]) == 21
+        if player_blackjack or dealer_blackjack:
             game["state"] = "dealer_turn"
             net = await self.settle(key, game)
             title, color = _result_meta(net)
