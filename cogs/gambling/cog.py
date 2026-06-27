@@ -1327,6 +1327,7 @@ class Gambling(commands.Cog):
         chance_hit = 1 / 6
 
         alive = players.copy()
+        secrets.SystemRandom().shuffle(alive)
         round_num = 0
         while len(alive) > 1:
             round_num += 1
