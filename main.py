@@ -26,6 +26,7 @@ EXTENSIONS = [
     "cogs.reminders",
     "cogs.waifu",
     "cogs.leaderboard",
+    "cogs.profile",
     "cogs.acro",
     "cogs.gte",
     "cogs.utility",
