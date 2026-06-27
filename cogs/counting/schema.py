@@ -1,9 +1,10 @@
 SCHEMA = """
     CREATE TABLE IF NOT EXISTS counting (
-        guild_id   BIGINT PRIMARY KEY,
-        channel_id BIGINT NOT NULL,
-        count      INTEGER DEFAULT 0,
-        last_user  BIGINT  DEFAULT NULL
+        guild_id        BIGINT PRIMARY KEY,
+        channel_id      BIGINT NOT NULL,
+        count           INTEGER DEFAULT 0,
+        last_user       BIGINT  DEFAULT NULL,
+        last_message_id BIGINT  DEFAULT NULL
     );
 
     CREATE TABLE IF NOT EXISTS counting_fails (
@@ -19,3 +20,7 @@ SCHEMA = """
         threshold INTEGER NOT NULL
     );
 """
+
+MIGRATIONS = [
+    "ALTER TABLE counting ADD COLUMN IF NOT EXISTS last_message_id BIGINT DEFAULT NULL;",
+]

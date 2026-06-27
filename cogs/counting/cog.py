@@ -166,7 +166,7 @@ class Counting(commands.Cog):
         if guild_id in self._cache:
             return self._cache[guild_id]
         row = await self.pool.fetchrow(
-            "SELECT channel_id, count, last_user FROM counting WHERE guild_id = $1",
+            "SELECT channel_id, count, last_user, last_message_id FROM counting WHERE guild_id = $1",
             guild_id,
         )
         if row is None:
@@ -177,21 +177,23 @@ class Counting(commands.Cog):
 
     async def _reset(self, guild_id: int):
         await self.pool.execute(
-            "UPDATE counting SET count = 0, last_user = NULL WHERE guild_id = $1",
+            "UPDATE counting SET count = 0, last_user = NULL, last_message_id = NULL WHERE guild_id = $1",
             guild_id,
         )
         if guild_id in self._cache:
             self._cache[guild_id]["count"] = 0
             self._cache[guild_id]["last_user"] = None
+            self._cache[guild_id]["last_message_id"] = None
 
-    async def _advance(self, guild_id: int, user_id: int, new_count: int):
+    async def _advance(self, guild_id: int, user_id: int, new_count: int, message_id: int):
         await self.pool.execute(
-            "UPDATE counting SET count = $2, last_user = $3 WHERE guild_id = $1",
-            guild_id, new_count, user_id,
+            "UPDATE counting SET count = $2, last_user = $3, last_message_id = $4 WHERE guild_id = $1",
+            guild_id, new_count, user_id, message_id,
         )
         if guild_id in self._cache:
             self._cache[guild_id]["count"] = new_count
             self._cache[guild_id]["last_user"] = user_id
+            self._cache[guild_id]["last_message_id"] = message_id
 
     async def _record_fail(self, guild_id: int, user_id: int) -> int:
         row = await self.pool.fetchrow(
@@ -359,7 +361,7 @@ class Counting(commands.Cog):
             )
             return
 
-        await self._advance(guild_id, user_id, value)
+        await self._advance(guild_id, user_id, value, message.id)
         await message.add_reaction("✅")
         if not await user_is_locked(self.pool, guild_id, user_id):
             reward = _reward(value)
@@ -371,3 +373,24 @@ class Counting(commands.Cog):
                 )
         if value in _MILESTONES:
             await message.channel.send(_MILESTONES[value])
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        if payload.guild_id is None:
+            return
+
+        state = await self._get_state(payload.guild_id)
+        if state is None or payload.channel_id != state["channel_id"]:
+            return
+        if payload.message_id != state["last_message_id"]:
+            return
+
+        guild = self.bot.get_guild(payload.guild_id)
+        member = guild.get_member(state["last_user"]) if guild else None
+        name = format_name(member, guild, fallback=f"User {state['last_user']}") if guild else f"User {state['last_user']}"
+        channel = guild.get_channel(payload.channel_id) if guild else None
+        if channel is not None:
+            await channel.send(
+                f"⚠️ **{name}** deleted their correct count of **{state['count']}** — "
+                f"the count is still **{state['count']}**, the next number is **{state['count'] + 1}**."
+            )
