@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Optional
+
 import discord
 from discord.ext import commands
 
 from core.names import format_name
+from core.time_utils import parse_duration, humanize_duration
 from cogs.market.chart import render_price_chart
 
 from . import db as profile_db
+
+# Friendlier labels for the common shorthands; anything else falls back to a humanized duration.
+PERIOD_LABELS = {"1d": "Past 24 hours", "7d": "Past 7 days", "30d": "Past 30 days", "90d": "Past 90 days"}
 
 
 class Profile(commands.Cog):
@@ -17,14 +24,33 @@ class Profile(commands.Cog):
     def pool(self):
         return self.bot.pool
 
-    @commands.command(name="profileinfo", aliases=["pinfo", "pi"], extras={"example": ".profileinfo @user"})
-    async def profileinfo(self, ctx: commands.Context, member: discord.Member = None):
+    @commands.command(name="profileinfo", aliases=["pinfo", "pi"], extras={"example": ".profileinfo @user 30d"})
+    async def profileinfo(self, ctx: commands.Context, member: Optional[discord.Member] = None, period: str = None):
         """Show a player's economic profile: balances, gambling stats, holdings, and a
         wallet+bank history graph.
-        Usage: .profileinfo [@user]"""
+
+        `period` widens (or narrows) the graph's time window, e.g. `7d`, `30d`, `90d`, `all`.
+        Without it, the graph shows the last 60 balance-changing transactions.
+        Usage: .profileinfo [@user] [period]"""
         member = member or ctx.author
         guild_id, user_id = ctx.guild.id, member.id
         cur = self.bot.get_currency(guild_id)
+
+        since = None
+        history_limit = profile_db.NET_WORTH_HISTORY_LIMIT
+        period_label = "Recent activity"
+        if period is not None:
+            history_limit = profile_db.NET_WORTH_HISTORY_LIMIT_WINDOWED
+            if period.lower() in ("all", "max"):
+                period_label = "All time"
+            else:
+                delta = parse_duration(period.lower())
+                if delta is None:
+                    await ctx.send(f"Invalid period `{period}`. Try something like `7d`, `30d`, `90d`, or `all`.")
+                    return
+                since = datetime.now(timezone.utc) - delta
+                period_label = PERIOD_LABELS.get(period.lower(),
+                                                  f"Past {humanize_duration(int(delta.total_seconds()))}")
 
         async with self.pool.acquire() as conn:
             wallet, bank = await profile_db.get_balance(conn, guild_id, user_id)
@@ -32,7 +58,9 @@ class Profile(commands.Cog):
             portfolio_value, holding_count = await profile_db.get_portfolio_value(conn, guild_id, user_id)
             inventory = await profile_db.get_inventory_totals(conn, guild_id, user_id)
             harem = await profile_db.get_harem_value(conn, guild_id, user_id)
-            points = await profile_db.get_net_worth_points(conn, guild_id, user_id, wallet, bank)
+            points = await profile_db.get_net_worth_points(
+                conn, guild_id, user_id, wallet, bank, since=since, limit=history_limit,
+            )
 
         net_worth = wallet + bank + portfolio_value + harem["total"]
         name = format_name(member, ctx.guild)
@@ -64,7 +92,7 @@ class Profile(commands.Cog):
                    f"Harem: {harem['count']} waifus ({harem['total']:,}{cur.emoji})"),
             inline=True,
         )
-        buf = render_price_chart(f"{name}'s Wallet + Bank", points, period_label="Recent activity")
+        buf = render_price_chart(f"{name}'s Wallet + Bank", points, period_label=period_label)
         file = discord.File(buf, filename="profile.png")
         embed.set_image(url="attachment://profile.png")
 

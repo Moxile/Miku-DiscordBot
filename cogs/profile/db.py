@@ -19,6 +19,7 @@ GAMBLING_TX_TYPES = [
 NET_WORTH_EXCLUDED_TX_TYPES = ("deposit", "withdraw")
 
 NET_WORTH_HISTORY_LIMIT = 60
+NET_WORTH_HISTORY_LIMIT_WINDOWED = 250
 
 
 async def get_balance(conn: Conn, guild_id: int, user_id: int) -> tuple[int, int]:
@@ -42,18 +43,30 @@ async def get_gambling_totals(conn: Conn, guild_id: int, user_id: int):
 
 
 async def get_net_worth_points(conn: Conn, guild_id: int, user_id: int, wallet: int, bank: int,
-                                limit: int = NET_WORTH_HISTORY_LIMIT) -> list:
-    """Reconstruct (timestamp, wallet+bank) points from the transaction log, most recent `limit` entries.
+                                since: datetime = None, limit: int = NET_WORTH_HISTORY_LIMIT) -> list:
+    """Reconstruct (timestamp, wallet+bank) points from the transaction log.
 
-    Anchored to the current wallet+bank so the last point always matches the live balance.
+    Takes the most recent `limit` entries on/after `since` (or the most recent `limit` overall
+    if `since` is None). Anchored to the current wallet+bank so the last point always matches
+    the live balance — see NET_WORTH_EXCLUDED_TX_TYPES for why deposit/withdraw are skipped.
     """
-    rows = await conn.fetch(
-        """SELECT amount, created_at FROM transactions
-           WHERE guild_id = $1 AND user_id = $2 AND tx_type NOT IN ('deposit', 'withdraw')
-           ORDER BY created_at DESC, id DESC
-           LIMIT $3""",
-        guild_id, user_id, limit,
-    )
+    if since is not None:
+        rows = await conn.fetch(
+            """SELECT amount, created_at FROM transactions
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type NOT IN ('deposit', 'withdraw')
+                 AND created_at >= $4
+               ORDER BY created_at DESC, id DESC
+               LIMIT $3""",
+            guild_id, user_id, limit, since,
+        )
+    else:
+        rows = await conn.fetch(
+            """SELECT amount, created_at FROM transactions
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type NOT IN ('deposit', 'withdraw')
+               ORDER BY created_at DESC, id DESC
+               LIMIT $3""",
+            guild_id, user_id, limit,
+        )
     if not rows:
         return [(datetime.now(timezone.utc), wallet + bank)]
 
