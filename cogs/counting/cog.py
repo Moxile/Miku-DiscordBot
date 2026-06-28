@@ -234,7 +234,7 @@ class Counting(commands.Cog):
         channel = ctx.guild.get_channel(state["channel_id"])
         await ctx.send(
             f"Counting channel: {channel.mention if channel else 'unknown'} — "
-            f"current count: **{state['count']}**"
+            f"current count: **{state['count']}** (next number to send: **{state['count'] + 1}**)"
         )
 
     @counting.command(name="bind")

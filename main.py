@@ -28,6 +28,7 @@ EXTENSIONS = [
     "cogs.leaderboard",
     "cogs.profile",
     "cogs.acro",
+    "cogs.typecontest",
     "cogs.gte",
     "cogs.utility",
     "cogs.reaction_roles",
