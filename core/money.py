@@ -17,7 +17,7 @@ def parse_amount(value: str, wallet_balance: int | None = None) -> int:
       - Plain integers: "100"
       - k/m/b suffixes (case-insensitive, decimals allowed): "5k", "2.5m", "1b"
       - Thousands separators: "1_000", "1,000"
-      - "all" (case-insensitive), if wallet_balance is provided
+      - "all" or "half" (case-insensitive), if wallet_balance is provided
 
     Returns an int. Raises AmountError if the input can't be parsed or is
     non-positive.
@@ -32,6 +32,11 @@ def parse_amount(value: str, wallet_balance: int | None = None) -> int:
         if wallet_balance is None:
             raise AmountError("'all' is not allowed here.")
         return int(wallet_balance)
+
+    if s == "half":
+        if wallet_balance is None:
+            raise AmountError("'half' is not allowed here.")
+        return max(1, int(wallet_balance // 2))
 
     s = s.replace("_", "").replace(",", "")
 

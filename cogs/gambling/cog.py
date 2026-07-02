@@ -645,7 +645,7 @@ class Gambling(commands.Cog):
     @commands.command(aliases=["rps"])
     @require_channel("gambling_channel")
     async def rockpaperscissors(self, ctx, bet: str):
-        """Play rock-paper-scissors against the bot. You can specify an amount or use 'all' to bet everything."""
+        """Play rock-paper-scissors against the bot. You can specify an amount or use 'all' to bet everything or 'half' to bet half."""
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         try:
             bet = parse_amount(bet, wallet_balance=wallet["wallet"])
@@ -732,7 +732,7 @@ class Gambling(commands.Cog):
     @commands.command(aliases=["bj"])
     @require_channel("gambling_channel")
     async def blackjack(self, ctx, bet: str):
-        """Start a game of blackjack by placing a bet, then play with the Hit / Stand / Double / Split buttons. You can specify an amount or use 'all' to bet everything. Card values: 2-10 are face value, J/Q/K count as 10, Ace counts as 1 or 11."""
+        """Start a game of blackjack by placing a bet, then play with the Hit / Stand / Double / Split buttons. You can specify an amount or use 'all' to bet everything or 'half' to bet half. Card values: 2-10 are face value, J/Q/K count as 10, Ace counts as 1 or 11."""
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         try:
             bet = parse_amount(bet, wallet_balance=wallet["wallet"])
@@ -1013,7 +1013,7 @@ class Gambling(commands.Cog):
     @commands.command(aliases=["hl", "highlow"])
     @require_channel("gambling_channel")
     async def higherlower(self, ctx, bet: str):
-        """Play higher-lower: a card is drawn, then bet whether the next card will be Higher, Lower or Equal. Rarer outcomes pay bigger multipliers (shown on the buttons). You can specify an amount or use 'all' to bet everything."""
+        """Play higher-lower: a card is drawn, then bet whether the next card will be Higher, Lower or Equal. Rarer outcomes pay bigger multipliers (shown on the buttons). You can specify an amount or use 'all' to bet everything or 'half' to bet half."""
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         try:
             bet = parse_amount(bet, wallet_balance=wallet["wallet"])
@@ -1256,7 +1256,7 @@ class Gambling(commands.Cog):
 
     @commands.command(aliases=["rr"])
     async def russian_roulette(self, ctx, bet: str):
-        """Play Russian Roulette with other players. You can specify an amount or use 'all' to bet everything. Everyone must match the same bet to join."""
+        """Play Russian Roulette with other players. You can specify an amount or use 'all' to bet everything or 'half' to bet half. Everyone must match the same bet to join."""
         cur = self.bot.get_currency(ctx.guild.id)
         wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
         try:
