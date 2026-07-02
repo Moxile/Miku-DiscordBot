@@ -10,9 +10,10 @@ POSITION_SET_FILE = Path(__file__).parent / "basic1k.wr"
 
 
 class WolfPosition:
-    def __init__(self, pgn, eval_bounds):
+    def __init__(self, pgn, eval_bounds, eval_str):
         self.pgn = pgn
         self._eval_bounds = eval_bounds
+        self.eval_str = eval_str
 
 
 class WolfPositionSet:
@@ -72,7 +73,7 @@ def load_position_set(path):
                     ev = 1000.0
                 else:
                     ev = float(evaluation)
-                position = WolfPosition(pgn=pgn, eval_bounds=(ev, ev))
+                position = WolfPosition(pgn=pgn, eval_bounds=(ev, ev), eval_str=evaluation)
                 positions.append(position)
             except ValueError as e:
                 print(f'Error while parsing position set:\n{e}')
@@ -95,16 +96,22 @@ class WolfRandom(commands.Cog):
             self._position_set = load_position_set(str(POSITION_SET_FILE))
 
     @commands.command(aliases=['wr'])
-    async def wolfrandom(self, ctx, eval_bounds: str = None):
-        """Pick a random position from the loaded set. Optional eval_bounds: [low]:high (e.g. 0.5:2.0) to filter by engine evaluation."""
+    async def wolfrandom(self, ctx, *args):
+        """Pick a random position. Optional: -eval to show eval, [low]:high to filter by engine evaluation."""
         if self._position_set is None or self._position_set.len() == 0:
-            await ctx.send("No positions loaded. Please populate `positions.wr`.")
+            await ctx.send("No positions loaded.")
             return
 
+        show_eval = '-eval' in args
+        remaining = [a for a in args if a != '-eval']
+        eval_bounds_str = remaining[0] if remaining else None
+
         position_set = self._position_set
-        if eval_bounds is not None:
+        if eval_bounds_str is None:
+            position_set = self._position_set.filter(eval_bounds=[None, 9.0])
+        if eval_bounds_str is not None:
             try:
-                low_str, high_str = eval_bounds.split(':')
+                low_str, high_str = eval_bounds_str.split(':')
                 bounds = [None, None]
                 bounds[1] = float(high_str)
                 if bounds[1] < 0:
@@ -125,7 +132,7 @@ class WolfRandom(commands.Cog):
             return
 
         position = secrets.choice(position_set.positions)
-        await ctx.send(
-            f"**{position_set.name()}** — {position_set.len()} position(s) available.\n"
-            f"The following moves have been decided:\n```\n{position.pgn}\n```"
-        )
+        content = f"```\n{position.pgn}\n```"
+        if show_eval:
+            content += f"Eval: `{position.eval_str}`"
+        await ctx.send(content)
