@@ -117,6 +117,46 @@ class Management(commands.Cog):
         self.bot._owner_role_cache.pop(guild_id, None)
 
     @commands.command()
+    @has_permissions_or_owner(manage_guild=True)
+    async def ignorechannel(self, ctx: commands.Context, channel: discord.TextChannel = None):
+        """Ignore a channel: non-admins can no longer run commands there. Defaults to current channel."""
+        channel = channel or ctx.channel
+        await self.bot.pool.execute(
+            "INSERT INTO ignored_channels (guild_id, channel_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            ctx.guild.id, channel.id,
+        )
+        self.bot._ignored_channels_cache.pop(ctx.guild.id, None)
+        await ctx.send(f"{channel.mention} is now ignored — non-admins cannot run commands there.")
+
+    @commands.command()
+    @has_permissions_or_owner(manage_guild=True)
+    async def unignorechannel(self, ctx: commands.Context, channel: discord.TextChannel = None):
+        """Un-ignore a channel so commands work there again. Defaults to current channel."""
+        channel = channel or ctx.channel
+        result = await self.bot.pool.execute(
+            "DELETE FROM ignored_channels WHERE guild_id = $1 AND channel_id = $2",
+            ctx.guild.id, channel.id,
+        )
+        self.bot._ignored_channels_cache.pop(ctx.guild.id, None)
+        if result == "DELETE 0":
+            await ctx.send(f"{channel.mention} is not currently ignored.")
+        else:
+            await ctx.send(f"{channel.mention} is no longer ignored.")
+
+    @commands.command()
+    @has_permissions_or_owner(manage_guild=True)
+    async def ignoredchannels(self, ctx: commands.Context):
+        """List all channels where non-admins cannot run commands."""
+        rows = await self.bot.pool.fetch(
+            "SELECT channel_id FROM ignored_channels WHERE guild_id = $1", ctx.guild.id
+        )
+        if not rows:
+            await ctx.send("No channels are currently ignored.")
+            return
+        mentions = [f"<#{row['channel_id']}>" for row in rows]
+        await ctx.send("Ignored channels: " + ", ".join(mentions))
+
+    @commands.command()
     @commands.is_owner()
     async def setcurrency(self, ctx: commands.Context, emoji: str = None, *, name: str = None):
         """Owner: set this server's currency emoji and name (e.g. `.setcurrency 🪙 Coins`)."""

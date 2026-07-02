@@ -55,6 +55,7 @@ class MikuBot(commands.Bot):
         self._disabled_cogs_cache: dict[int, set[str]] = {}
         self._owner_role_cache: dict[int, int | None] = {}
         self._currency_cache: dict[int, Currency] = {}
+        self._ignored_channels_cache: dict[int, set[int]] = {}
 
     def get_currency(self, guild_id: int | None) -> Currency:
         """Return the configured currency for a guild, or the default if unset."""
@@ -107,11 +108,22 @@ class MikuBot(commands.Bot):
         owner_role_id = await self._get_owner_role(guild.id)
         return owner_role_id is not None and any(r.id == owner_role_id for r in roles)
 
+    async def _is_channel_ignored(self, guild_id: int, channel_id: int) -> bool:
+        if guild_id not in self._ignored_channels_cache:
+            rows = await self.pool.fetch(
+                "SELECT channel_id FROM ignored_channels WHERE guild_id = $1", guild_id
+            )
+            self._ignored_channels_cache[guild_id] = {row["channel_id"] for row in rows}
+        return channel_id in self._ignored_channels_cache[guild_id]
+
     async def invoke(self, ctx: commands.Context):
         if ctx.command and ctx.cog and ctx.guild:
             cog_name = ctx.cog.__class__.__name__
             if cog_name != "Management" and await self._is_cog_disabled(ctx.guild.id, cog_name):
                 return
+            if await self._is_channel_ignored(ctx.guild.id, ctx.channel.id):
+                if not await self.is_owner(ctx.author):
+                    return
         await super().invoke(ctx)
 
     async def setup_hook(self):

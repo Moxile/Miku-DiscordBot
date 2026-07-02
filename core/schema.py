@@ -25,4 +25,12 @@ GUILD_CURRENCY = """
     );
 """
 
-SCHEMA = GUILD_SETTINGS + DISABLED_COGS + GUILD_CURRENCY
+IGNORED_CHANNELS = """
+    CREATE TABLE IF NOT EXISTS ignored_channels (
+        guild_id   BIGINT NOT NULL,
+        channel_id BIGINT NOT NULL,
+        PRIMARY KEY (guild_id, channel_id)
+    );
+"""
+
+SCHEMA = GUILD_SETTINGS + DISABLED_COGS + GUILD_CURRENCY + IGNORED_CHANNELS
