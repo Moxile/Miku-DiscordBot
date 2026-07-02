@@ -178,13 +178,18 @@ class Economy(commands.Cog):
             await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
             await update_wallet(self.pool, ctx.guild.id, ctx.author.id, earnings)
             await add_transaction(self.pool, ctx.guild.id, ctx.author.id, earnings, "work", "Earnings from work")
+            work_cooldown_seconds = await self.pool.fetchval(
+                "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = 'work_cooldown'",
+                ctx.guild.id,
+            )
+            work_cooldown_seconds = int(work_cooldown_seconds) if work_cooldown_seconds is not None else WORK_COOLDOWN
             await self.pool.execute(
                 """
                 INSERT INTO cooldowns (guild_id, user_id, command, expires_at)
                 VALUES ($1, $2, 'work', $3)
                 ON CONFLICT (guild_id, user_id, command) DO UPDATE SET expires_at = EXCLUDED.expires_at
                 """,
-                ctx.guild.id, ctx.author.id, datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=WORK_COOLDOWN)
+                ctx.guild.id, ctx.author.id, datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=work_cooldown_seconds)
             )
 
             cur = self.bot.get_currency(ctx.guild.id)
@@ -215,6 +220,26 @@ class Economy(commands.Cog):
             )
             invalidate(ctx.guild.id, "work_channel")
             await ctx.send(f"`.work` restricted to {channel.mention}.")
+
+    @commands.command()
+    @commands.is_owner()
+    async def setworkcooldown(self, ctx, minutes: int = None):
+        """Set (or reset) the work cooldown in minutes for this server."""
+        if minutes is None:
+            await self.pool.execute(
+                "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'work_cooldown'",
+                ctx.guild.id,
+            )
+            await ctx.send(f"Work cooldown reset to default ({WORK_COOLDOWN // 60} minutes).")
+        elif minutes <= 0:
+            await ctx.send("Cooldown must be at least 1 minute.")
+        else:
+            await self.pool.execute(
+                """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, 'work_cooldown', $2)
+                   ON CONFLICT (guild_id, key) DO UPDATE SET value = $2""",
+                ctx.guild.id, str(minutes * 60),
+            )
+            await ctx.send(f"Work cooldown set to {minutes} minute(s) for this server.")
 
     @commands.command()
     @require_not_locked()
