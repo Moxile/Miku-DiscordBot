@@ -6,12 +6,11 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-POSITION_SET_FILE = Path(__file__).parent / "positions.wr"
+POSITION_SET_FILE = Path(__file__).parent / "basic1k.wr"
 
 
 class WolfPosition:
-    def __init__(self, fen, pgn, eval_bounds):
-        self.fen = fen
+    def __init__(self, pgn, eval_bounds):
         self.pgn = pgn
         self._eval_bounds = eval_bounds
 
@@ -65,9 +64,15 @@ def load_position_set(path):
             if not line:
                 continue
             try:
-                fen, pgn, evaluation = line.split('|')
-                ev = float(evaluation)
-                position = WolfPosition(fen=fen, pgn=pgn, eval_bounds=(ev, ev))
+                pgn, evaluation = line.split('|')
+                pgn, evaluation = pgn.strip(), evaluation.strip()
+                if evaluation.startswith('-M'):
+                    ev = -1000.0
+                elif evaluation.startswith('M'):
+                    ev = 1000.0
+                else:
+                    ev = float(evaluation)
+                position = WolfPosition(pgn=pgn, eval_bounds=(ev, ev))
                 positions.append(position)
             except ValueError as e:
                 print(f'Error while parsing position set:\n{e}')

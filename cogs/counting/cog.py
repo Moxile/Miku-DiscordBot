@@ -195,15 +195,16 @@ class Counting(commands.Cog):
             self._cache[guild_id]["last_user"] = user_id
             self._cache[guild_id]["last_message_id"] = message_id
 
-    async def _record_fail(self, guild_id: int, user_id: int) -> int:
+    async def _record_fail(self, guild_id: int, user_id: int, count: int) -> int:
+        penalty = 1 + count // 100
         row = await self.pool.fetchrow(
             """
             INSERT INTO counting_fails (guild_id, user_id, fails)
-            VALUES ($1, $2, 1)
-            ON CONFLICT (guild_id, user_id) DO UPDATE SET fails = counting_fails.fails + 1
+            VALUES ($1, $2, $3)
+            ON CONFLICT (guild_id, user_id) DO UPDATE SET fails = counting_fails.fails + $3
             RETURNING fails
             """,
-            guild_id, user_id,
+            guild_id, user_id, penalty,
         )
         return row["fails"]
 
@@ -343,7 +344,7 @@ class Counting(commands.Cog):
         if user_id == state["last_user"]:
             await message.add_reaction("❌")
             await self._reset(guild_id)
-            fails = await self._record_fail(guild_id, user_id)
+            fails = await self._record_fail(guild_id, user_id, current)
             await self._maybe_assign_fail_role(message.guild, message.author, fails)
             await message.channel.send(
                 f"{message.author.mention} can't count twice in a row! Back to **0**."
@@ -353,7 +354,7 @@ class Counting(commands.Cog):
         if value != current + 1:
             await message.add_reaction("❌")
             await self._reset(guild_id)
-            fails = await self._record_fail(guild_id, user_id)
+            fails = await self._record_fail(guild_id, user_id, current)
             await self._maybe_assign_fail_role(message.guild, message.author, fails)
             await message.channel.send(
                 f"{message.author.mention} broke the count at **{current}**! "
