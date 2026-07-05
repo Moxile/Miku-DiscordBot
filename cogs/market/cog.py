@@ -37,6 +37,35 @@ from config import (
 )
 
 
+# How often (in counted messages) the .ipohelper scan edits its progress embed.
+IPO_SCAN_PROGRESS_EVERY = 1000
+
+
+class IPOScanView(discord.ui.View):
+    """A single Stop button that lets the command runner cancel a long `.ipohelper`
+    history scan early. Only the invoker may press it; the scan loop polls ``stopped``.
+    """
+
+    def __init__(self, invoker_id: int, *, timeout: float = 900):
+        super().__init__(timeout=timeout)
+        self.invoker_id = invoker_id
+        self.stopped = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "Only the person who ran `.ipohelper` can stop this scan.", ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="⏹ Stop scan", style=discord.ButtonStyle.danger)
+    async def stop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stopped = True
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+
+
 # Time windows offered by the price-chart buttons: key -> (button label, chart subtitle, days)
 CHART_WINDOWS = {
     "daily": ("Daily", "Past 24 hours", 1),
@@ -736,7 +765,8 @@ class Market(commands.Cog):
         """Recommend an IPO price for a channel from its recent activity.
 
         Step 1: samples the last 100 messages for a representative chars/message mean (fast).
-        Step 2: counts all messages + distinct users in the last `days` days for accurate volume.
+        Step 2: counts all messages + distinct users in the last `days` days for accurate
+        volume (scans the full window — may take a while for very busy channels).
         Combines both to project DPS and suggest IPO prices for several weekly dividend yields.
         Optionally pass a target yield % last to highlight one price,
         e.g. `.ipohelper #chan 14 10000 8` (8% weekly yield)."""
@@ -758,20 +788,26 @@ class Market(commands.Cog):
                 await ctx.send("The target yield must be greater than 0%.")
                 return
 
-        timed_out = False
+        status_msg = None       # the live progress/result message, once sent
+        view = None             # the Stop-button view driving the scan
+        stopped_early = False   # True if the runner pressed Stop before the window finished
+
+        async def _finalize(embed):
+            """Show the final embed by editing the progress message (or sending fresh)."""
+            if status_msg is not None:
+                await status_msg.edit(embed=embed, view=None)
+            else:
+                await ctx.send(embed=embed)
+
         try:
-            # Step 1: small fixed sample → chars/message mean + std + oldest timestamp (≤ 2 API calls).
+            # Step 1: small fixed sample → chars/message mean + std (≤ 2 API calls).
             char_lengths: list[int] = []
-            sample_user_ids: set[int] = set()
-            oldest_ts = None
             async for message in channel.history(limit=100):
                 if message.author.bot:
                     continue
                 length = len(message.content)
                 if length > 0:
                     char_lengths.append(length)
-                    sample_user_ids.add(message.author.id)
-                    oldest_ts = message.created_at  # history() is newest-first, so last assigned = oldest
 
             if not char_lengths:
                 await ctx.send(
@@ -784,41 +820,63 @@ class Market(commands.Cog):
             std_chars = statistics.pstdev(char_lengths) if len(char_lengths) > 1 else 0.0
 
             # Step 2: full window → message count + distinct users (may be slow for busy channels).
+            # We stream history, editing a live progress embed every IPO_SCAN_PROGRESS_EVERY
+            # messages, and let the runner cut the scan short with the Stop button.
             cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
             msg_count = 0
             user_ids: set[int] = set()
 
-            async def _count_window():
-                nonlocal msg_count
-                async for message in channel.history(after=cutoff, limit=None):
-                    if message.author.bot:
-                        continue
-                    if len(message.content) == 0:
-                        continue
-                    msg_count += 1
-                    user_ids.add(message.author.id)
+            view = IPOScanView(ctx.author.id)
+            progress = discord.Embed(
+                title=f"Scanning {channel.name}…",
+                description=(
+                    f"Counting messages over the last {days} day(s). "
+                    f"Press **Stop scan** to finish with what's been counted so far."
+                ),
+                color=discord.Color.blurple(),
+            )
+            progress.add_field(name="Progress", value="0 messages · 0 user(s)", inline=False)
+            status_msg = await ctx.send(embed=progress, view=view)
 
-            try:
-                async with ctx.typing():
-                    await asyncio.wait_for(_count_window(), timeout=30.0)
-            except asyncio.TimeoutError:
-                timed_out = True
-                # Fall back to estimating volume from the step-1 sample.
-                now = datetime.datetime.now(datetime.timezone.utc)
-                sample_span = max(1.0, (now - oldest_ts).total_seconds() / 86400)
-                msg_count = len(char_lengths)
-                user_ids = sample_user_ids
-                days = sample_span  # rescale denominator to match what we actually measured
+            last_edit = time.monotonic()
+            async for message in channel.history(after=cutoff, limit=None):
+                if view.stopped:
+                    stopped_early = True
+                    break
+                if message.author.bot:
+                    continue
+                if len(message.content) == 0:
+                    continue
+                msg_count += 1
+                user_ids.add(message.author.id)
+
+                # Edit at most ~once every 1.5s to stay clear of Discord's edit rate limit.
+                if msg_count % IPO_SCAN_PROGRESS_EVERY == 0 and time.monotonic() - last_edit >= 1.5:
+                    progress.set_field_at(
+                        0, name="Progress",
+                        value=f"{msg_count:,} messages · {len(user_ids)} user(s) counted so far…",
+                        inline=False,
+                    )
+                    try:
+                        await status_msg.edit(embed=progress, view=view)
+                    except discord.HTTPException:
+                        pass
+                    last_edit = time.monotonic()
 
         except discord.Forbidden:
             await ctx.send(f"I don't have permission to read history in {channel.mention}.")
             return
 
         if msg_count == 0:
-            await ctx.send(
-                f"No messages found in {channel.mention} over the last {days} day(s) — "
-                f"try a longer window or a busier channel."
+            note = discord.Embed(
+                title=f"IPO recommendation — {channel.name}",
+                description=(
+                    f"No messages found in {channel.mention} over the last {days} day(s) — "
+                    f"try a longer window or a busier channel."
+                ),
+                color=discord.Color.gold(),
             )
+            await _finalize(note)
             return
 
         users = max(1, len(user_ids))
@@ -830,10 +888,10 @@ class Market(commands.Cog):
         dps = rec["dps"]
 
         embed = discord.Embed(title=f"IPO recommendation — {channel.name}", color=discord.Color.gold())
-        if timed_out:
+        if stopped_early:
             embed.description = (
-                "⚠️ Full window scan timed out — fell back to the sample of the last 100 messages. "
-                "Results may be less accurate; try a shorter time span for a full count."
+                "⏹ Scan stopped early — figures below are based on the messages counted so far, "
+                "so volume (and the projected DPS) is an **under**estimate."
             )
         embed.add_field(
             name="Measured activity",
@@ -851,7 +909,7 @@ class Market(commands.Cog):
                 "weekly operating costs, so no IPO price yields income. Try a busier channel, a "
                 "longer lookback, or fewer total shares."
             )
-            await ctx.send(embed=embed)
+            await _finalize(embed)
             return
 
         cur = self.bot.get_currency(ctx.guild.id)
@@ -883,7 +941,7 @@ class Market(commands.Cog):
             )
 
         embed.set_footer(text="Yield is dividend income only — capital gains from trading are not included.")
-        await ctx.send(embed=embed)
+        await _finalize(embed)
 
     @commands.command(aliases=['delist'])
     @commands.is_owner()
