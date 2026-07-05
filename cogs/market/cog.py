@@ -31,10 +31,39 @@ from core.money import parse_amount, AmountError
 from core.confirm import confirm
 from core.names import format_name
 from config import (
-    LEVEL_BASE_THRESHOLD,
     DIVIDEND_PROFIT_SHARE,
     LEVEL_UP_TREASURY_CONSUME,
+    COST_VARIABLE_RATE,
+    COST_DANGER_RATIO,
+    SHOCK_PROB,
+    SHOCK_MIN,
+    SHOCK_MAX,
+    LEVEL_MULT_STEP,
+    MAX_COMPANY_LEVEL,
+    LEVEL_TREASURY_WEEKS,
 )
+
+
+def weekly_close(company, weekly_revenue: int) -> dict:
+    """Pure weekly-close math shared by the scheduled task and .forcefinancials.
+
+    cost = fixed overhead (anchored to the company's level-scaled baseline) + a
+    variable share of revenue, with an occasional random shock spiking the overhead.
+    Returns overhead, cost, profit, dividend_per_share (≥0) and whether a shock hit.
+    """
+    baseline = float(company["base_weekly_revenue"]) * (LEVEL_MULT_STEP ** company["company_level"])
+    overhead = COST_DANGER_RATIO * (1 - COST_VARIABLE_RATE) * baseline
+    shocked = secrets.randbelow(1_000_000) < int(SHOCK_PROB * 1_000_000)
+    if shocked:
+        overhead *= SHOCK_MIN + (SHOCK_MAX - SHOCK_MIN) * secrets.randbelow(1_000_001) / 1_000_000
+    cost = int(overhead + COST_VARIABLE_RATE * weekly_revenue)
+    profit = weekly_revenue - cost
+    dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
+    dividend_per_share = dividend_pool // company["total_shares"] if company["total_shares"] else 0
+    if dividend_per_share < 0:
+        dividend_per_share = 0
+    return {"overhead": int(overhead), "cost": cost, "profit": profit,
+            "dividend_per_share": dividend_per_share, "shocked": shocked}
 
 
 # How often (in counted messages) the .ipohelper scan edits its progress embed.
@@ -268,7 +297,10 @@ class Market(commands.Cog):
                     days_so_far = len(daily_records)
                     total_so_far = sum(r["revenue"] for r in daily_records)
                     expected = int(total_so_far / days_so_far * 5) if days_so_far else 0
-                    projected_cost = max(5000, int(0.075 * company["treasury"]))
+                    projected_overhead = (COST_DANGER_RATIO * (1 - COST_VARIABLE_RATE)
+                                          * float(company["base_weekly_revenue"])
+                                          * (LEVEL_MULT_STEP ** company["company_level"]))
+                    projected_cost = int(projected_overhead + COST_VARIABLE_RATE * expected)
                     projected_profit = expected - projected_cost
                     projected_dps = int(DIVIDEND_PROFIT_SHARE * max(0, projected_profit)) // company["total_shares"]
                     projected_eps = projected_profit / company["total_shares"] if company["total_shares"] else 0
@@ -295,7 +327,10 @@ class Market(commands.Cog):
                     days_so_far = len(daily_records)
                     total_so_far = sum(r["revenue"] for r in daily_records)
                     expected = int(total_so_far / days_so_far * 5) if days_so_far else 0
-                    projected_cost = max(5000, int(0.075 * company["treasury"]))
+                    projected_overhead = (COST_DANGER_RATIO * (1 - COST_VARIABLE_RATE)
+                                          * float(company["base_weekly_revenue"])
+                                          * (LEVEL_MULT_STEP ** company["company_level"]))
+                    projected_cost = int(projected_overhead + COST_VARIABLE_RATE * expected)
                     projected_profit = expected - projected_cost
                     projected_dps = int(DIVIDEND_PROFIT_SHARE * max(0, projected_profit)) // company["total_shares"]
                     projected_eps = projected_profit / company["total_shares"] if company["total_shares"] else 0
@@ -341,8 +376,8 @@ class Market(commands.Cog):
                 comp_channel = guild.get_channel(comp["stock_channel_id"])
                 killed = False
                 kill_reason = ""
-                weekly_revenue = cost = profit = 0
-                cost_rate = 0.05
+                weekly_revenue = cost = profit = overhead = 0
+                shocked = False
                 dividend_per_share = dividends_paid = 0
                 leveled_up = False
                 next_level = 1
@@ -369,11 +404,10 @@ class Market(commands.Cog):
                                 conn, guild.id, company["stock_channel_id"], monday, saturday,
                             )
 
-                            cost_rate = (0.05 + 0.05 * secrets.randbelow(1_000_001) / 1_000_000)
-                            cost = max(5000, int(cost_rate * company["treasury"]))
-                            profit = weekly_revenue - cost
-                            dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
-                            dividend_per_share = dividend_pool // company["total_shares"]
+                            fin = weekly_close(company, weekly_revenue)
+                            overhead, cost, shocked = fin["overhead"], fin["cost"], fin["shocked"]
+                            profit = fin["profit"]
+                            dividend_per_share = fin["dividend_per_share"]
                             dividends_paid = 0
 
                             if dividend_per_share > 0:
@@ -399,17 +433,17 @@ class Market(commands.Cog):
 
                                 leveled_up = False
                                 next_level = company["company_level"] + 1
-                                threshold = LEVEL_BASE_THRESHOLD * (2 ** (next_level - 1))
+                                threshold = LEVEL_TREASURY_WEEKS * weekly_revenue
 
-                                if treasury_after >= threshold:
+                                if company["company_level"] < MAX_COMPANY_LEVEL and treasury_after >= threshold:
                                     consume = int(LEVEL_UP_TREASURY_CONSUME * treasury_after)
-                                    new_multiplier = company["revenue_multiplier"] * 2
+                                    new_multiplier = company["revenue_multiplier"] * LEVEL_MULT_STEP
                                     await set_company_level(conn, guild.id, company["stock_channel_id"],
                                                              next_level, new_multiplier, consume)
                                     leveled_up = True
 
                                 dilution = await process_dilution(conn, guild.id, company["stock_channel_id"],
-                                                                  profit, company)
+                                                                  weekly_revenue, company)
 
                 if killed:
                     self._company_channels.pop(guild.id, None)
@@ -428,7 +462,8 @@ class Market(commands.Cog):
                         "channel": comp_channel,
                         "weekly_revenue": weekly_revenue,
                         "cost": cost,
-                        "cost_rate": cost_rate,
+                        "overhead": overhead,
+                        "shocked": shocked,
                         "profit": profit,
                         "eps": eps,
                         "dividend_per_share": dividend_per_share,
@@ -452,7 +487,7 @@ class Market(commands.Cog):
                         embed.add_field(name=f"💀 {r['name']}", value=r["reason"], inline=False)
                     else:
                         lines = [
-                            f"Rev: {r['weekly_revenue']:,}{cur.emoji} | Cost ({r['cost_rate']*100:.1f}%): {r['cost']:,}{cur.emoji} | Profit: {r['profit']:,}{cur.emoji}",
+                            f"Rev: {r['weekly_revenue']:,}{cur.emoji} | Cost: {r['cost']:,}{cur.emoji}{' ⚡shock' if r['shocked'] else ''} | Profit: {r['profit']:,}{cur.emoji}",
                             f"DPS: {r['dividend_per_share']:,}{cur.emoji} | EPS: {r['eps']:.1f}{cur.emoji} | Divs paid: {r['dividends_paid']:,}{cur.emoji}",
                             f"Treasury: {r['treasury_before']:,}{cur.emoji} → {r['treasury_after']:,}{cur.emoji} | Lv{r['company_level']}",
                         ]
@@ -480,7 +515,7 @@ class Market(commands.Cog):
                     else:
                         embed = discord.Embed(title=f"{r['name']} - Weekly Financial Summary", color=discord.Color.blue())
                         embed.add_field(name="Weekly Revenue", value=f"{r['weekly_revenue']:,}{cur.emoji}", inline=True)
-                        embed.add_field(name=f"Operating Cost ({r['cost_rate'] * 100:.1f}%)", value=f"{r['cost']:,}{cur.emoji}", inline=True)
+                        embed.add_field(name="Operating Cost" + (" ⚡" if r["shocked"] else ""), value=f"{r['cost']:,}{cur.emoji}", inline=True)
                         embed.add_field(name="Profit", value=f"{r['profit']:,}{cur.emoji}", inline=True)
                         embed.add_field(name="DPS", value=f"{r['dividend_per_share']:,}{cur.emoji}", inline=True)
                         embed.add_field(name="EPS", value=f"{r['eps']:.1f}{cur.emoji}", inline=True)
@@ -740,8 +775,12 @@ class Market(commands.Cog):
 
     @commands.command()
     @commands.is_owner()
-    async def listcompany(self, ctx, stock: discord.TextChannel, name: str, ipo_price: str = "100", total_shares: int = 10000):
-        """List a new company on the market, associating it with a text channel. Optionally use IPO, total shares to adjust the default 100, 10000."""
+    async def listcompany(self, ctx, stock: discord.TextChannel, name: str, ipo_price: str = "100",
+                          total_shares: int = 500, revenue_multiplier: float = None,
+                          base_weekly_revenue: float = 0.0):
+        """List a new company. Pass the `revenue_multiplier` and `base_weekly_revenue` from
+        `.ipohelper` so the company is calibrated to its channel's activity. Omit them to fall
+        back to the default multiplier (uncalibrated — no activity-based risk)."""
         try:
             ipo_price = parse_amount(ipo_price)
         except AmountError as e:
@@ -753,40 +792,47 @@ class Market(commands.Cog):
             await ctx.send(f"{stock.mention} is already listed as **{existing['name']}**.")
             return
 
-        await create_company(self.pool, ctx.guild.id, stock.id, name, ctx.author.id, total_shares, ipo_price)
+        await create_company(self.pool, ctx.guild.id, stock.id, name, ctx.author.id, total_shares, ipo_price,
+                             revenue_multiplier=revenue_multiplier, base_weekly_revenue=base_weekly_revenue)
         self._company_channels.pop(ctx.guild.id, None)
         cur = self.bot.get_currency(ctx.guild.id)
-        await ctx.send(f"**{name}** has been listed! {total_shares:,} shares available at {ipo_price:,}{cur.emoji} each via IPO.")
+        calib = "" if revenue_multiplier is None else f" · multiplier {revenue_multiplier:,.2f}"
+        await ctx.send(f"**{name}** has been listed! {total_shares:,} shares available at "
+                       f"{ipo_price:,}{cur.emoji} each via IPO.{calib}")
 
     @commands.command(aliases=['ipo'])
     @commands.is_owner()
     async def ipohelper(self, ctx, channel: discord.TextChannel, days: int = 14,
-                        total_shares: int = 10000, wish_pct: str = None):
-        """Recommend an IPO price for a channel from its recent activity.
+                        total_shares: int = 500, ipo_price: str = "100", target_yield: str = "5"):
+        """Solve the revenue multiplier + baseline for a company from its recent activity.
 
-        Step 1: samples the last 100 messages for a representative chars/message mean (fast).
-        Step 2: counts all messages + distinct users in the last `days` days for accurate
-        volume (scans the full window — may take a while for very busy channels).
-        Combines both to project DPS and suggest IPO prices for several weekly dividend yields.
-        Optionally pass a target yield % last to highlight one price,
-        e.g. `.ipohelper #chan 14 10000 8` (8% weekly yield)."""
+        You pick the shape of the company — `total_shares`, `ipo_price`, and target weekly
+        `target_yield` (percent) — and this back-solves the revenue multiplier so a company
+        at that activity pays the target dividend. It then prints a ready-to-run
+        `.listcompany` command. Example: `.ipohelper #chan 14 500 100 5` (500 shares,
+        100/share, 5% weekly yield).
+
+        Step 1 samples the last 100 messages for a chars/message mean; step 2 counts all
+        messages + distinct users over `days` (full scan — may be slow on busy channels)."""
         if not 1 <= days <= 90:
             await ctx.send("`days` must be between 1 and 90.")
             return
         if total_shares <= 0:
             await ctx.send("`total_shares` must be positive.")
             return
-
-        wish = None
-        if wish_pct is not None:
-            try:
-                wish = float(wish_pct.strip().rstrip("%")) / 100
-            except ValueError:
-                await ctx.send(f"Couldn't read `{wish_pct}` as a percentage. Try e.g. `8` or `8%`.")
-                return
-            if wish <= 0:
-                await ctx.send("The target yield must be greater than 0%.")
-                return
+        try:
+            ipo_price = parse_amount(ipo_price)
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
+        try:
+            wish = float(target_yield.strip().rstrip("%")) / 100
+        except ValueError:
+            await ctx.send(f"Couldn't read `{target_yield}` as a percentage. Try e.g. `5` or `5%`.")
+            return
+        if wish <= 0:
+            await ctx.send("The target yield must be greater than 0%.")
+            return
 
         status_msg = None       # the live progress/result message, once sent
         view = None             # the Stop-button view driving the scan
@@ -884,14 +930,21 @@ class Market(commands.Cog):
         mean = mean_chars * msgs_per_user_per_day
         std = std_chars * msgs_per_user_per_day
 
-        rec = recommend_ipo(users, mean, std, total_shares=total_shares)
+        rec = recommend_ipo(users, mean, std, total_shares=total_shares,
+                            ipo_price=ipo_price, target_yield=wish)
         dps = rec["dps"]
+        multiplier = rec["multiplier"]
+        base_weekly_revenue = rec["base_weekly_revenue"]
 
-        embed = discord.Embed(title=f"IPO recommendation — {channel.name}", color=discord.Color.gold())
+        cur = self.bot.get_currency(ctx.guild.id)
+        market_cap = total_shares * ipo_price
+        realized_yield = (dps / ipo_price * 100) if ipo_price else 0
+
+        embed = discord.Embed(title=f"IPO solve — {channel.name}", color=discord.Color.gold())
         if stopped_early:
             embed.description = (
                 "⏹ Scan stopped early — figures below are based on the messages counted so far, "
-                "so volume (and the projected DPS) is an **under**estimate."
+                "so volume (and the solved multiplier) is an **under**estimate."
             )
         embed.add_field(
             name="Measured activity",
@@ -902,44 +955,38 @@ class Market(commands.Cog):
             ),
             inline=False,
         )
+        embed.add_field(
+            name="Solved company",
+            value=(
+                f"{total_shares:,} shares × {ipo_price:,}{cur.emoji} = **{market_cap:,}{cur.emoji}** market cap\n"
+                f"Revenue multiplier: **{multiplier:,.2f}** · baseline: {base_weekly_revenue:,.0f}{cur.emoji}/wk\n"
+                f"Projected dividend: **~{dps:,}{cur.emoji}/share/wk** (~{realized_yield:.1f}% weekly yield)"
+            ),
+            inline=False,
+        )
 
         if dps <= 0:
-            embed.description = (
-                "Projected dividends are **0** at these settings — this activity wouldn't cover "
-                "weekly operating costs, so no IPO price yields income. Try a busier channel, a "
-                "longer lookback, or fewer total shares."
+            embed.add_field(
+                name="⚠️ Dividends project to 0",
+                value=(
+                    "This activity can't sustain the target at these settings. Try a busier "
+                    "channel, a longer lookback, a lower yield, or fewer shares."
+                ),
+                inline=False,
             )
             await _finalize(embed)
             return
 
-        cur = self.bot.get_currency(ctx.guild.id)
+        safe_name = channel.name.replace('"', "'")
         embed.add_field(
-            name="Projected dividend / share",
-            value=f"~{dps:,}{cur.emoji} per week  (total_shares = {total_shares:,})",
+            name="Ready to list — copy & run",
+            value=(
+                f"{channel.mention}\n"
+                f"```\n.listcompany {channel.id} \"{safe_name}\" {ipo_price} "
+                f"{total_shares} {multiplier:.4f} {base_weekly_revenue:.2f}\n```"
+            ),
             inline=False,
         )
-
-        table = ["```", f"{'Yield':>6}  {'IPO price':>11}  {'Payback':>9}"]
-        for row in rec["rows"]:
-            table.append(
-                f"{row['yield'] * 100:>5.0f}%  {row['ipo_price']:>11,}  {row['payback']:>4} wks"
-            )
-        table.append("```")
-        embed.add_field(
-            name=f"Weekly dividend yield → IPO price ({cur.emoji})",
-            value="\n".join(table),
-            inline=False,
-        )
-
-        if wish is not None:
-            price = round(dps / wish)
-            payback = round(price / dps)
-            embed.add_field(
-                name=f"→ Your target {wish * 100:g}%",
-                value=f"List at **{price:,}{cur.emoji}** / share  (~{payback} wks payback)",
-                inline=False,
-            )
-
         embed.set_footer(text="Yield is dividend income only — capital gains from trading are not included.")
         await _finalize(embed)
 
@@ -1000,7 +1047,10 @@ class Market(commands.Cog):
             days_so_far = len(daily_records)
             total_so_far = sum(r["revenue"] for r in daily_records)
             expected = int(total_so_far / days_so_far * 5) if days_so_far else 0
-            projected_cost = max(5000, int(0.075 * company["treasury"]))
+            projected_overhead = (COST_DANGER_RATIO * (1 - COST_VARIABLE_RATE)
+                                  * float(company["base_weekly_revenue"])
+                                  * (LEVEL_MULT_STEP ** company["company_level"]))
+            projected_cost = int(projected_overhead + COST_VARIABLE_RATE * expected)
             projected_profit = expected - projected_cost
             projected_dps = int(DIVIDEND_PROFIT_SHARE * max(0, projected_profit)) // company["total_shares"]
             projected_eps = projected_profit / company["total_shares"] if company["total_shares"] else 0
@@ -1033,8 +1083,8 @@ class Market(commands.Cog):
         for comp in companies:
             killed = False
             kill_reason = ""
-            weekly_revenue = cost = profit = 0
-            cost_rate = 0.05
+            weekly_revenue = cost = profit = overhead = 0
+            shocked = False
             dividend_per_share = dividends_paid = 0
             leveled_up = False
             next_level = 1
@@ -1061,11 +1111,10 @@ class Market(commands.Cog):
                             conn, ctx.guild.id, company["stock_channel_id"], monday, yesterday,
                         )
 
-                        cost_rate = (0.05 + 0.05 * secrets.randbelow(1_000_001) / 1_000_000)
-                        cost = max(5000, int(cost_rate * company["treasury"]))
-                        profit = weekly_revenue - cost
-                        dividend_pool = int(DIVIDEND_PROFIT_SHARE * profit)
-                        dividend_per_share = dividend_pool // company["total_shares"]
+                        fin = weekly_close(company, weekly_revenue)
+                        overhead, cost, shocked = fin["overhead"], fin["cost"], fin["shocked"]
+                        profit = fin["profit"]
+                        dividend_per_share = fin["dividend_per_share"]
                         dividends_paid = 0
 
                         if dividend_per_share > 0:
@@ -1091,16 +1140,16 @@ class Market(commands.Cog):
 
                             leveled_up = False
                             next_level = company["company_level"] + 1
-                            threshold = LEVEL_BASE_THRESHOLD * (2 ** (next_level - 1))
-                            if treasury_after >= threshold:
+                            threshold = LEVEL_TREASURY_WEEKS * weekly_revenue
+                            if company["company_level"] < MAX_COMPANY_LEVEL and treasury_after >= threshold:
                                 consume = int(LEVEL_UP_TREASURY_CONSUME * treasury_after)
-                                new_multiplier = company["revenue_multiplier"] * 2
+                                new_multiplier = company["revenue_multiplier"] * LEVEL_MULT_STEP
                                 await set_company_level(conn, ctx.guild.id, company["stock_channel_id"],
                                                          next_level, new_multiplier, consume)
                                 leveled_up = True
 
                             dilution = await process_dilution(conn, ctx.guild.id, company["stock_channel_id"],
-                                                              profit, company)
+                                                              weekly_revenue, company)
 
             if killed:
                 self._company_channels.pop(ctx.guild.id, None)
@@ -1113,7 +1162,8 @@ class Market(commands.Cog):
                     "name": company["name"],
                     "weekly_revenue": weekly_revenue,
                     "cost": cost,
-                    "cost_rate": cost_rate,
+                    "overhead": overhead,
+                    "shocked": shocked,
                     "profit": profit,
                     "eps": eps,
                     "dividend_per_share": dividend_per_share,
@@ -1137,7 +1187,7 @@ class Market(commands.Cog):
                 embed.add_field(name=f"💀 {r['name']}", value=r["reason"], inline=False)
             else:
                 lines = [
-                    f"Rev: {r['weekly_revenue']:,}{cur.emoji} | Cost ({r['cost_rate']*100:.1f}%): {r['cost']:,}{cur.emoji} | Profit: {r['profit']:,}{cur.emoji}",
+                    f"Rev: {r['weekly_revenue']:,}{cur.emoji} | Cost: {r['cost']:,}{cur.emoji}{' ⚡shock' if r['shocked'] else ''} | Profit: {r['profit']:,}{cur.emoji}",
                     f"DPS: {r['dividend_per_share']:,}{cur.emoji} | EPS: {r['eps']:.1f}{cur.emoji} | Divs paid: {r['dividends_paid']:,}{cur.emoji}",
                     f"Treasury: {r['treasury_before']:,}{cur.emoji} → {r['treasury_after']:,}{cur.emoji} | Lv{r['company_level']}",
                 ]

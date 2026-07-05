@@ -2,7 +2,10 @@ from decimal import Decimal
 
 import asyncpg
 
-from config import REVENUE_OUTER_EXP, DILUTION_MAX_RATE, DILUTION_PROFIT_SCALE, DILUTION_DISCOUNT
+from config import (
+    REVENUE_INNER_EXP, REVENUE_OUTER_EXP, LEVEL_MULT_STEP,
+    DILUTION_MAX_RATE, DILUTION_GAIN, DILUTION_DISCOUNT,
+)
 from core.db import Conn
 from cogs.economy.db import add_transaction
 
@@ -30,12 +33,25 @@ async def list_companies(conn: Conn, guild_id: int):
 
 
 async def create_company(conn: Conn, guild_id: int, stock_channel_id: int, name: str, listed_by: int,
-                          total_shares: int = 10000, ipo_price: int = 100):
-    await conn.execute(
-        """INSERT INTO companies (guild_id, stock_channel_id, name, total_shares, available_ipo_shares, ipo_price, base_ipo_price, listed_by)
-           VALUES ($1, $2, $3, $4, $4, $5, $5, $6)""",
-        guild_id, stock_channel_id, name, total_shares, ipo_price, listed_by,
-    )
+                          total_shares: int = 10000, ipo_price: int = 100,
+                          revenue_multiplier: float = None, base_weekly_revenue: float = 0.0):
+    """Create a company. `revenue_multiplier`/`base_weekly_revenue` come from the
+    IPO solver (.ipohelper); if the multiplier is omitted the column default applies."""
+    if revenue_multiplier is None:
+        await conn.execute(
+            """INSERT INTO companies (guild_id, stock_channel_id, name, total_shares, available_ipo_shares,
+                                      ipo_price, base_ipo_price, base_weekly_revenue, listed_by)
+               VALUES ($1, $2, $3, $4, $4, $5, $5, $6, $7)""",
+            guild_id, stock_channel_id, name, total_shares, ipo_price, base_weekly_revenue, listed_by,
+        )
+    else:
+        await conn.execute(
+            """INSERT INTO companies (guild_id, stock_channel_id, name, total_shares, available_ipo_shares,
+                                      ipo_price, base_ipo_price, base_weekly_revenue, revenue_multiplier, listed_by)
+               VALUES ($1, $2, $3, $4, $4, $5, $5, $6, $7, $8)""",
+            guild_id, stock_channel_id, name, total_shares, ipo_price, base_weekly_revenue,
+            revenue_multiplier, listed_by,
+        )
 
 
 async def delete_company(conn: Conn, guild_id: int, stock_channel_id: int):
@@ -231,7 +247,7 @@ async def compute_daily_revenue(conn: Conn, guild_id: int, stock_channel_id: int
                                  activity_date, revenue_multiplier: int) -> int:
     """Compute daily revenue from char counts and store it. Returns the computed revenue."""
     row = await conn.fetchrow(
-        """SELECT COALESCE(SUM(SQRT(SQRT(char_count))), 0) AS raw_sum
+        f"""SELECT COALESCE(SUM(POWER(char_count, {REVENUE_INNER_EXP})), 0) AS raw_sum
            FROM channel_activity
            WHERE guild_id = $1 AND stock_channel_id = $2 AND activity_date = $3""",
         guild_id, stock_channel_id, activity_date,
@@ -283,7 +299,7 @@ async def update_treasury(conn: Conn, guild_id: int, stock_channel_id: int, amou
 
 
 async def set_company_level(conn: Conn, guild_id: int, stock_channel_id: int,
-                             level: int, new_multiplier: int, treasury_cost: int):
+                             level: int, new_multiplier: float, treasury_cost: int):
     """Level up a company: deduct treasury, set new level and multiplier."""
     await conn.execute(
         """UPDATE companies
@@ -352,17 +368,21 @@ async def remove_member_shares(conn: asyncpg.Connection, guild_id: int, user_id:
 
 
 async def process_dilution(conn: asyncpg.Connection, guild_id: int, stock_channel_id: int,
-                            profit: int, company: asyncpg.Record) -> dict:
-    """Issue new shares as weekly dilution. Must be called within a transaction with company locked.
+                            weekly_revenue: int, company: asyncpg.Record) -> dict:
+    """Issue new shares as weekly dilution — only when the company beats its baseline.
 
-    Fills open buy orders top-down (highest bid first) at the buyer's bid price, then adds
-    remaining shares to the IPO pool at the dilution price. Returns a summary dict.
+    Must be called within a transaction with the company locked. The dilution rate scales
+    with how far weekly revenue exceeds the company's (level-scaled) baseline, capped at
+    DILUTION_MAX_RATE. Fills open buy orders top-down (highest bid first) at the buyer's bid
+    price, then adds remaining shares to the IPO pool at the dilution price.
     """
-    if profit <= 0:
+    baseline = float(company["base_weekly_revenue"]) * (LEVEL_MULT_STEP ** company["company_level"])
+    if baseline <= 0 or weekly_revenue <= baseline:
         return {"new_shares": 0, "filled_via_orders": 0, "ipo_pool_added": 0,
                 "dilution_price": 0, "treasury_gain": 0}
 
-    dilution_rate = min(DILUTION_MAX_RATE, Decimal(profit) / DILUTION_PROFIT_SCALE)
+    excess = (weekly_revenue - baseline) / baseline
+    dilution_rate = min(DILUTION_MAX_RATE, Decimal(str(DILUTION_GAIN * excess)))
     new_shares = max(1, int(dilution_rate * company["total_shares"]))
 
     best_bid = await conn.fetchval(

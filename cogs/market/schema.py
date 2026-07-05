@@ -73,9 +73,13 @@ SCHEMA = """
 MIGRATIONS = [
     "ALTER TABLE companies ADD COLUMN IF NOT EXISTS treasury BIGINT NOT NULL DEFAULT 0",
     "ALTER TABLE companies ADD COLUMN IF NOT EXISTS company_level INTEGER NOT NULL DEFAULT 0",
-    f"ALTER TABLE companies ADD COLUMN IF NOT EXISTS revenue_multiplier INTEGER NOT NULL DEFAULT {REVENUE_BASE_MULTIPLIER}",
-    # Migrate all companies to the current multiplier formula: BASE * 2^level
-    f"UPDATE companies SET revenue_multiplier = ({REVENUE_BASE_MULTIPLIER} * POWER(2, company_level))::INTEGER",
+    f"ALTER TABLE companies ADD COLUMN IF NOT EXISTS revenue_multiplier DOUBLE PRECISION NOT NULL DEFAULT {REVENUE_BASE_MULTIPLIER}",
+    # The multiplier is now solved per-company at listing and grows fractionally on
+    # level-up, so it must hold non-integer values (was INTEGER before).
+    "ALTER TABLE companies ALTER COLUMN revenue_multiplier TYPE DOUBLE PRECISION",
+    # Weekly revenue the company was IPO-priced for; anchors overhead & dilution.
+    # 0 for legacy companies — re-list them (.ipohelper → .listcompany) to set it.
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS base_weekly_revenue DOUBLE PRECISION NOT NULL DEFAULT 0",
     # Price floor used by the dilution system — set once at IPO, never changed
     "ALTER TABLE companies ADD COLUMN IF NOT EXISTS base_ipo_price INTEGER NOT NULL DEFAULT 100",
     "UPDATE companies SET base_ipo_price = ipo_price WHERE base_ipo_price = 100",
