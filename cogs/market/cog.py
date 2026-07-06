@@ -618,7 +618,11 @@ class Market(commands.Cog):
                 order_lines.append(f"#{o['id']} {side} {o['remaining']:,}x {stock_name} @ {o['price']:,}{cur.emoji}")
             embed.add_field(name="Open Orders", value="\n".join(order_lines), inline=False)
 
-        embed.set_footer(text=f"Total value: {total_value:,}{cur.emoji} | Total P/L: {total_pl_str}{cur.emoji} | Total dividends: {total_divs:,}{cur.emoji}")
+        embed.add_field(
+            name="Summary",
+            value=f"Total value: {total_value:,}{cur.emoji} | Total P/L: {total_pl_str}{cur.emoji} | Total dividends: {total_divs:,}{cur.emoji}",
+            inline=False,
+        )
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['divhist', 'dh'])
@@ -650,7 +654,7 @@ class Market(commands.Cog):
         embed.description = "\n".join(lines)
         if len(rows) > 15:
             embed.description += f"\n*... and {len(rows) - 15} more*"
-        embed.set_footer(text=f"Total dividends received: {total:,}{cur.emoji}")
+        embed.add_field(name="Total dividends received", value=f"{total:,}{cur.emoji}", inline=False)
         await ctx.send(embed=embed)
 
     async def _render_window(self, guild_id, channel, company, key):

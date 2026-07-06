@@ -175,7 +175,7 @@ class Waifu(commands.Cog):
             status = "💍 Married" if row["spouse_id"] else ("💕 Engaged" if row["engaged_since"] and row["owner_id"] == target.id else "")
             lines.append(f"`{i}.` **{name}** — {cur.emoji} {row['value']:,} {status}")
         embed.description = "\n".join(lines)
-        embed.set_footer(text=f"Total harem value: {cur.emoji} {total_value:,}")
+        embed.add_field(name="Total harem value", value=f"{cur.emoji} {total_value:,}", inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(aliases=["winfo"])
@@ -308,7 +308,7 @@ class Waifu(commands.Cog):
             ),
             color=discord.Color.from_rgb(255, 105, 180),
         )
-        embed.set_footer(text=f"Fee: {cur.emoji} {MARRIAGE_FEE:,} (charged on acceptance)")
+        embed.add_field(name="Fee", value=f"{cur.emoji} {MARRIAGE_FEE:,} (charged on acceptance)", inline=False)
         await ctx.send(embed=embed)
 
     @commands.command()
