@@ -12,6 +12,7 @@ import asyncpg
 from core import schema as core_schema
 from cogs.economy import schema as economy_schema
 from cogs.market import schema as market_schema
+from cogs.realstocks import schema as realstocks_schema
 from cogs.shop import schema as shop_schema
 from cogs.predictions import schema as predictions_schema
 from cogs.offers import schema as offers_schema
@@ -32,6 +33,7 @@ _FEATURE_MODULES = [
     core_schema,
     economy_schema,
     market_schema,
+    realstocks_schema,
     shop_schema,
     predictions_schema,
     offers_schema,

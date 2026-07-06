@@ -19,6 +19,7 @@ EXTENSIONS = [
     "cogs.economy",
     "cogs.gambling",
     "cogs.market",
+    "cogs.realstocks",
     "cogs.shop",
     "cogs.predictions",
     "cogs.offers",

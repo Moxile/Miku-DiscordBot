@@ -59,6 +59,14 @@ DEFAULT_TOTAL_SHARES = 500
 DEFAULT_IPO_PRICE    = 100
 DEFAULT_TARGET_YIELD = 0.05  # target weekly dividend yield at baseline activity
 
+# Real-stock market (Finnhub-backed, see cogs/realstocks). The API key is read
+# from the FINNHUB_API_KEY env var. Prices are 1:1 with USD via per-symbol lot
+# sizes so the integer currency can carry penny stocks.
+REALSTOCK_QUOTE_TTL       = 180  # seconds a fetched quote stays fresh for trading
+REALSTOCK_REFRESH_MINUTES = 5    # background refresh + chart-recording cadence
+REALSTOCK_MIN_UNIT_PRICE  = 20   # a unit (lot) must cost at least this many coins
+REALSTOCK_MAX_LOT         = 1_000_000  # safety cap for absurdly cheap tickers
+
 # Waifu system
 WAIFU_BASE_VALUE = 5000
 WAIFU_VALUE_MULTIPLIER = 1.5   # value after buy = max(paid, current) * 1.5
