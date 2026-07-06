@@ -252,7 +252,7 @@ async def compute_daily_revenue(conn: Conn, guild_id: int, stock_channel_id: int
            WHERE guild_id = $1 AND stock_channel_id = $2 AND activity_date = $3""",
         guild_id, stock_channel_id, activity_date,
     )
-    revenue = int(row["raw_sum"] ** REVENUE_OUTER_EXP * revenue_multiplier)
+    revenue = int(float(row["raw_sum"]) ** REVENUE_OUTER_EXP * revenue_multiplier)
     await conn.execute(
         """INSERT INTO company_revenue (guild_id, stock_channel_id, revenue_date, revenue)
            VALUES ($1, $2, $3, $4)
