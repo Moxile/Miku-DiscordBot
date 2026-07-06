@@ -14,6 +14,7 @@ from core.help import Help
 load_dotenv()
 
 EXTENSIONS = [
+    "cogs.hub",  # the .miku button-driven menu; feature cogs register pages into it
     "cogs.management",
     "cogs.moderation",
     "cogs.economy",

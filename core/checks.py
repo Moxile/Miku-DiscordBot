@@ -53,23 +53,29 @@ def has_permissions_or_owner(**perms):
     return commands.check(predicate)
 
 
+async def get_required_channel(pool, guild_id: int, setting_key: str):
+    """The channel id configured for setting_key, or None if unrestricted.
+    Shares the same cache as require_channel."""
+    channel_id = _channel_cache.get((guild_id, setting_key))
+    if channel_id is None:
+        row = await pool.fetchrow(
+            "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = $2",
+            guild_id, setting_key,
+        )
+        if row is None:
+            return None  # Not configured — allowed everywhere
+        channel_id = int(row["value"])
+        _channel_cache[(guild_id, setting_key)] = channel_id
+    return channel_id
+
+
 def require_channel(setting_key: str):
     """Check that the command is used in the channel configured for setting_key.
     If no channel has been set, the command is allowed everywhere.
     """
     async def predicate(ctx) -> bool:
-        channel_id = _channel_cache.get((ctx.guild.id, setting_key))
-        if channel_id is None:
-            row = await ctx.bot.pool.fetchrow(
-                "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = $2",
-                ctx.guild.id, setting_key,
-            )
-            if row:
-                channel_id = int(row["value"])
-                _channel_cache[(ctx.guild.id, setting_key)] = channel_id
-            else:
-                return True  # Not configured — allow everywhere
-        if ctx.channel.id == channel_id:
+        channel_id = await get_required_channel(ctx.bot.pool, ctx.guild.id, setting_key)
+        if channel_id is None or ctx.channel.id == channel_id:
             return True
         channel = ctx.guild.get_channel(channel_id)
         mention = channel.mention if channel else f"<#{channel_id}>"

@@ -3,10 +3,12 @@ from __future__ import annotations
 """Shared parser for money amounts with k/m/b suffix support."""
 
 
+from core.errors import UserError
+
 _SUFFIXES = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
 
 
-class AmountError(ValueError):
+class AmountError(UserError, ValueError):
     """Raised when a money amount can't be parsed."""
 
 

@@ -13,40 +13,32 @@ number of coins — penny stocks included.
 from __future__ import annotations
 
 import asyncio
-import datetime
 import os
 import re
 
 import discord
 from discord.ext import commands, tasks
 
-from cogs.economy.db import ensure_wallet, update_wallet, add_transaction, lock_wallet
-from cogs.market.chart import render_price_chart
+from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
+from cogs.realstocks import service
 from cogs.realstocks.db import (
     get_symbol, create_symbol,
     enable_stock, disable_stock, get_guild_stock, list_guild_stocks, distinct_enabled_symbols,
-    get_holding, lock_holding, update_holding, get_user_holdings, get_symbol_holders, remove_member_data,
-    add_trade, get_avg_buy_price,
+    get_holding, get_user_holdings, get_symbol_holders, remove_member_data,
+    get_avg_buy_price,
     record_price, get_last_recorded_price,
-    get_price_history, get_price_history_since, get_last_price_before, PRICE_HISTORY_LIMIT,
 )
 from cogs.realstocks.quotes import (
-    QuoteService, QuoteError, UnknownSymbolError,
+    QuoteService, QuoteError,
     lot_size_for, unit_buy_price, unit_sell_price, unit_mid_price,
 )
 from core.checks import require_channel, require_not_locked
 from core.confirm import confirm
+from core.errors import UserError
 from core.names import format_name
 from config import REALSTOCK_QUOTE_TTL, REALSTOCK_REFRESH_MINUTES
 
 SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,15}$")
-
-# Time windows offered by the price-chart buttons: key -> (chart subtitle, days)
-CHART_WINDOWS = {
-    "daily": ("Past 24 hours", 1),
-    "weekly": ("Past 7 days", 7),
-    "monthly": ("Past 30 days", 30),
-}
 
 
 class RealChartView(discord.ui.View):
@@ -149,50 +141,15 @@ class RealStocks(commands.Cog):
 
     async def _fetch_quote(self, ctx, symbol: str):
         """Get a quote, or send a friendly error and return None."""
-        if not self.quotes.configured:
-            await ctx.send("Real-stock trading is not configured (missing `FINNHUB_API_KEY`).")
-            return None
         try:
-            return await self.quotes.get_quote(symbol)
-        except UnknownSymbolError:
-            await ctx.send(f"Unknown ticker: **{symbol}**.")
-            return None
-        except QuoteError as e:
+            return await service.fetch_quote(self.quotes, symbol)
+        except UserError as e:
             await ctx.send(str(e))
             return None
 
     async def _render_window(self, symbol_row, key):
-        """Render the recorded-price chart for a window key ('daily'/'weekly'/'monthly'/'all').
-
-        Returns a discord.File named ``price_<key>.png``, or None when nothing is recorded yet.
-        Windowed views anchor the line at the last recorded price before the window so the
-        chart spans the whole period even when the price barely moved.
-        """
-        symbol = symbol_row["symbol"]
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if key == "all":
-            history = await get_price_history(self.pool, symbol)
-            if not history:
-                return None
-            points = [(r["recorded_at"], r["price"]) for r in history]
-            period_label = "Since listing"
-        else:
-            period_label, days = CHART_WINDOWS[key]
-            cutoff = max(now - datetime.timedelta(days=days), symbol_row["added_at"])
-            rows = await get_price_history_since(self.pool, symbol, cutoff)
-            anchor = await get_last_price_before(self.pool, symbol, cutoff)
-            if anchor is None and not rows:
-                return None
-            if anchor is None:
-                anchor = rows[0]["price"]
-            points = [(cutoff, anchor)] + [(r["recorded_at"], r["price"]) for r in rows]
-            if len(points) == 1:  # nothing recorded in the window — flat line across it
-                points.append((now, anchor))
-
-        title = f"{symbol_row['name']} ({symbol})"
-        loop = asyncio.get_running_loop()
-        buf = await loop.run_in_executor(None, render_price_chart, title, points, period_label)
-        return discord.File(buf, filename=f"price_{key}.png")
+        """Render the recorded-price chart for a window key — see service.render_window."""
+        return await service.render_window(self.pool, symbol_row, key)
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str | None:
@@ -414,40 +371,19 @@ class RealStocks(commands.Cog):
     @require_channel("trading_channel")
     async def rbuy(self, ctx, symbol: str, quantity: int = 1):
         """Buy units of a real stock at the live price. Usage: .rbuy NVDA 5"""
-        if quantity <= 0:
-            await ctx.send("Quantity must be positive.")
-            return
         symbol = self._normalize_symbol(symbol)
-        stock = symbol and await get_guild_stock(self.pool, ctx.guild.id, symbol)
-        if not stock:
-            await ctx.send("This stock is not enabled here. See `.realstocks` for what is.")
+        if not symbol:
+            await ctx.send("That doesn't look like a ticker symbol.")
             return
-
-        quote = await self._fetch_quote(ctx, symbol)
-        if quote is None:
-            return
-        unit_price = unit_buy_price(quote.price, stock["lot_size"])
-        total = unit_price * quantity
+        result = await service.buy(self.pool, self.quotes, ctx.guild.id, ctx.author.id,
+                                   symbol, quantity, ctx.channel.id)
 
         cur = self.bot.get_currency(ctx.guild.id)
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                await ensure_wallet(conn, ctx.guild.id, ctx.author.id)
-                wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
-                if wallet["wallet"] < total:
-                    await ctx.send(f"You need {total:,}{cur.emoji} but only have {wallet['wallet']:,}{cur.emoji}.")
-                    return
-                await update_wallet(conn, ctx.guild.id, ctx.author.id, -total)
-                await update_holding(conn, ctx.guild.id, ctx.author.id, symbol, quantity)
-                await add_trade(conn, ctx.guild.id, ctx.author.id, symbol, "buy", quantity, unit_price)
-                await add_transaction(conn, ctx.guild.id, ctx.author.id, -total, "realstock_buy",
-                                      f"Bought {quantity}x {symbol} units")
-
         embed = discord.Embed(title="Stock Buy", color=discord.Color.green())
-        embed.add_field(name="Stock", value=f"{stock['name']} ({symbol})", inline=True)
-        embed.add_field(name="Bought", value=f"{quantity:,} unit(s) ({self._lot_note(stock['lot_size'])} each)", inline=True)
-        embed.add_field(name="Price per Unit", value=f"{unit_price:,}{cur.emoji}", inline=True)
-        embed.add_field(name="Total Cost", value=f"{total:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Stock", value=f"{result.stock_name} ({symbol})", inline=True)
+        embed.add_field(name="Bought", value=f"{result.quantity:,} unit(s) ({self._lot_note(result.lot_size)} each)", inline=True)
+        embed.add_field(name="Price per Unit", value=f"{result.unit_price:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Total Cost", value=f"{result.total:,}{cur.emoji}", inline=True)
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['rsl'])
@@ -455,38 +391,17 @@ class RealStocks(commands.Cog):
     @require_channel("trading_channel")
     async def rsell(self, ctx, symbol: str, quantity: int = 1):
         """Sell units of a real stock at the live price. Usage: .rsell NVDA 5"""
-        if quantity <= 0:
-            await ctx.send("Quantity must be positive.")
-            return
         symbol = self._normalize_symbol(symbol)
-        stock = symbol and await get_guild_stock(self.pool, ctx.guild.id, symbol)
-        if not stock:
-            await ctx.send("This stock is not enabled here. See `.realstocks` for what is.")
+        if not symbol:
+            await ctx.send("That doesn't look like a ticker symbol.")
             return
-
-        quote = await self._fetch_quote(ctx, symbol)
-        if quote is None:
-            return
-        unit_price = unit_sell_price(quote.price, stock["lot_size"])
-        total = unit_price * quantity
+        result = await service.sell(self.pool, self.quotes, ctx.guild.id, ctx.author.id,
+                                    symbol, quantity, ctx.channel.id)
 
         cur = self.bot.get_currency(ctx.guild.id)
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                held = await lock_holding(conn, ctx.guild.id, ctx.author.id, symbol)
-                if held < quantity:
-                    await ctx.send(f"You only hold {held:,} unit(s) of **{symbol}**.")
-                    return
-                await update_holding(conn, ctx.guild.id, ctx.author.id, symbol, -quantity)
-                await ensure_wallet(conn, ctx.guild.id, ctx.author.id)
-                await update_wallet(conn, ctx.guild.id, ctx.author.id, total)
-                await add_trade(conn, ctx.guild.id, ctx.author.id, symbol, "sell", quantity, unit_price)
-                await add_transaction(conn, ctx.guild.id, ctx.author.id, total, "realstock_sell",
-                                      f"Sold {quantity}x {symbol} units")
-
         embed = discord.Embed(title="Stock Sell", color=discord.Color.red())
-        embed.add_field(name="Stock", value=f"{stock['name']} ({symbol})", inline=True)
-        embed.add_field(name="Sold", value=f"{quantity:,} unit(s)", inline=True)
-        embed.add_field(name="Price per Unit", value=f"{unit_price:,}{cur.emoji}", inline=True)
-        embed.add_field(name="Total Received", value=f"{total:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Stock", value=f"{result.stock_name} ({symbol})", inline=True)
+        embed.add_field(name="Sold", value=f"{result.quantity:,} unit(s)", inline=True)
+        embed.add_field(name="Price per Unit", value=f"{result.unit_price:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Total Received", value=f"{result.total:,}{cur.emoji}", inline=True)
         await ctx.send(embed=embed)

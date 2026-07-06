@@ -3,10 +3,9 @@ import math
 import discord
 from discord.ext import commands
 
-from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
+from cogs.missions import service
 from cogs.missions.db import (
-    create_mission, get_missions, get_mission, get_mission_by_name,
-    add_funding, set_mission_status, delete_mission, remove_member_data,
+    create_mission, get_missions, get_mission, delete_mission, remove_member_data,
 )
 from core.checks import require_channel, invalidate, require_not_locked
 from core.money import parse_amount, AmountError
@@ -191,55 +190,22 @@ class Missions(commands.Cog):
             return
 
         mission_name, amount_str = tokens
-        try:
-            amount = parse_amount(amount_str)
-        except AmountError as e:
-            await ctx.send(str(e))
-            return
-
-        if amount <= 0:
-            await ctx.send("Amount must be positive.")
-            return
+        result = await service.fund_mission(
+            self.pool, ctx.guild.id, ctx.author.id, amount_str, ctx.channel.id,
+            mission_name=mission_name,
+        )
 
         cur = self.bot.get_currency(ctx.guild.id)
-        mission = await get_mission_by_name(self.pool, ctx.guild.id, mission_name)
-        if not mission:
-            await ctx.send(f"No mission named **{mission_name}** found.")
-            return
-        if mission["status"] != "active":
-            await ctx.send(f"Mission **{mission['name']}** is no longer active.")
-            return
-
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                bal = await ensure_wallet(conn, ctx.guild.id, ctx.author.id)
-                if bal["wallet"] < amount:
-                    await ctx.send(
-                        f"You only have {bal['wallet']:,}{cur.emoji} in your wallet."
-                    )
-                    return
-
-                await update_wallet(conn, ctx.guild.id, ctx.author.id, -amount)
-                await add_transaction(
-                    conn, ctx.guild.id, ctx.author.id, -amount, "mission_fund",
-                    f"Funded mission #{mission['id']}: {mission['name']}",
-                )
-                updated = await add_funding(conn, mission["id"], ctx.guild.id, ctx.author.id, amount)
-
-                completed = updated["funded"] >= updated["goal"]
-                if completed:
-                    await set_mission_status(conn, mission["id"], "completed")
-
-        name, value = _mission_field(updated, cur.emoji)
+        name, value = _mission_field(result.mission, cur.emoji)
         embed = discord.Embed(
-            title=f"Mission Funded!",
-            color=discord.Color.green() if completed else discord.Color.from_rgb(255, 140, 0),
+            title="Mission Funded!",
+            color=discord.Color.green() if result.completed else discord.Color.from_rgb(255, 140, 0),
         )
-        embed.add_field(name="Your contribution", value=f"{amount:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Your contribution", value=f"{result.amount:,}{cur.emoji}", inline=True)
         embed.add_field(name=name, value=value, inline=False)
 
-        if completed:
-            embed.description = f"**Mission #{mission_id} is fully funded!** It will now take place."
-            embed.set_footer(text=updated["description"] or "")
+        if result.completed:
+            embed.description = f"**Mission #{result.mission['id']} is fully funded!** It will now take place."
+            embed.set_footer(text=result.mission["description"] or "")
 
         await ctx.send(embed=embed)

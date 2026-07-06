@@ -8,20 +8,16 @@ from collections import defaultdict
 import discord
 from discord.ext import commands, tasks
 
-from cogs.economy.db import ensure_wallet, update_wallet, add_transaction, lock_wallet
-from cogs.market.chart import render_price_chart
+from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
+from cogs.market import service
 from cogs.market.sim import recommend_ipo
 from cogs.market.db import (
     get_company, list_companies, create_company, delete_company,
-    get_portfolio, lock_holding, update_holding,
-    get_open_orders, get_open_orders_locked, get_user_orders, create_order, cancel_order, get_escrowed_shares,
-    add_trade, get_last_trade_price, get_price_history, PRICE_HISTORY_LIMIT,
-    get_price_history_since, get_last_trade_price_before,
+    get_open_orders, get_last_trade_price,
     lock_company,
     upsert_char_count, compute_daily_revenue,
     get_weekly_revenue, get_weekly_revenue_total,
     update_treasury, set_company_level, get_shareholders,
-    get_avg_buy_price,
     remove_member_shares,
     process_dilution,
     refund_company_buy_orders,
@@ -93,14 +89,6 @@ class IPOScanView(discord.ui.View):
         self.stopped = True
         button.disabled = True
         await interaction.response.edit_message(view=self)
-
-
-# Time windows offered by the price-chart buttons: key -> (button label, chart subtitle, days)
-CHART_WINDOWS = {
-    "daily": ("Daily", "Past 24 hours", 1),
-    "weekly": ("Weekly", "Past 7 days", 7),
-    "monthly": ("Monthly", "Past 30 days", 30),
-}
 
 
 class StockChartView(discord.ui.View):
@@ -544,22 +532,20 @@ class Market(commands.Cog):
     @commands.command(aliases=['m', 'stocks', 'ex'])
     async def exchange(self, ctx):
         """List all companies on the exchange with best bid/ask and IPO availability."""
-        companies = await list_companies(self.pool, ctx.guild.id)
-        if not companies:
+        entries = await service.exchange_overview(self.pool, ctx.guild.id)
+        if not entries:
             await ctx.send("No companies are listed yet.")
             return
 
         cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title="Stock Exchange", color=discord.Color.blue())
-        for c in companies:
-            channel = ctx.guild.get_channel(c["stock_channel_id"])
-            name = channel.mention if channel else c["name"]
-            buy_orders = await get_open_orders(self.pool, ctx.guild.id, c["stock_channel_id"], "buy")
-            sell_orders = await get_open_orders(self.pool, ctx.guild.id, c["stock_channel_id"], "sell")
-            best_bid = f"{buy_orders[0]['price']:,}{cur.emoji}" if buy_orders else "None"
-            best_ask = f"{sell_orders[0]['price']:,}{cur.emoji}" if sell_orders else "None"
-            ipo_status = f" | IPO: {c['available_ipo_shares']:,}/{c['total_shares']:,} @ {c['ipo_price']:,}{cur.emoji}" if c["available_ipo_shares"] > 0 else ""
-            embed.add_field(name=f"{c['name']} ({name})", value=f"Bid: {best_bid} / Ask: {best_ask}{ipo_status}", inline=False)
+        for e in entries:
+            channel = ctx.guild.get_channel(e["stock_channel_id"])
+            name = channel.mention if channel else e["name"]
+            best_bid = f"{e['best_bid']:,}{cur.emoji}" if e["best_bid"] is not None else "None"
+            best_ask = f"{e['best_ask']:,}{cur.emoji}" if e["best_ask"] is not None else "None"
+            ipo_status = f" | IPO: {e['available_ipo_shares']:,}/{e['total_shares']:,} @ {e['ipo_price']:,}{cur.emoji}" if e["available_ipo_shares"] > 0 else ""
+            embed.add_field(name=f"{e['name']} ({name})", value=f"Bid: {best_bid} / Ask: {best_ask}{ipo_status}", inline=False)
 
         await ctx.send(embed=embed)
 
@@ -568,59 +554,34 @@ class Market(commands.Cog):
     async def portfolio(self, ctx, member: discord.Member = None):
         """Show your current holdings as well as how those evolve. Use with a member mention to see others portfolio."""
         member = member or ctx.author
-        holdings = await get_portfolio(self.pool, ctx.guild.id, member.id)
-        orders = await get_user_orders(self.pool, ctx.guild.id, member.id)
-        if not holdings and not orders:
+        overview = await service.portfolio_overview(self.pool, ctx.guild.id, member.id)
+        if not overview.holdings and not overview.orders:
             await ctx.send(f"{format_name(member)} has no holdings or open orders.")
             return
 
         cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title=f"{format_name(member)}'s Portfolio", color=discord.Color.green())
-        total_value = 0
-        total_cost = 0
-        total_divs = 0
-        for h in holdings:
-            company = await get_company(self.pool, ctx.guild.id, h["stock_channel_id"])
-            name = company["name"] if company else str(h["stock_channel_id"])
-            last_price = await get_last_trade_price(self.pool, ctx.guild.id, h["stock_channel_id"])
-            price = last_price or (company["ipo_price"] if company else 0)
-            avg_cost = await get_avg_buy_price(self.pool, ctx.guild.id, member.id, h["stock_channel_id"])
-            value = h["quantity"] * price
-            cost_basis = h["quantity"] * avg_cost
-            pl = value - cost_basis
-            total_value += value
-            total_cost += cost_basis
-            pl_str = f"+{pl:,}" if pl >= 0 else f"{pl:,}"
-            div_row = await self.pool.fetchrow(
-                """SELECT COALESCE(SUM(amount), 0) AS total FROM transactions
-                   WHERE guild_id = $1 AND user_id = $2 AND tx_type = 'dividend'
-                     AND description = $3""",
-                ctx.guild.id, member.id, f"Dividend from {name}",
-            )
-            divs = div_row["total"]
-            total_divs += divs
+        for h in overview.holdings:
+            pl_str = f"+{h['pl']:,}" if h["pl"] >= 0 else f"{h['pl']:,}"
             embed.add_field(
-                name=name,
-                value=f"{h['quantity']:,} shares @ {price:,}{cur.emoji} = {value:,}{cur.emoji}\n"
-                      f"Avg cost: {avg_cost:,}{cur.emoji} | P/L: {pl_str}{cur.emoji}\n"
-                      f"Dividends received: {divs:,}{cur.emoji}",
+                name=h["name"],
+                value=f"{h['quantity']:,} shares @ {h['price']:,}{cur.emoji} = {h['value']:,}{cur.emoji}\n"
+                      f"Avg cost: {h['avg_cost']:,}{cur.emoji} | P/L: {pl_str}{cur.emoji}\n"
+                      f"Dividends received: {h['dividends']:,}{cur.emoji}",
                 inline=False,
             )
-        total_pl = total_value - total_cost
-        total_pl_str = f"+{total_pl:,}" if total_pl >= 0 else f"{total_pl:,}"
+        total_pl_str = f"+{overview.total_pl:,}" if overview.total_pl >= 0 else f"{overview.total_pl:,}"
 
-        if orders:
+        if overview.orders:
             order_lines = []
-            for o in orders:
-                company = await get_company(self.pool, ctx.guild.id, o["stock_channel_id"])
-                stock_name = company["name"] if company else str(o["stock_channel_id"])
+            for o in overview.orders:
                 side = "BUY" if o["side"] == "buy" else "SELL"
-                order_lines.append(f"#{o['id']} {side} {o['remaining']:,}x {stock_name} @ {o['price']:,}{cur.emoji}")
+                order_lines.append(f"#{o['id']} {side} {o['remaining']:,}x {o['stock_name']} @ {o['price']:,}{cur.emoji}")
             embed.add_field(name="Open Orders", value="\n".join(order_lines), inline=False)
 
         embed.add_field(
             name="Summary",
-            value=f"Total value: {total_value:,}{cur.emoji} | Total P/L: {total_pl_str}{cur.emoji} | Total dividends: {total_divs:,}{cur.emoji}",
+            value=f"Total value: {overview.total_value:,}{cur.emoji} | Total P/L: {total_pl_str}{cur.emoji} | Total dividends: {overview.total_dividends:,}{cur.emoji}",
             inline=False,
         )
         await ctx.send(embed=embed)
@@ -658,35 +619,8 @@ class Market(commands.Cog):
         await ctx.send(embed=embed)
 
     async def _render_window(self, guild_id, channel, company, key):
-        """Render the price chart for a window key ('daily'/'weekly'/'monthly'/'all').
-
-        Returns a discord.File named ``price_<key>.png``, or None when there is nothing to draw.
-        Windowed views anchor the line at the last price before the window (falling back to the
-        IPO price) so the chart spans the whole period even with few or no recent trades.
-        """
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if key == "all":
-            history = await get_price_history(self.pool, guild_id, channel.id)
-            if not history:
-                return None
-            points = [(r["traded_at"], r["price"]) for r in history]
-            if len(history) < PRICE_HISTORY_LIMIT:
-                points.insert(0, (company["listed_at"], company["base_ipo_price"]))
-            period_label = "All time"
-        else:
-            _label, period_label, days = CHART_WINDOWS[key]
-            cutoff = max(now - datetime.timedelta(days=days), company["listed_at"])
-            rows = await get_price_history_since(self.pool, guild_id, channel.id, cutoff)
-            anchor = await get_last_trade_price_before(self.pool, guild_id, channel.id, cutoff)
-            if anchor is None:
-                anchor = company["base_ipo_price"]
-            points = [(cutoff, anchor)] + [(r["traded_at"], r["price"]) for r in rows]
-            if len(points) == 1:  # no trades in the window — draw a flat line across it
-                points.append((now, anchor))
-
-        loop = asyncio.get_running_loop()
-        buf = await loop.run_in_executor(None, render_price_chart, company["name"], points, period_label)
-        return discord.File(buf, filename=f"price_{key}.png")
+        """Render the price chart for a window key — see service.render_window."""
+        return await service.render_window(self.pool, guild_id, channel.id, company, key)
 
     @commands.command(aliases=['ci', 'cinfo'])
     async def companyinfo(self, ctx, stock: discord.TextChannel):
@@ -1215,114 +1149,14 @@ class Market(commands.Cog):
     @require_channel("trading_channel")
     async def marketbuy(self, ctx, stock: discord.TextChannel, quantity: int = 1):
         """Buy shares immediately at the best available price. Mention the stock channel and specify the quantity."""
-        if quantity <= 0:
-            await ctx.send("Quantity must be positive.")
-            return
+        result = await service.market_buy(self.pool, ctx.guild.id, ctx.author.id, stock.id, quantity, ctx.channel.id)
 
-        company = await get_company(self.pool, ctx.guild.id, stock.id)
-        if not company:
-            await ctx.send("This channel is not a listed company.")
-            return
-
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                await ensure_wallet(conn, ctx.guild.id, ctx.author.id)
-                bought = 0
-                total_cost = 0
-
-                company = await lock_company(conn, ctx.guild.id, stock.id)
-                sell_orders = await get_open_orders_locked(conn, ctx.guild.id, stock.id, "sell")
-                wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
-                remaining_funds = wallet["wallet"]
-
-                ipo_rem = company["available_ipo_shares"]
-                ipo_price = company["ipo_price"]
-                order_rems = {o["id"]: o["remaining"] for o in sell_orders}
-
-                while bought < quantity and remaining_funds > 0:
-                    need = quantity - bought
-
-                    # Find cheapest available sell order (skip own orders)
-                    best_order = None
-                    for o in sell_orders:
-                        if o["user_id"] == ctx.author.id:
-                            continue
-                        if order_rems[o["id"]] > 0:
-                            best_order = o
-                            break  # already sorted ASC, so first valid is cheapest
-
-                    has_ipo = ipo_rem > 0
-                    has_order = best_order is not None
-
-                    if not has_ipo and not has_order:
-                        break
-
-                    use_ipo = (has_ipo and not has_order) or (has_ipo and has_order and ipo_price <= best_order["price"])
-
-                    if use_ipo:
-                        fill_qty = min(need, ipo_rem, remaining_funds // ipo_price)
-                        if fill_qty <= 0:
-                            break
-                        cost = fill_qty * ipo_price
-                        await update_wallet(conn, ctx.guild.id, ctx.author.id, -cost)
-                        await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
-                        await conn.execute(
-                            "UPDATE companies SET available_ipo_shares = available_ipo_shares - $3 WHERE guild_id = $1 AND stock_channel_id = $2",
-                            ctx.guild.id, stock.id, fill_qty,
-                        )
-                        await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, None, fill_qty, ipo_price, "ipo")
-                        await update_treasury(conn, ctx.guild.id, stock.id, cost)
-                        bought += fill_qty
-                        total_cost += cost
-                        remaining_funds -= cost
-                        ipo_rem -= fill_qty
-                    else:
-                        order = best_order
-                        fill_qty = min(need, order_rems[order["id"]], remaining_funds // order["price"])
-                        if fill_qty <= 0:
-                            break
-                        seller_qty = await conn.fetchval(
-                            "SELECT COALESCE(quantity, 0) FROM portfolios WHERE guild_id = $1 AND user_id = $2 AND stock_channel_id = $3 FOR UPDATE",
-                            ctx.guild.id, order["user_id"], stock.id,
-                        )
-                        fill_qty = min(fill_qty, seller_qty or 0)
-                        if fill_qty <= 0:
-                            order_rems[order["id"]] = 0
-                            continue
-                        cost = fill_qty * order["price"]
-                        await update_wallet(conn, ctx.guild.id, ctx.author.id, -cost)
-                        await ensure_wallet(conn, ctx.guild.id, order["user_id"])
-                        await update_wallet(conn, ctx.guild.id, order["user_id"], cost)
-                        try:
-                            await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
-                        except ValueError:
-                            order_rems[order["id"]] = 0
-                        await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
-                        await conn.execute(
-                            "UPDATE orders SET remaining = remaining - $2 WHERE id = $1",
-                            order["id"], fill_qty,
-                        )
-                        await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, order["user_id"], fill_qty, order["price"], "market")
-                        await add_transaction(conn, ctx.guild.id, order["user_id"], cost, "market_sell", f"Sold {fill_qty}x {company['name']}")
-                        bought += fill_qty
-                        total_cost += cost
-                        remaining_funds -= cost
-                        order_rems[order["id"]] -= fill_qty
-
-                if bought > 0:
-                    await add_transaction(conn, ctx.guild.id, ctx.author.id, -total_cost, "market_buy", f"Bought {bought}x {company['name']}")
-
-        if bought == 0:
-            await ctx.send(f"Could not buy any shares of **{company['name']}**. No shares available or insufficient funds.")
-            return
-
-        avg_price = total_cost // bought
         cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title="Market Buy", color=discord.Color.green())
-        embed.add_field(name="Stock", value=company["name"], inline=True)
-        embed.add_field(name="Bought", value=f"{bought:,}/{quantity:,}", inline=True)
-        embed.add_field(name="Avg Price", value=f"{avg_price:,}{cur.emoji}", inline=True)
-        embed.add_field(name="Total Cost", value=f"{total_cost:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Stock", value=result.company_name, inline=True)
+        embed.add_field(name="Bought", value=f"{result.filled:,}/{result.quantity:,}", inline=True)
+        embed.add_field(name="Avg Price", value=f"{result.avg_price:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Total Cost", value=f"{result.total:,}{cur.emoji}", inline=True)
         await ctx.send(embed=embed)
 
     @commands.command(aliases=['ms', 'msell'])
@@ -1330,67 +1164,14 @@ class Market(commands.Cog):
     @require_channel("trading_channel")
     async def marketsell(self, ctx, stock: discord.TextChannel, quantity: int = 1):
         """Sell shares immediately at the best available price. Mention the stock channel and specify the quantity."""
-        if quantity <= 0:
-            await ctx.send("Quantity must be positive.")
-            return
+        result = await service.market_sell(self.pool, ctx.guild.id, ctx.author.id, stock.id, quantity, ctx.channel.id)
 
-        company = await get_company(self.pool, ctx.guild.id, stock.id)
-        if not company:
-            await ctx.send("This channel is not a listed company.")
-            return
-
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                holding = await lock_holding(conn, ctx.guild.id, ctx.author.id, stock.id)
-                escrowed = await get_escrowed_shares(conn, ctx.guild.id, ctx.author.id, stock.id)
-                available = holding - escrowed
-                if available < quantity:
-                    await ctx.send(f"You only have {available:,} available shares of **{company['name']}** ({holding:,} held, {escrowed:,} in open sell orders).")
-                    return
-
-                sold = 0
-                total_revenue = 0
-
-                buy_orders = await get_open_orders_locked(conn, ctx.guild.id, stock.id, "buy")
-                for order in buy_orders:
-                    if sold >= quantity:
-                        break
-                    if order["user_id"] == ctx.author.id:
-                        continue
-
-                    fill_qty = min(quantity - sold, order["remaining"])
-                    revenue = fill_qty * order["price"]
-
-                    await update_wallet(conn, ctx.guild.id, ctx.author.id, revenue)
-                    try:
-                        await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -fill_qty)
-                    except ValueError:
-                        continue
-                    await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, fill_qty)
-                    await conn.execute(
-                        "UPDATE orders SET remaining = remaining - $2 WHERE id = $1",
-                        order["id"], fill_qty,
-                    )
-                    await add_trade(conn, ctx.guild.id, stock.id, order["user_id"], ctx.author.id, fill_qty, order["price"], "market")
-                    await add_transaction(conn, ctx.guild.id, order["user_id"], -revenue, "market_buy", f"Bought {fill_qty}x {company['name']}")
-
-                    sold += fill_qty
-                    total_revenue += revenue
-
-                if sold > 0:
-                    await add_transaction(conn, ctx.guild.id, ctx.author.id, total_revenue, "market_sell", f"Sold {sold}x {company['name']}")
-
-        if sold == 0:
-            await ctx.send(f"No buy orders available for **{company['name']}**. Place a sell order instead with `sellorder`.")
-            return
-
-        avg_price = total_revenue // sold
         cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title="Market Sell", color=discord.Color.red())
-        embed.add_field(name="Stock", value=company["name"], inline=True)
-        embed.add_field(name="Sold", value=f"{sold:,}/{quantity:,}", inline=True)
-        embed.add_field(name="Avg Price", value=f"{avg_price:,}{cur.emoji}", inline=True)
-        embed.add_field(name="Total Revenue", value=f"{total_revenue:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Stock", value=result.company_name, inline=True)
+        embed.add_field(name="Sold", value=f"{result.filled:,}/{result.quantity:,}", inline=True)
+        embed.add_field(name="Avg Price", value=f"{result.avg_price:,}{cur.emoji}", inline=True)
+        embed.add_field(name="Total Revenue", value=f"{result.total:,}{cur.emoji}", inline=True)
         await ctx.send(embed=embed)
 
     # ── Limit orders ──
@@ -1401,107 +1182,13 @@ class Market(commands.Cog):
     async def buyorder(self, ctx, stock: discord.TextChannel, quantity: int, price: str):
         """Place a limit buy order. The order will execute as soon as a matching sell order is placed at or below your specified price. Use by mentioning channel, then quantity and highest price you are paying."""
         cur = self.bot.get_currency(ctx.guild.id)
-        try:
-            price = parse_amount(price)
-        except AmountError as e:
-            await ctx.send(str(e))
-            return
-        if quantity <= 0:
-            await ctx.send("Quantity must be positive.")
-            return
+        result = await service.place_buy_order(self.pool, ctx.guild.id, ctx.author.id, stock.id, quantity, price, ctx.channel.id)
 
-        company = await get_company(self.pool, ctx.guild.id, stock.id)
-        if not company:
-            await ctx.send("This channel is not a listed company.")
-            return
-
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                total_cost = quantity * price
-                await ensure_wallet(conn, ctx.guild.id, ctx.author.id)
-                wallet = await lock_wallet(conn, ctx.guild.id, ctx.author.id)
-                if wallet["wallet"] < total_cost:
-                    await ctx.send(f"You need {total_cost:,}{cur.emoji} to place this order but only have {wallet['wallet']:,}{cur.emoji}.")
-                    return
-
-                await update_wallet(conn, ctx.guild.id, ctx.author.id, -total_cost)
-
-                filled = 0
-                spent = 0
-                company_locked = await lock_company(conn, ctx.guild.id, stock.id)
-                sell_orders = await get_open_orders_locked(conn, ctx.guild.id, stock.id, "sell")
-                for order in sell_orders:
-                    if filled >= quantity:
-                        break
-                    if order["user_id"] == ctx.author.id:
-                        continue
-                    if order["price"] > price:
-                        break
-
-                    fill_qty = min(quantity - filled, order["remaining"])
-
-                    # Lock seller's portfolio and cap fill_qty at what they actually hold
-                    seller_qty = await conn.fetchval(
-                        "SELECT COALESCE(quantity, 0) FROM portfolios WHERE guild_id = $1 AND user_id = $2 AND stock_channel_id = $3 FOR UPDATE",
-                        ctx.guild.id, order["user_id"], stock.id,
-                    )
-                    fill_qty = min(fill_qty, seller_qty or 0)
-                    if fill_qty <= 0:
-                        continue
-
-                    fill_cost = fill_qty * order["price"]
-
-                    await ensure_wallet(conn, ctx.guild.id, order["user_id"])
-                    await update_wallet(conn, ctx.guild.id, order["user_id"], fill_cost)
-                    refund = fill_qty * (price - order["price"])
-                    if refund > 0:
-                        await update_wallet(conn, ctx.guild.id, ctx.author.id, refund)
-
-                    try:
-                        await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, -fill_qty)
-                    except ValueError:
-                        continue
-                    await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
-                    await conn.execute(
-                        "UPDATE orders SET remaining = remaining - $2 WHERE id = $1",
-                        order["id"], fill_qty,
-                    )
-                    await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, order["user_id"], fill_qty, order["price"], "limit")
-                    await add_transaction(conn, ctx.guild.id, order["user_id"], fill_cost, "market_sell", f"Sold {fill_qty}x {company['name']} via limit")
-
-                    filled += fill_qty
-                    spent += fill_cost
-
-                # Fill remaining quantity from IPO if price allows
-                ipo_rem = company_locked["available_ipo_shares"]
-                ipo_price_val = company_locked["ipo_price"]
-                if filled < quantity and ipo_rem > 0 and ipo_price_val <= price:
-                    fill_qty = min(quantity - filled, ipo_rem)
-                    fill_cost = fill_qty * ipo_price_val
-                    refund = fill_qty * (price - ipo_price_val)
-                    if refund > 0:
-                        await update_wallet(conn, ctx.guild.id, ctx.author.id, refund)
-                    await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, fill_qty)
-                    await conn.execute(
-                        "UPDATE companies SET available_ipo_shares = available_ipo_shares - $3 WHERE guild_id = $1 AND stock_channel_id = $2",
-                        ctx.guild.id, stock.id, fill_qty,
-                    )
-                    await add_trade(conn, ctx.guild.id, stock.id, ctx.author.id, None, fill_qty, ipo_price_val, "ipo")
-                    await update_treasury(conn, ctx.guild.id, stock.id, fill_cost)
-                    filled += fill_qty
-                    spent += fill_cost
-
-                remaining = quantity - filled
-                if remaining > 0:
-                    row = await create_order(conn, ctx.guild.id, stock.id, ctx.author.id, "buy", remaining, price)
-                if filled > 0:
-                    await add_transaction(conn, ctx.guild.id, ctx.author.id, -spent, "market_buy", f"Bought {filled}x {company['name']} via limit")
-
-        if remaining > 0:
-            await ctx.send(f"Buy order placed: {remaining:,}x **{company['name']}** @ {price:,}{cur.emoji} (Order #{row['id']})" +
-                           (f"\n{filled:,} shares filled immediately." if filled > 0 else ""))
+        if result.remaining > 0:
+            await ctx.send(f"Buy order placed: {result.remaining:,}x **{result.company_name}** @ {result.price:,}{cur.emoji} (Order #{result.order_id})" +
+                           (f"\n{result.filled:,} shares filled immediately." if result.filled > 0 else ""))
         else:
-            await ctx.send(f"Buy order fully filled! Bought {filled:,}x **{company['name']}** for {spent:,}{cur.emoji}.")
+            await ctx.send(f"Buy order fully filled! Bought {result.filled:,}x **{result.company_name}** for {result.total:,}{cur.emoji}.")
 
     @commands.command(aliases=['so', 'sorder'])
     @require_not_locked()
@@ -1509,114 +1196,25 @@ class Market(commands.Cog):
     async def sellorder(self, ctx, stock: discord.TextChannel, quantity: int, price: str):
         """Place a limit sell order. The order will execute as soon as a matching buy order is placed at or above your specified price. Use by mentioning channel, then quantity and lowest price you are accepting."""
         cur = self.bot.get_currency(ctx.guild.id)
-        try:
-            price = parse_amount(price)
-        except AmountError as e:
-            await ctx.send(str(e))
-            return
-        if quantity <= 0:
-            await ctx.send("Quantity must be positive.")
-            return
+        result = await service.place_sell_order(self.pool, ctx.guild.id, ctx.author.id, stock.id, quantity, price, ctx.channel.id)
 
-        company = await get_company(self.pool, ctx.guild.id, stock.id)
-        if not company:
-            await ctx.send("This channel is not a listed company.")
-            return
-
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                holding = await lock_holding(conn, ctx.guild.id, ctx.author.id, stock.id)
-                escrowed = await get_escrowed_shares(conn, ctx.guild.id, ctx.author.id, stock.id)
-                available = holding - escrowed
-                if available < quantity:
-                    await ctx.send(f"You only have {available:,} available shares of **{company['name']}** ({holding:,} held, {escrowed:,} in open sell orders).")
-                    return
-
-                filled = 0
-                revenue = 0
-                buy_orders = await get_open_orders_locked(conn, ctx.guild.id, stock.id, "buy")
-                for order in buy_orders:
-                    if filled >= quantity:
-                        break
-                    if order["user_id"] == ctx.author.id:
-                        continue
-                    if order["price"] < price:
-                        break
-
-                    fill_qty = min(quantity - filled, order["remaining"])
-                    fill_revenue = fill_qty * order["price"]
-
-                    await update_wallet(conn, ctx.guild.id, ctx.author.id, fill_revenue)
-                    try:
-                        await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -fill_qty)
-                    except ValueError:
-                        continue
-                    await update_holding(conn, ctx.guild.id, order["user_id"], stock.id, fill_qty)
-                    await conn.execute(
-                        "UPDATE orders SET remaining = remaining - $2 WHERE id = $1",
-                        order["id"], fill_qty,
-                    )
-                    await add_trade(conn, ctx.guild.id, stock.id, order["user_id"], ctx.author.id, fill_qty, order["price"], "limit")
-                    await add_transaction(conn, ctx.guild.id, order["user_id"], -fill_revenue, "market_buy", f"Bought {fill_qty}x {company['name']} via limit")
-
-                    filled += fill_qty
-                    revenue += fill_revenue
-
-                remaining = quantity - filled
-                if remaining > 0:
-                    row = await create_order(conn, ctx.guild.id, stock.id, ctx.author.id, "sell", remaining, price)
-                if filled > 0:
-                    await add_transaction(conn, ctx.guild.id, ctx.author.id, revenue, "market_sell", f"Sold {filled}x {company['name']} via limit")
-
-        if remaining > 0:
-            await ctx.send(f"Sell order placed: {remaining:,}x **{company['name']}** @ {price:,}{cur.emoji} (Order #{row['id']})" +
-                           (f"\n{filled:,} shares filled immediately." if filled > 0 else ""))
+        if result.remaining > 0:
+            await ctx.send(f"Sell order placed: {result.remaining:,}x **{result.company_name}** @ {result.price:,}{cur.emoji} (Order #{result.order_id})" +
+                           (f"\n{result.filled:,} shares filled immediately." if result.filled > 0 else ""))
         else:
-            await ctx.send(f"Sell order fully filled! Sold {filled:,}x **{company['name']}** for {revenue:,}{cur.emoji}.")
+            await ctx.send(f"Sell order fully filled! Sold {result.filled:,}x **{result.company_name}** for {result.total:,}{cur.emoji}.")
 
     @commands.command(aliases=['gs', 'giftstock'])
     @require_not_locked()
     @require_channel("trading_channel")
     async def giftstocks(self, ctx, member: discord.Member, stock: discord.TextChannel, quantity: int = 1):
         """Gift shares to another member for free. Usage: .giftstocks @member #stock-channel [quantity]"""
-        if member.bot:
-            await ctx.send("You cannot gift stocks to a bot.")
-            return
-        if member == ctx.author:
-            await ctx.send("You cannot gift stocks to yourself.")
-            return
-        if quantity <= 0:
-            await ctx.send("Quantity must be positive.")
-            return
-
-        company = await get_company(self.pool, ctx.guild.id, stock.id)
-        if not company:
-            await ctx.send("This channel is not a listed company.")
-            return
-
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                holding = await lock_holding(conn, ctx.guild.id, ctx.author.id, stock.id)
-                escrowed = await get_escrowed_shares(conn, ctx.guild.id, ctx.author.id, stock.id)
-                available = holding - escrowed
-                if available < quantity:
-                    await ctx.send(
-                        f"You only have {available:,} available shares of **{company['name']}** "
-                        f"({holding:,} held, {escrowed:,} in open sell orders)."
-                    )
-                    return
-
-                await update_holding(conn, ctx.guild.id, ctx.author.id, stock.id, -quantity)
-                await update_holding(conn, ctx.guild.id, member.id, stock.id, quantity)
-                await add_transaction(conn, ctx.guild.id, ctx.author.id, 0, "gift_send",
-                                      f"Gifted {quantity}x {company['name']} to {format_name(member)}")
-                await add_transaction(conn, ctx.guild.id, member.id, 0, "gift_receive",
-                                      f"Received {quantity}x {company['name']} from {format_name(ctx.author)}")
+        company_name = await service.gift_stocks(self.pool, ctx.guild.id, ctx.author, member, stock.id, quantity, ctx.channel.id)
 
         embed = discord.Embed(title="Stocks Gifted", color=discord.Color.purple())
         embed.add_field(name="From", value=format_name(ctx.author), inline=True)
         embed.add_field(name="To", value=format_name(member), inline=True)
-        embed.add_field(name="Stock", value=company["name"], inline=True)
+        embed.add_field(name="Stock", value=company_name, inline=True)
         embed.add_field(name="Quantity", value=str(quantity), inline=True)
         await ctx.send(embed=embed)
 
@@ -1626,16 +1224,7 @@ class Market(commands.Cog):
     async def cancelorder(self, ctx, order_id: int):
         """Cancel an open order by its ID. Use the `orderbook` command to see order IDs."""
         cur = self.bot.get_currency(ctx.guild.id)
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                order = await cancel_order(conn, ctx.guild.id, order_id, ctx.author.id)
-                if not order:
-                    await ctx.send("Order not found or already filled.")
-                    return
-
-                if order["side"] == "buy":
-                    refund = order["remaining"] * order["price"]
-                    await update_wallet(conn, ctx.guild.id, ctx.author.id, refund)
+        order, refund = await service.cancel_user_order(self.pool, ctx.guild.id, ctx.author.id, order_id, ctx.channel.id)
 
         if order["side"] == "buy":
             await ctx.send(f"Buy order #{order_id} cancelled. Refunded {refund:,}{cur.emoji}.")

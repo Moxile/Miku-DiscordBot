@@ -3,23 +3,17 @@ import math
 import discord
 from discord.ext import commands
 
+from cogs.economy import service
 from cogs.economy.db import (
     ensure_wallet, update_wallet, update_bank, add_transaction, remove_member_data,
-    set_salary_role, remove_salary_role, list_salary_roles, get_salary_roles_for,
+    set_salary_role, remove_salary_role, list_salary_roles,
 )
 from cogs.market.db import remove_member_shares, create_company
 from core.money import parse_amount, AmountError
 from core.time_utils import parse_duration, humanize_duration
 from core.confirm import confirm
-from config import REVENUE_BASE_MULTIPLIER
+from config import REVENUE_BASE_MULTIPLIER, WORK_COOLDOWN
 
-import datetime
-import secrets
-
-from config import (
-    WORK_COOLDOWN, CRIME_COOLDOWN, DEFAULT_CRIME_SUCCESS_RATE, DEFAULT_CRIME_PENALTY_PCT,
-    CRIME_MIN_PAYOUT, CRIME_MAX_PAYOUT, CRIME_PAYOUT_EXPONENT,
-)
 from core.currency import Currency
 from core.checks import require_channel, invalidate, require_not_locked, invalidate_lock
 from core.names import format_name
@@ -101,22 +95,7 @@ class Economy(commands.Cog):
     @require_not_locked()
     async def deposit(self, ctx, amount: str):
         """Deposit money from you wallet into your banj account. You can specify and amount or use 'all' to deposit everything."""
-        bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-        wallet = bal["wallet"]
-        try:
-            amount = parse_amount(amount, wallet_balance=wallet)
-        except AmountError as e:
-            await ctx.send(str(e))
-            return
-
-        if wallet < amount:
-            await ctx.send("You can't deposit more than you have in your wallet!")
-            return
-
-        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -amount)
-        await update_bank(self.pool, ctx.guild.id, ctx.author.id, amount)
-        await add_transaction(self.pool, ctx.guild.id, ctx.author.id, amount, "deposit")
-
+        amount = await service.deposit(self.pool, ctx.guild.id, ctx.author.id, amount)
         cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title="Deposit", description=f"You deposited {amount}{cur.emoji} into your bank account!", color=discord.Color.blue())
         await ctx.send(embed=embed)
@@ -125,22 +104,7 @@ class Economy(commands.Cog):
     @require_not_locked()
     async def withdraw(self, ctx, amount: str):
         """Withdraw money from your bank account into your wallet. You can specify and amount or use 'all' to withdraw everything."""
-        bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-        bank = bal["bank"]
-        try:
-            amount = parse_amount(amount, wallet_balance=bank)
-        except AmountError as e:
-            await ctx.send(str(e))
-            return
-
-        if bank < amount:
-            await ctx.send("You can't withdraw more than you have in your bank account!")
-            return
-
-        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, amount)
-        await update_bank(self.pool, ctx.guild.id, ctx.author.id, -amount)
-        await add_transaction(self.pool, ctx.guild.id, ctx.author.id, amount, "withdraw")
-
+        amount = await service.withdraw(self.pool, ctx.guild.id, ctx.author.id, amount)
         cur = self.bot.get_currency(ctx.guild.id)
         embed = discord.Embed(title="Withdraw", description=f"You withdrew {amount}{cur.emoji} from your bank account!", color=discord.Color.blue())
         await ctx.send(embed=embed)
@@ -168,38 +132,10 @@ class Economy(commands.Cog):
     @require_channel("work_channel")
     async def work(self, ctx):
         """Work to earn some money"""
-        cooldown = await self.pool.fetchval(
-                    "SELECT expires_at FROM cooldowns WHERE guild_id = $1 AND user_id = $2 AND command = 'work' AND expires_at > now()",
-                    ctx.guild.id, ctx.author.id,
-                )
-
-        if cooldown is None:
-            earnings = secrets.randbelow(201) + 100
-            await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, earnings)
-            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, earnings, "work", "Earnings from work")
-            work_cooldown_seconds = await self.pool.fetchval(
-                "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = 'work_cooldown'",
-                ctx.guild.id,
-            )
-            work_cooldown_seconds = int(work_cooldown_seconds) if work_cooldown_seconds is not None else WORK_COOLDOWN
-            await self.pool.execute(
-                """
-                INSERT INTO cooldowns (guild_id, user_id, command, expires_at)
-                VALUES ($1, $2, 'work', $3)
-                ON CONFLICT (guild_id, user_id, command) DO UPDATE SET expires_at = EXCLUDED.expires_at
-                """,
-                ctx.guild.id, ctx.author.id, datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=work_cooldown_seconds)
-            )
-
-            cur = self.bot.get_currency(ctx.guild.id)
-            embed = discord.Embed(title="Work", description=f"You earned {earnings}{cur.emoji} from your work!", color=discord.Color.blue())
-            await ctx.send(embed=embed)
-            return
-
-        remaining = cooldown - datetime.datetime.now(datetime.timezone.utc)
-        minutes, seconds = divmod(int(remaining.total_seconds()), 60)
-        await ctx.send(f"You need to wait *{minutes}m {seconds}s* before you can work again.")
+        earnings = await service.work(self.pool, ctx.guild.id, ctx.author.id, ctx.channel.id)
+        cur = self.bot.get_currency(ctx.guild.id)
+        embed = discord.Embed(title="Work", description=f"You earned {earnings}{cur.emoji} from your work!", color=discord.Color.blue())
+        await ctx.send(embed=embed)
 
     @commands.command()
     @commands.is_owner()
@@ -246,56 +182,21 @@ class Economy(commands.Cog):
     @require_channel("work_channel")
     async def collect(self, ctx):
         """Collect the salary for every salaried role you hold whose timer is ready."""
-        role_ids = [r.id for r in ctx.author.roles]
-        salary_roles = await get_salary_roles_for(self.pool, ctx.guild.id, role_ids)
-        if not salary_roles:
-            await ctx.send("None of your roles pay a salary.")
-            return
-
-        now = datetime.datetime.now(datetime.timezone.utc)
-        await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-
-        collected = []   # (role_name, amount)
-        on_cooldown = []  # (role_name, remaining_seconds)
-        total = 0
-        for sr in salary_roles:
-            role = ctx.guild.get_role(sr["role_id"])
-            role_name = role.name if role else f"role {sr['role_id']}"
-            command = f"collect:{sr['role_id']}"
-            expires_at = await self.pool.fetchval(
-                "SELECT expires_at FROM cooldowns WHERE guild_id = $1 AND user_id = $2 AND command = $3 AND expires_at > now()",
-                ctx.guild.id, ctx.author.id, command,
-            )
-            if expires_at is not None:
-                on_cooldown.append((role_name, (expires_at - now).total_seconds()))
-                continue
-
-            amount = sr["amount"]
-            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, amount)
-            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, amount, "salary", f"Salary for {role_name}")
-            await self.pool.execute(
-                """INSERT INTO cooldowns (guild_id, user_id, command, expires_at)
-                   VALUES ($1, $2, $3, $4)
-                   ON CONFLICT (guild_id, user_id, command) DO UPDATE SET expires_at = EXCLUDED.expires_at""",
-                ctx.guild.id, ctx.author.id, command, now + datetime.timedelta(seconds=sr["interval_seconds"]),
-            )
-            collected.append((role_name, amount))
-            total += amount
-
-        if collected:
+        result = await service.collect(self.pool, ctx.guild, ctx.author, ctx.channel.id)
+        if result.collected:
             cur = self.bot.get_currency(ctx.guild.id)
             embed = discord.Embed(title="Salary Collected", color=discord.Color.green())
-            embed.description = "\n".join(f"**{name}** — +{amt:,}{cur.emoji}" for name, amt in collected)
-            embed.add_field(name="Total", value=f"{total:,}{cur.emoji}")
-            if on_cooldown:
+            embed.description = "\n".join(f"**{name}** — +{amt:,}{cur.emoji}" for name, amt in result.collected)
+            embed.add_field(name="Total", value=f"{result.total:,}{cur.emoji}")
+            if result.on_cooldown:
                 embed.add_field(
                     name="Not ready yet",
-                    value="\n".join(f"**{name}** — in {humanize_duration(rem, short=True)}" for name, rem in on_cooldown),
+                    value="\n".join(f"**{name}** — in {humanize_duration(rem, short=True)}" for name, rem in result.on_cooldown),
                     inline=False,
                 )
             await ctx.send(embed=embed)
         else:
-            soonest = min(on_cooldown, key=lambda x: x[1])
+            soonest = min(result.on_cooldown, key=lambda x: x[1])
             await ctx.send(
                 f"You've already collected all your salaries. Next up: **{soonest[0]}** in "
                 f"*{humanize_duration(soonest[1], short=True)}*."
@@ -307,18 +208,6 @@ class Economy(commands.Cog):
         await self._show_salary_roles(ctx)
 
     # ── Crime ──
-
-    async def _get_crime_config(self, guild_id: int) -> tuple[int, int]:
-        """Return (success_rate, penalty_pct) for this guild, falling back to defaults."""
-        rows = await self.pool.fetch(
-            "SELECT key, value FROM guild_settings WHERE guild_id = $1 AND key = ANY($2)",
-            guild_id, ["crime_success_rate", "crime_penalty_pct"],
-        )
-        settings = {r["key"]: int(r["value"]) for r in rows}
-        return (
-            settings.get("crime_success_rate", DEFAULT_CRIME_SUCCESS_RATE),
-            settings.get("crime_penalty_pct", DEFAULT_CRIME_PENALTY_PCT),
-        )
 
     async def _set_crime_setting(self, guild_id: int, key: str, value: int):
         await self.pool.execute(
@@ -332,73 +221,32 @@ class Economy(commands.Cog):
     @require_channel("work_channel")
     async def crime(self, ctx):
         """Commit a crime: a chance at a big payout, but risk losing a cut of your total money."""
-        now = datetime.datetime.now(datetime.timezone.utc)
-        cooldown = await self.pool.fetchval(
-            "SELECT expires_at FROM cooldowns WHERE guild_id = $1 AND user_id = $2 AND command = 'crime' AND expires_at > now()",
-            ctx.guild.id, ctx.author.id,
-        )
-        if cooldown is not None:
-            remaining = cooldown - now
-            minutes, seconds = divmod(int(remaining.total_seconds()), 60)
-            await ctx.send(f"You're laying low after your last job. Wait *{minutes}m {seconds}s* before your next crime.")
-            return
-
-        success_rate, penalty_pct = await self._get_crime_config(ctx.guild.id)
-        bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        result = await service.crime(self.pool, ctx.guild.id, ctx.author.id, ctx.channel.id)
         cur = self.bot.get_currency(ctx.guild.id)
 
-        # Start the cooldown regardless of the outcome.
-        await self.pool.execute(
-            """INSERT INTO cooldowns (guild_id, user_id, command, expires_at)
-               VALUES ($1, $2, 'crime', $3)
-               ON CONFLICT (guild_id, user_id, command) DO UPDATE SET expires_at = EXCLUDED.expires_at""",
-            ctx.guild.id, ctx.author.id, now + datetime.timedelta(seconds=CRIME_COOLDOWN),
-        )
-
-        if secrets.randbelow(100) < success_rate:
-            # Skew the payout toward CRIME_MIN_PAYOUT: a uniform roll raised to an
-            # exponent makes large payouts increasingly unlikely.
-            roll = secrets.randbelow(1_000_000) / 1_000_000
-            span = CRIME_MAX_PAYOUT - CRIME_MIN_PAYOUT
-            payout = CRIME_MIN_PAYOUT + int(span * (roll ** CRIME_PAYOUT_EXPONENT))
-            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, payout)
-            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, payout, "crime", "Successful crime")
+        if result.success:
             embed = discord.Embed(
                 title="Crime — Success 🤑",
-                description=f"You pulled it off and got away with **{payout:,}**{cur.emoji}!",
+                description=f"You pulled it off and got away with **{result.payout:,}**{cur.emoji}!",
                 color=discord.Color.green(),
             )
-            await ctx.send(embed=embed)
-            return
-
-        # Failure: lose penalty_pct of total money, taken from the wallet first then the bank.
-        total = bal["wallet"] + bal["bank"]
-        loss = total * penalty_pct // 100
-        from_wallet = min(loss, bal["wallet"])
-        from_bank = loss - from_wallet
-        if from_wallet > 0:
-            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -from_wallet)
-        if from_bank > 0:
-            await update_bank(self.pool, ctx.guild.id, ctx.author.id, -from_bank)
-        if loss > 0:
-            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, -loss, "crime", "Failed crime")
-
-        embed = discord.Embed(
-            title="Crime — Busted 🚔",
-            description=(
-                f"You got caught and lost **{loss:,}**{cur.emoji} ({penalty_pct}% of your total wallet + bank)."
-                if loss > 0 else
-                "You got caught — lucky for you, you had nothing worth taking."
-            ),
-            color=discord.Color.red(),
-        )
+        else:
+            embed = discord.Embed(
+                title="Crime — Busted 🚔",
+                description=(
+                    f"You got caught and lost **{result.loss:,}**{cur.emoji} ({result.penalty_pct}% of your total wallet + bank)."
+                    if result.loss > 0 else
+                    "You got caught — lucky for you, you had nothing worth taking."
+                ),
+                color=discord.Color.red(),
+            )
         await ctx.send(embed=embed)
 
     @commands.group(invoke_without_command=True)
     @commands.is_owner()
     async def crimeconfig(self, ctx):
         """Owner: view or change the `.crime` success rate and failure penalty."""
-        rate, penalty = await self._get_crime_config(ctx.guild.id)
+        rate, penalty = await service.get_crime_config(self.pool, ctx.guild.id)
         embed = discord.Embed(title="Crime Settings", color=discord.Color.dark_red())
         embed.add_field(name="Success rate", value=f"{rate}%")
         embed.add_field(name="Failure penalty", value=f"{penalty}% of total")
@@ -493,21 +341,7 @@ class Economy(commands.Cog):
     @require_not_locked()
     async def gift(self, ctx, member: discord.Member, amount: str):
         """Gift money from your wallet to another user's wallet. You must mention the recipient and specify the amount."""
-        bal = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
-        try:
-            amount = parse_amount(amount, wallet_balance=bal["wallet"])
-        except AmountError as e:
-            await ctx.send(str(e))
-            return
-        if bal["wallet"] < amount:
-            await ctx.send("You can't give more than you have in your wallet!")
-            return
-
-        await ensure_wallet(self.pool, ctx.guild.id, member.id)
-        await update_wallet(self.pool, ctx.guild.id, ctx.author.id, -amount)
-        await update_wallet(self.pool, ctx.guild.id, member.id, amount)
-        await add_transaction(self.pool, ctx.guild.id, ctx.author.id, -amount, "gift", f"Gift to {member}")
-        await add_transaction(self.pool, ctx.guild.id, member.id, amount, "gift", f"Gift from {ctx.author}")
+        amount = await service.gift(self.pool, ctx.guild.id, ctx.author, member, amount)
         cur = self.bot.get_currency(ctx.guild.id)
         await ctx.send(f"You gifted {amount}{cur.emoji} to {member.mention}!")
 
@@ -536,44 +370,15 @@ class Economy(commands.Cog):
                 return
 
         if show_counting_detail:
-            rows = await self.pool.fetch(
-                """SELECT amount, tx_type, description, created_at FROM transactions
-                   WHERE guild_id = $1 AND user_id = $2 AND tx_type = 'counting'
-                   ORDER BY created_at DESC""",
-                ctx.guild.id, member.id,
-            )
+            rows, _ = await service.fetch_transactions(self.pool, ctx.guild.id, member.id, counting_detail=True)
             if not rows:
                 await ctx.send(f"{format_name(member)} has no counting transactions.")
                 return
-            rows = [dict(r) for r in rows]
             view = TransactionPaginator(rows, member, ctx.author.id, self.bot.get_currency(ctx.guild.id))
             await ctx.send(embed=view.build_embed(), view=view)
             return
 
-        other_rows = await self.pool.fetch(
-            """SELECT amount, tx_type, description, created_at FROM transactions
-               WHERE guild_id = $1 AND user_id = $2 AND tx_type != 'counting'
-               ORDER BY created_at DESC""",
-            ctx.guild.id, member.id,
-        )
-        counting_agg = await self.pool.fetchrow(
-            """SELECT COALESCE(SUM(amount), 0) AS amount, COUNT(*) AS cnt, MAX(created_at) AS created_at
-               FROM transactions
-               WHERE guild_id = $1 AND user_id = $2 AND tx_type = 'counting'""",
-            ctx.guild.id, member.id,
-        )
-
-        rows = [dict(r) for r in other_rows]
-        has_counting = counting_agg and counting_agg["cnt"] > 0
-        if has_counting:
-            rows.append({
-                "amount": counting_agg["amount"],
-                "tx_type": "counting",
-                "description": f"counting ×{counting_agg['cnt']}",
-                "created_at": counting_agg["created_at"],
-            })
-            rows.sort(key=lambda r: r["created_at"], reverse=True)
-
+        rows, has_counting = await service.fetch_transactions(self.pool, ctx.guild.id, member.id)
         if not rows:
             await ctx.send(f"{format_name(member)} has no transactions.")
             return

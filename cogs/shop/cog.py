@@ -3,11 +3,11 @@ import math
 import discord
 from discord.ext import commands, tasks
 
-from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
+from cogs.shop import service
 from cogs.shop.db import (
     create_item, delete_item, get_item_by_name, get_item_by_id, get_shop_items,
-    get_inventory, add_to_inventory, remove_member_data,
-    grant_temp_role, get_expired_temp_roles, delete_temp_role,
+    get_inventory, remove_member_data,
+    get_expired_temp_roles, delete_temp_role,
 )
 from core.checks import require_not_locked, user_is_locked
 from core.money import parse_amount, AmountError
@@ -189,40 +189,8 @@ class Shop(commands.Cog):
                 await remove_member_data(conn, member.guild.id, member.id)
 
     async def _purchase(self, guild: discord.Guild, member: discord.Member, item):
-        """Run a purchase for `member`. Returns (success, message).
-
-        Shared by the `.buy` command and the shop buy buttons. For role items the
-        role is assigned before charging, so a failed grant never costs Flowers.
-        """
-        cur = self.bot.get_currency(guild.id)
-        wallet = await ensure_wallet(self.pool, guild.id, member.id)
-        if wallet["wallet"] < item["price"]:
-            return False, f"You don't have enough! You need {item['price']:,}{cur.emoji}."
-
-        if item["item_type"] == "role" and item["role_given"]:
-            role = guild.get_role(item["role_given"])
-            if not role:
-                return False, "The role for this item no longer exists."
-            # Permanent role items keep the original "already owned" guard.
-            # Temporary roles can always be re-bought to extend the timer.
-            if not item["role_duration"] and role in member.roles:
-                return False, "You already have this role!"
-            try:
-                await member.add_roles(role, reason="Shop purchase")
-            except discord.Forbidden:
-                return False, "I couldn't assign that role — check my permissions and role position."
-            await update_wallet(self.pool, guild.id, member.id, -item["price"])
-            await add_transaction(self.pool, guild.id, member.id, -item["price"], "shop_buy", f"Bought {item['name']}")
-            if item["role_duration"]:
-                expires = await grant_temp_role(self.pool, guild.id, member.id, role.id, item["role_duration"])
-                return True, (f"You bought **{item['name']}** — you have {role.mention} until "
-                              f"<t:{int(expires.timestamp())}:R>.")
-            return True, f"You bought **{item['name']}** and received the {role.mention} role!"
-
-        await update_wallet(self.pool, guild.id, member.id, -item["price"])
-        await add_transaction(self.pool, guild.id, member.id, -item["price"], "shop_buy", f"Bought {item['name']}")
-        await add_to_inventory(self.pool, guild.id, member.id, item["id"])
-        return True, f"You bought **{item['name']}** for {item['price']:,}{cur.emoji}!"
+        """Run a purchase for `member` — see service.purchase. Returns (success, message)."""
+        return await service.purchase(self.bot, guild, member, item)
 
     @commands.command()
     async def shop(self, ctx):

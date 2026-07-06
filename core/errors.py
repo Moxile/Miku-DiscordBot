@@ -16,6 +16,15 @@ from discord.ext import commands
 
 from core.checks import UserLocked, WrongChannel
 
+
+class UserError(Exception):
+    """A user-facing failure raised by service functions (cogs/*/service.py).
+
+    The message is safe to show verbatim. Text commands get it sent for free
+    via handle_command_error below; the Miku Menu renders it as a ⚠️ notice
+    on the current page (see core.ui).
+    """
+
 # Map a parameter *name* to a realistic example value. Matched case-insensitively;
 # the first key that is a substring of the parameter name wins (order matters, so
 # more specific keys come first).
@@ -170,6 +179,11 @@ async def handle_command_error(ctx: commands.Context, error: commands.CommandErr
         if ctx.command is None:
             return
         await ctx.send(embed=usage_hint_embed(ctx, error))
+        return
+
+    # Service-layer failures carry a ready-to-send, user-facing message.
+    if isinstance(error, commands.CommandInvokeError) and isinstance(error.original, UserError):
+        await ctx.send(str(error.original))
         return
 
     # Runtime failure inside a command: surface a brief note and re-raise so the
