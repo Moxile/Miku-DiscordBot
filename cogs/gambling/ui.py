@@ -82,8 +82,8 @@ class BetflipChoicePage(Page):
         embed.description = "Pick heads or tails, then set your bet and number of flips."
 
         items = [
-            self.button("Heads", self._heads, emoji="H", style=discord.ButtonStyle.success, row=0),
-            self.button("Tails", self._tails, emoji="T", style=discord.ButtonStyle.success, row=0),
+            self.button("Heads", self._heads, emoji="🙂", style=discord.ButtonStyle.success, row=0),
+            self.button("Tails", self._tails, emoji="🪙", style=discord.ButtonStyle.success, row=0),
         ]
         return embed, items
 
