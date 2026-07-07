@@ -2,13 +2,11 @@ from __future__ import annotations
 
 """Gambling pages for the Miku Menu: game selection and simple games like betflip."""
 
-import asyncio
 import discord
 
 from cogs.gambling import service
-from cogs.market.chart import render_price_chart
 from core.errors import UserError
-from core.ui import HubModal, Page, QuantityModal
+from core.ui import HubModal, Page
 
 
 class BetAmountModal(HubModal):
