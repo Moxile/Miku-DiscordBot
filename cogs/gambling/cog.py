@@ -215,7 +215,9 @@ class PlayAgainView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         self.stop()
 
-        if self.cog.calculate_hand_value(game["player_hands"][0]) == 21:
+        player_blackjack = self.cog.calculate_hand_value(game["player_hands"][0]) == 21
+        dealer_blackjack = self.cog.calculate_hand_value(game["dealer_cards"]) == 21
+        if player_blackjack or dealer_blackjack:
             game["state"] = "dealer_turn"
             net = await self.cog.settle(self.key, game)
             title, color = _result_meta(net)
