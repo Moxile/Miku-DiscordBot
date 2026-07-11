@@ -11,6 +11,7 @@ from cogs.dailywheel.db import (
 )
 from core.checks import require_channel, invalidate, has_permissions_or_owner
 from core.money import parse_amount, AmountError
+from core.resilience import send_resilient
 
 
 def _pick_prize(prizes):
@@ -61,20 +62,24 @@ class DailyWheel(commands.Cog):
             cur = self.bot.get_currency(ctx.guild.id)
             await update_wallet(self.pool, ctx.guild.id, ctx.author.id, prize["amount"])
             await add_transaction(self.pool, ctx.guild.id, ctx.author.id, prize["amount"], "dailywheel_win")
-            await ctx.send(f"🎡 You win **{prize['amount']:,}**{cur.emoji}!\n{prize['text']}")
+            await send_resilient(lambda: ctx.send(f"🎡 You win **{prize['amount']:,}**{cur.emoji}!\n{prize['text']}"))
         elif prize["kind"] == "role":
             role = ctx.guild.get_role(prize["role_id"])
             if role is None:
-                await ctx.send(f"🎡 {prize['text']}\n(Role prize could not be granted — role no longer exists.)")
+                await send_resilient(
+                    lambda: ctx.send(f"🎡 {prize['text']}\n(Role prize could not be granted — role no longer exists.)")
+                )
                 return
             try:
                 await ctx.author.add_roles(role, reason="Daily wheel prize")
             except discord.Forbidden:
-                await ctx.send(f"🎡 {prize['text']}\n(Couldn't grant {role.mention} — missing permissions.)")
+                await send_resilient(
+                    lambda: ctx.send(f"🎡 {prize['text']}\n(Couldn't grant {role.mention} — missing permissions.)")
+                )
                 return
-            await ctx.send(f"🎡 You win the {role.mention} role!\n{prize['text']}")
+            await send_resilient(lambda: ctx.send(f"🎡 You win the {role.mention} role!\n{prize['text']}"))
         else:
-            await ctx.send(f"🎡 {prize['text']}")
+            await send_resilient(lambda: ctx.send(f"🎡 {prize['text']}"))
 
     # ── Admin ──
 

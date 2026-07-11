@@ -1,138 +1,107 @@
 from __future__ import annotations
-import os
-import secrets
+import asyncio
+import io
 from pathlib import Path
 
 import discord
 from discord.ext import commands
 
-POSITION_SET_FILE = Path(__file__).parent / "basic1k.wr"
+from . import wr
+
+DB_FILE = Path(__file__).parent / "basic44k.wr"
+DEFAULT_MAX_EVAL = 8.0
+
+BOUNDS_FORMAT_ERROR = (
+    "Invalid eval bounds format. Use `:high` (symmetric), `low:high` (asymmetric), "
+    "or `:low:high` (symmetric pair), e.g. `:0.5`, `-1.2:6.7`, `:9.0:15.0`.")
 
 
-class WolfPosition:
-    def __init__(self, pgn, eval_bounds, eval_str):
-        self.pgn = pgn
-        self._eval_bounds = eval_bounds
-        self.eval_str = eval_str
+def _parse_bounds(s: str) -> wr.EvalRange:
+    """Parse the friendly bounds syntax used by the `.wr` command:
+        :high        -> symmetric interval   [-high, high],            high >= 0
+        low:high     -> asymmetric interval  [low, high],               low <= high
+        :low:high    -> symmetric pair       [-high,-low] & [low,high], 0 <= low <= high
+    Raises ValueError with a user-facing message on bad input.
+    """
+    parts = s.split(':')
 
+    def to_float(token):
+        try:
+            return float(token)
+        except ValueError:
+            raise ValueError(BOUNDS_FORMAT_ERROR)
 
-class WolfPositionSet:
-    def __init__(self, name, positions, filtered=False, eval_bounds=(None, None)):
-        self.original_set_name = name
-        self.filtered = filtered
-        self.positions = positions
-        self._eval_bounds = eval_bounds
+    if len(parts) == 2:
+        low_str, high_str = parts
+        if low_str == '':
+            high = to_float(high_str)
+            if high < 0:
+                raise ValueError("Error: bound must be non-negative.")
+            return wr.EvalRange(-high, high)
+        low, high = to_float(low_str), to_float(high_str)
+        if low > high:
+            raise ValueError("Error: lower bound must be less than or equal to upper bound.")
+        return wr.EvalRange(low, high)
 
-    def len(self):
-        return len(self.positions)
+    if len(parts) == 3 and parts[0] == '':
+        low, high = to_float(parts[1]), to_float(parts[2])
+        if not 0 <= low <= high:
+            raise ValueError("Error: bounds must satisfy 0 <= low <= high.")
+        return wr.EvalRange(low, high, allow_inverse_evals=True)
 
-    def name(self):
-        return self.original_set_name + (' (filtered)' if self.filtered else '')
-
-    def filter(self, eval_bounds):
-        new_positions = []
-        filter_low, filter_high = eval_bounds
-
-        for pos in self.positions:
-            pos_low, pos_high = pos._eval_bounds
-            assert pos_low <= pos_high, "Invalid position eval bounds"
-            pos_mid = pos_low + (pos_high - pos_low) / 2
-            satisfied = True
-            if filter_low is not None and abs(pos_mid) <= filter_low:
-                satisfied = False
-            if filter_high is not None and abs(pos_mid) > filter_high:
-                satisfied = False
-            if satisfied:
-                new_positions.append(pos)
-
-        new_low, new_high = self._eval_bounds
-        if eval_bounds[0] is not None and (new_low is None or new_low < eval_bounds[0]):
-            new_low = eval_bounds[0]
-        if eval_bounds[1] is not None and (new_high is None or new_high > eval_bounds[1]):
-            new_high = eval_bounds[1]
-        return WolfPositionSet(
-            name=self.original_set_name,
-            positions=new_positions,
-            filtered=True,
-            eval_bounds=(new_low, new_high))
-
-
-def load_position_set(path):
-    positions = []
-    with open(path) as wr_set:
-        for line in wr_set:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                pgn, evaluation = line.split('|')
-                pgn, evaluation = pgn.strip(), evaluation.strip()
-                if evaluation.startswith('-M'):
-                    ev = -1000.0
-                elif evaluation.startswith('M'):
-                    ev = 1000.0
-                else:
-                    ev = float(evaluation)
-                position = WolfPosition(pgn=pgn, eval_bounds=(ev, ev), eval_str=evaluation)
-                positions.append(position)
-            except ValueError as e:
-                print(f'Error while parsing position set:\n{e}')
-                return None
-    name = os.path.basename(path)
-    if path.endswith('.wr'):
-        name = name[:len(name) - len('.wr')]
-    return WolfPositionSet(name=name, positions=positions)
+    raise ValueError(BOUNDS_FORMAT_ERROR)
 
 
 class WolfRandom(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self._position_set: WolfPositionSet | None = None
-        self._load_positions()
-
-    def _load_positions(self):
-        if POSITION_SET_FILE.exists():
-            self._position_set = load_position_set(str(POSITION_SET_FILE))
 
     @commands.command(aliases=['wr'])
     async def wolfrandom(self, ctx, *args):
-        """Pick a random position. Optional: -eval to show eval, [low]:high to filter by engine evaluation."""
-        if self._position_set is None or self._position_set.len() == 0:
+        """Pick a random position. Optional: -eval to show eval, -print to list all matches instead of
+        picking one, and an eval bounds filter: `:high` for [-high,high], `low:high` for [low,high],
+        or `:low:high` for [-high,-low] & [low,high]."""
+        if not DB_FILE.exists():
             await ctx.send("No positions loaded.")
             return
 
         show_eval = '-eval' in args
-        remaining = [a for a in args if a != '-eval']
+        show_print = '-print' in args
+        remaining = [a for a in args if a not in ('-eval', '-print')]
         eval_bounds_str = remaining[0] if remaining else None
 
-        position_set = self._position_set
         if eval_bounds_str is None:
-            position_set = self._position_set.filter(eval_bounds=[None, 9.0])
-        if eval_bounds_str is not None:
+            eval_range = wr.EvalRange(-DEFAULT_MAX_EVAL, DEFAULT_MAX_EVAL)
+        else:
             try:
-                low_str, high_str = eval_bounds_str.split(':')
-                bounds = [None, None]
-                bounds[1] = float(high_str)
-                if bounds[1] < 0:
-                    await ctx.send("Error: higher bound must be non-negative.")
-                    return
-                if low_str:
-                    bounds[0] = float(low_str)
-                    if not 0 <= bounds[0] < bounds[1]:
-                        await ctx.send("Error: lower bound must be non-negative and less than the higher bound.")
-                        return
-                position_set = self._position_set.filter(eval_bounds=bounds)
-            except ValueError:
-                await ctx.send("Invalid eval bounds format. Use `[low]:high`, e.g. `0.5:2.0`.")
+                eval_range = _parse_bounds(eval_bounds_str)
+            except ValueError as e:
+                await ctx.send(str(e))
                 return
 
-        if position_set.len() == 0:
+        if show_print:
+            buffer = io.StringIO()
+            result = await asyncio.to_thread(
+                wr.wolfrandom, str(DB_FILE), eval_range, 'print', buffer, show_eval)
+
+            if result['filtered'] == 0:
+                await ctx.send("No positions match the given eval bounds.")
+                return
+
+            buffer.seek(0)
+            file = discord.File(io.BytesIO(buffer.getvalue().encode()), filename="positions.txt")
+            await ctx.send(f"{result['filtered']} matching positions:", file=file)
+            return
+
+        result = await asyncio.to_thread(
+            wr.wolfrandom, str(DB_FILE), eval_range, 'select', None, show_eval)
+
+        if result['filtered'] == 0:
             await ctx.send("No positions match the given eval bounds.")
             return
 
-        position = secrets.choice(position_set.positions)
-        content = f"```\n{position.pgn}\n```"
+        content = f"```\n{result['selected']}\n```"
         if show_eval:
-            content += f"Eval: `{position.eval_str}`"
+            content += f"Eval: `{result['eval']}`"
         await ctx.send(content)

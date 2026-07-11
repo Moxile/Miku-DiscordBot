@@ -11,6 +11,7 @@ from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_trans
 from core.checks import require_channel, invalidate, UserLocked, user_is_locked
 from core.money import parse_amount, AmountError
 from core.names import format_name
+from core.resilience import send_resilient, refund_and_release
 from config import PREFIX
 from . import cards, coins, wheel, board
 
@@ -86,7 +87,10 @@ class BlackjackView(discord.ui.View):
         title, color = _result_meta(net)
         file, embed = await self.cog.build_state(game, title=title, color=color, hide_dealer=False, result=net)
         play_again = PlayAgainView(self.cog, self.key, game["bet"])
-        await interaction.response.edit_message(attachments=[file], embed=embed, view=play_again)
+        # Bet/payout is already resolved by this point — retry only, nothing to roll back.
+        await send_resilient(
+            lambda: interaction.response.edit_message(attachments=[file], embed=embed, view=play_again), files=[file]
+        )
         play_again.message = self.message
         self.stop()
 
@@ -209,10 +213,15 @@ class PlayAgainView(discord.ui.View):
         await update_wallet(self.cog.pool, guild_id, self.player_id, -self.bet)
         game = self.cog.new_blackjack_game(self.key, guild_id, self.bet)
 
-        # Retire the old message's button and post the new game as a fresh embed.
+        # Retire the old message's button before anything else can fail below.
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(view=self)
+        try:
+            await send_resilient(lambda: interaction.response.edit_message(view=self))
+        except discord.HTTPException:
+            await refund_and_release(self.cog.pool, guild_id, self.player_id, self.bet, self.cog.games, self.key)
+            await self._notify_rebet_failed(interaction)
+            return
         self.stop()
 
         player_blackjack = self.cog.calculate_hand_value(game["player_hands"][0]) == 21
@@ -223,13 +232,32 @@ class PlayAgainView(discord.ui.View):
             title, color = _result_meta(net)
             file, embed = await self.cog.build_state(game, title=title, color=color, hide_dealer=False, result=net)
             new_view = PlayAgainView(self.cog, self.key, self.bet)
-            new_view.message = await interaction.followup.send(embed=embed, file=file, view=new_view)
+            # Bet/payout already resolved by settle() above — retry only, nothing to roll back.
+            new_view.message = await send_resilient(
+                lambda: interaction.followup.send(embed=embed, file=file, view=new_view), files=[file]
+            )
             return
 
         new_view = BlackjackView(self.cog, self.key)
         await new_view._sync_buttons(game)
         file, embed = await self.cog.build_state(game, title="Game Started", color=discord.Color.blue(), hide_dealer=True)
-        new_view.message = await interaction.followup.send(embed=embed, file=file, view=new_view)
+        try:
+            new_view.message = await send_resilient(
+                lambda: interaction.followup.send(embed=embed, file=file, view=new_view), files=[file]
+            )
+        except discord.HTTPException:
+            await refund_and_release(self.cog.pool, guild_id, self.player_id, self.bet, self.cog.games, self.key)
+            await self._notify_rebet_failed(interaction)
+
+    @staticmethod
+    async def _notify_rebet_failed(interaction: discord.Interaction):
+        try:
+            await interaction.channel.send(
+                f"{interaction.user.mention} Discord had trouble delivering your blackjack game, "
+                f"so it was cancelled and your bet was refunded. Please try again."
+            )
+        except discord.HTTPException:
+            pass
 
     async def on_timeout(self):
         if self.message is None:
@@ -280,7 +308,10 @@ class HighLowView(discord.ui.View):
         )
         file, embed = await self.cog.build_hl_state(game, title=title, color=color, reveal=True, net=net)
         play_again = HLPlayAgainView(self.cog, self.key, game["bet"])
-        await interaction.response.edit_message(attachments=[file], embed=embed, view=play_again)
+        # Bet/payout is already resolved by hl_resolve() above — retry only, nothing to roll back.
+        await send_resilient(
+            lambda: interaction.response.edit_message(attachments=[file], embed=embed, view=play_again), files=[file]
+        )
         play_again.message = self.message
         self.stop()
 
@@ -348,18 +379,30 @@ class HLPlayAgainView(discord.ui.View):
         await update_wallet(self.cog.pool, guild_id, self.player_id, -self.bet)
         game = self.cog.new_higherlower_game(self.key, guild_id, self.bet)
 
-        # Retire the old message's button and post the new game as a fresh embed.
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(view=self)
-        self.stop()
+        try:
+            # Retire the old message's button and post the new game as a fresh embed.
+            for child in self.children:
+                child.disabled = True
+            await send_resilient(lambda: interaction.response.edit_message(view=self))
+            self.stop()
 
-        new_view = HighLowView(self.cog, self.key)
-        new_view.configure(game["odds"])
-        file, embed = await self.cog.build_hl_state(
-            game, title="Higher, Lower or Equal?", color=discord.Color.blue(), reveal=False
-        )
-        new_view.message = await interaction.followup.send(embed=embed, file=file, view=new_view)
+            new_view = HighLowView(self.cog, self.key)
+            new_view.configure(game["odds"])
+            file, embed = await self.cog.build_hl_state(
+                game, title="Higher, Lower or Equal?", color=discord.Color.blue(), reveal=False
+            )
+            new_view.message = await send_resilient(
+                lambda: interaction.followup.send(embed=embed, file=file, view=new_view), files=[file]
+            )
+        except discord.HTTPException:
+            await refund_and_release(self.cog.pool, guild_id, self.player_id, self.bet, self.cog.games, self.key)
+            try:
+                await interaction.channel.send(
+                    f"{interaction.user.mention} Discord had trouble delivering your higher-lower game, "
+                    f"so it was cancelled and your bet was refunded. Please try again."
+                )
+            except discord.HTTPException:
+                pass
 
     async def on_timeout(self):
         if self.message is None:
@@ -505,7 +548,8 @@ class RPSView(discord.ui.View):
             f"I chose {RPS_EMOJI[bot_choice]} **{bot_choice.title()}**.\n"
             f"Net: **{sign}{net}**{cur.emoji}"
         )
-        await interaction.response.edit_message(embed=embed, view=self)
+        # Bet/payout is already resolved above — retry only, nothing to roll back.
+        await send_resilient(lambda: interaction.response.edit_message(embed=embed, view=self))
         self.stop()
 
     @discord.ui.button(label="Rock", emoji="🪨", style=discord.ButtonStyle.secondary)
@@ -669,7 +713,17 @@ class Gambling(commands.Cog):
             description=f"Bet: **{bet}**{cur.emoji}\nPick your move!",
             color=discord.Color.blue(),
         )
-        view.message = await ctx.send(embed=embed, view=view)
+        try:
+            view.message = await send_resilient(lambda: ctx.send(embed=embed, view=view))
+        except discord.HTTPException:
+            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, bet)
+            try:
+                await ctx.channel.send(
+                    f"{ctx.author.mention} Discord had trouble delivering your rock-paper-scissors game, "
+                    f"so it was cancelled and your bet was refunded. Please try again."
+                )
+            except discord.HTTPException:
+                pass
 
     @staticmethod
     def create_deck(deckcount=0):
@@ -764,13 +818,26 @@ class Gambling(commands.Cog):
             title, color = _result_meta(net)
             file, embed = await self.build_state(game, title=title, color=color, hide_dealer=False, result=net)
             play_again = PlayAgainView(self, key, bet)
-            play_again.message = await ctx.send(embed=embed, file=file, view=play_again)
+            # Bet/payout already resolved by settle() above — retry only, nothing to roll back.
+            play_again.message = await send_resilient(
+                lambda: ctx.send(embed=embed, file=file, view=play_again), files=[file]
+            )
             return
 
         view = BlackjackView(self, key)
         await view._sync_buttons(game)
         file, embed = await self.build_state(game, title="Game Started", color=discord.Color.blue(), hide_dealer=True)
-        view.message = await ctx.send(embed=embed, file=file, view=view)
+        try:
+            view.message = await send_resilient(lambda: ctx.send(embed=embed, file=file, view=view), files=[file])
+        except discord.HTTPException:
+            await refund_and_release(self.pool, ctx.guild.id, ctx.author.id, bet, self.games, key)
+            try:
+                await ctx.channel.send(
+                    f"{ctx.author.mention} Discord had trouble delivering your blackjack game, "
+                    f"so it was cancelled and your bet was refunded. Please try again."
+                )
+            except discord.HTTPException:
+                pass
 
     # ── Blackjack actions (driven by BlackjackView buttons) ──
 
@@ -1042,7 +1109,17 @@ class Gambling(commands.Cog):
         file, embed = await self.build_hl_state(
             game, title="Higher, Lower or Equal?", color=discord.Color.blue(), reveal=False
         )
-        view.message = await ctx.send(embed=embed, file=file, view=view)
+        try:
+            view.message = await send_resilient(lambda: ctx.send(embed=embed, file=file, view=view), files=[file])
+        except discord.HTTPException:
+            await refund_and_release(self.pool, ctx.guild.id, ctx.author.id, bet, self.games, key)
+            try:
+                await ctx.channel.send(
+                    f"{ctx.author.mention} Discord had trouble delivering your higher-lower game, "
+                    f"so it was cancelled and your bet was refunded. Please try again."
+                )
+            except discord.HTTPException:
+                pass
 
     @commands.command(extras={"example": ".roulette red 100"})
     @require_channel("gambling_channel")
@@ -1091,11 +1168,16 @@ class Gambling(commands.Cog):
         game["bets"].setdefault(ctx.author.id, []).append((choice, amount))
         game["deadline"] = time.time() + ROULETTE_WINDOW
         await self._refresh_roulette_board(game)
-        await ctx.send(
-            f"Placed **{amount}{cur.emoji}** on **{_bet_label(choice)}**. "
-            f"Spinning <t:{int(game['deadline'])}:R>.",
-            delete_after=8,
-        )
+        # The bet is already recorded on the shared table and will resolve when the
+        # round spins regardless of this confirmation — retry only, nothing to roll back.
+        try:
+            await send_resilient(lambda: ctx.send(
+                f"Placed **{amount}{cur.emoji}** on **{_bet_label(choice)}**. "
+                f"Spinning <t:{int(game['deadline'])}:R>.",
+                delete_after=8,
+            ))
+        except discord.HTTPException:
+            pass
 
     async def _get_or_create_roulette_game(self, channel, guild, opener_id):
         """Return the open roulette game for this channel, creating and announcing one if needed."""
@@ -1212,14 +1294,19 @@ class Gambling(commands.Cog):
 
         if message is None:
             return
+        def _edit_attempt():
+            buf.seek(0)
+            return message.edit(embed=embed, attachments=[discord.File(buf, filename="wheel.png")], view=play_again)
+
+        def _send_attempt():
+            buf.seek(0)
+            return message.channel.send(embed=embed, file=discord.File(buf, filename="wheel.png"), view=play_again)
+
         try:
-            await message.edit(embed=embed, attachments=[discord.File(buf, filename="wheel.png")], view=play_again)
+            await send_resilient(_edit_attempt)
             play_again.message = message
         except discord.HTTPException:
-            buf.seek(0)
-            play_again.message = await message.channel.send(
-                embed=embed, file=discord.File(buf, filename="wheel.png"), view=play_again
-            )
+            play_again.message = await send_resilient(_send_attempt)
 
     @staticmethod
     def resolve_roulette_bet(choice, bet, result, color):
@@ -1306,7 +1393,25 @@ class Gambling(commands.Cog):
         embed.add_field(name="Players Joined", value="\n".join(
             f"- {format_name(ctx.guild.get_member(pid), ctx.guild, fallback=str(pid))}" for pid in self.games[key]["players"]
         ), inline=False)
-        await ctx.send(embed=embed)
+        try:
+            await send_resilient(lambda: ctx.send(embed=embed))
+        except discord.HTTPException:
+            # Undo the join so we don't strand this player mid-round, and so an
+            # already-running timer for other players (keyed on the old version)
+            # still resolves correctly.
+            self.games[key]["version"] -= 1
+            self.games[key]["players"].remove(ctx.author.id)
+            if not self.games[key]["players"]:
+                self.games.pop(key, None)
+            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, bet)
+            try:
+                await ctx.channel.send(
+                    f"{ctx.author.mention} Discord had trouble delivering your Russian Roulette join, "
+                    f"so it was cancelled and your bet was refunded. Please try again."
+                )
+            except discord.HTTPException:
+                pass
+            return
 
         asyncio.create_task(self.spin_russian_roulette(ctx.channel, key, self.games[key]["version"]))
 
