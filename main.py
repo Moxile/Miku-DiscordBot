@@ -23,7 +23,7 @@ EXTENSIONS = [
     "cogs.realstocks",
     "cogs.shop",
     "cogs.predictions",
-    "cogs.offers",
+    "cogs.bets",
     "cogs.dailywheel",
     "cogs.reminders",
     "cogs.waifu",

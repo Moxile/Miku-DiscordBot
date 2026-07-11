@@ -1,4 +1,13 @@
+import asyncpg
+
 from core.db import Conn
+
+
+async def lock_prediction(conn: asyncpg.Connection, prediction_id: int):
+    """Row-lock the prediction for a transaction (guards against double-resolve)."""
+    return await conn.fetchrow(
+        "SELECT * FROM predictions WHERE id = $1 FOR UPDATE", prediction_id,
+    )
 
 
 async def create_prediction(conn: Conn, guild_id: int, creator_id: int, question: str,

@@ -23,7 +23,7 @@ COG_COLORS = {
     "WolfRandom": discord.Color.dark_teal(),
     "BotReactions": discord.Color.from_rgb(255, 165, 0),
     "Missions": discord.Color.from_rgb(255, 140, 0),
-    "Offers": discord.Color.from_rgb(46, 204, 113),
+    "Bets": discord.Color.from_rgb(46, 204, 113),
     "Counting": discord.Color.from_rgb(149, 165, 166),
     "Lichess": discord.Color.from_rgb(120, 120, 120),
 }
@@ -43,8 +43,8 @@ class Category:
 # `.help` landing page are both built from this list, so order here = order shown.
 CATEGORIES: list[Category] = [
     Category("economy", "💰", "Economy",
-             "Wallet, bank, work, gifts, shop, missions & offers.",
-             ["Economy", "Shop", "Missions", "Offers"]),
+             "Wallet, bank, work, gifts, shop, missions & bets.",
+             ["Economy", "Shop", "Missions", "Bets"]),
     Category("games", "🎲", "Games & Gambling",
              "Coinflip, blackjack, roulette & party games.",
              ["Gambling", "GTE", "Acro", "WolfRandom"]),
