@@ -79,6 +79,9 @@ MIGRATIONS = [
     # Allow empty min/max stakes and a NULL pool (bot-funded). The pre-existing
     # CHECK (min_stake > 0) etc. already permit NULL (UNKNOWN passes), so only the
     # NOT NULL constraints need dropping. DROP NOT NULL is a no-op if already gone.
+    # odds is NULL for multi-option bets (each option carries its own odds); older
+    # databases inherited a NOT NULL from the legacy `offers` table.
+    "ALTER TABLE bets ALTER COLUMN odds DROP NOT NULL",
     "ALTER TABLE bets ALTER COLUMN min_stake DROP NOT NULL",
     "ALTER TABLE bets ALTER COLUMN max_stake DROP NOT NULL",
     "ALTER TABLE bets ALTER COLUMN pool DROP NOT NULL",
