@@ -21,6 +21,10 @@ SCHEMA = """
         END IF;
     END $$;
 
+    -- Stakes and pool are nullable: an empty min/max means "no lower/upper
+    -- limit", and a bot-funded bet (bot_funded=TRUE) has no host-supplied pool
+    -- at all (the bot covers every payout, so pool/pool_remaining stay NULL).
+    -- The CHECKs only constrain non-NULL values (NULL yields UNKNOWN → allowed).
     CREATE TABLE IF NOT EXISTS bets (
         id              BIGSERIAL PRIMARY KEY,
         guild_id        BIGINT NOT NULL,
@@ -28,10 +32,11 @@ SCHEMA = """
         host_id         BIGINT NOT NULL,
         description     TEXT NOT NULL DEFAULT '',
         odds            NUMERIC(10, 4) CHECK (odds IS NULL OR odds > 1),
-        min_stake       BIGINT NOT NULL CHECK (min_stake > 0),
-        max_stake       BIGINT NOT NULL CHECK (max_stake >= min_stake),
-        pool            BIGINT NOT NULL CHECK (pool > 0),
-        pool_remaining  BIGINT NOT NULL CHECK (pool_remaining >= 0),
+        min_stake       BIGINT CHECK (min_stake IS NULL OR min_stake > 0),
+        max_stake       BIGINT CHECK (max_stake IS NULL OR min_stake IS NULL OR max_stake >= min_stake),
+        pool            BIGINT CHECK (pool IS NULL OR pool > 0),
+        pool_remaining  BIGINT CHECK (pool_remaining IS NULL OR pool_remaining >= 0),
+        bot_funded      BOOLEAN NOT NULL DEFAULT FALSE,
         is_multi        BOOLEAN NOT NULL DEFAULT FALSE,
         status          TEXT NOT NULL DEFAULT 'open'
                         CHECK (status IN ('open', 'won', 'lost', 'resolved', 'cancelled')),
@@ -69,4 +74,13 @@ MIGRATIONS = [
     "ALTER TABLE bets ADD COLUMN IF NOT EXISTS is_multi BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE bet_takes ADD COLUMN IF NOT EXISTS option_id BIGINT "
     "REFERENCES bet_options(id) ON DELETE CASCADE",
+    # Bot-funded bets: the bot covers every payout instead of a host-supplied pool.
+    "ALTER TABLE bets ADD COLUMN IF NOT EXISTS bot_funded BOOLEAN NOT NULL DEFAULT FALSE",
+    # Allow empty min/max stakes and a NULL pool (bot-funded). The pre-existing
+    # CHECK (min_stake > 0) etc. already permit NULL (UNKNOWN passes), so only the
+    # NOT NULL constraints need dropping. DROP NOT NULL is a no-op if already gone.
+    "ALTER TABLE bets ALTER COLUMN min_stake DROP NOT NULL",
+    "ALTER TABLE bets ALTER COLUMN max_stake DROP NOT NULL",
+    "ALTER TABLE bets ALTER COLUMN pool DROP NOT NULL",
+    "ALTER TABLE bets ALTER COLUMN pool_remaining DROP NOT NULL",
 ]

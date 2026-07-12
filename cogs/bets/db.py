@@ -4,13 +4,15 @@ from core.db import Conn
 
 
 async def create_bet(conn: Conn, guild_id: int, channel_id: int, host_id: int,
-                     description: str, odds: float, min_stake: int, max_stake: int,
-                     pool: int, is_multi: bool = False):
+                     description: str, odds: float, min_stake: int | None,
+                     max_stake: int | None, pool: int | None,
+                     is_multi: bool = False, bot_funded: bool = False):
     return await conn.fetchrow(
         """INSERT INTO bets (guild_id, channel_id, host_id, description, odds,
-                             min_stake, max_stake, pool, pool_remaining, is_multi)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9) RETURNING *""",
-        guild_id, channel_id, host_id, description, odds, min_stake, max_stake, pool, is_multi,
+                             min_stake, max_stake, pool, pool_remaining, is_multi, bot_funded)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10) RETURNING *""",
+        guild_id, channel_id, host_id, description, odds, min_stake, max_stake, pool,
+        is_multi, bot_funded,
     )
 
 

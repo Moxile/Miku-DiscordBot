@@ -10,6 +10,7 @@ ready-to-show message; callers only format the success case.
 """
 
 from dataclasses import dataclass
+from decimal import ROUND_FLOOR, Decimal
 
 from cogs.bets.db import (
     add_bet_option, add_bet_take, create_bet, decrement_bet_pool, get_active_bets,
@@ -25,6 +26,23 @@ from core.money import parse_amount
 def format_odds(odds) -> str:
     """Render a numeric odds value like 10 or 2.5 without trailing zeros."""
     return f"{float(odds):g}"
+
+
+def _as_decimal(odds) -> Decimal:
+    """Coerce odds (a DB Decimal or a parsed float) to an exact Decimal."""
+    return odds if isinstance(odds, Decimal) else Decimal(str(odds))
+
+
+def payout_for(stake: int, odds) -> int:
+    """`stake * odds`, floored, computed with Decimal so a multiplier like 1.29
+    can't drift to 128 on a stake of 100 the way binary float `int(100 * 1.29)`
+    does. Used for every stake→winnings conversion (payouts and liability)."""
+    return int((Decimal(int(stake)) * _as_decimal(odds)).to_integral_value(rounding=ROUND_FLOOR))
+
+
+def liability_for(stake: int, odds) -> int:
+    """The host's exposure on a take: the winnings owed beyond the returned stake."""
+    return payout_for(stake, odds) - int(stake)
 
 
 @dataclass
@@ -85,8 +103,20 @@ def parse_odds(raw: str) -> float:
     return odds
 
 
-def parse_options(raw: str, *, max_stake: int, pool_amt: int) -> list[tuple[str, float]]:
-    """Parse `<label> x<odds>` lines for a multi-option bet."""
+def parse_optional_amount(raw: str | None) -> int | None:
+    """Parse a money amount, or return None when the field is left blank."""
+    if raw is None or not str(raw).strip():
+        return None
+    return parse_amount(raw)
+
+
+def parse_options(raw: str, *, max_stake: int | None, pool_amt: int | None) -> list[tuple[str, float]]:
+    """Parse `<label> x<odds>` lines for a multi-option bet.
+
+    The per-option pool check only applies when both a max stake and a finite
+    pool are set; a bot-funded bet (pool_amt=None) or an open-ended max stake
+    can't be bounded up front, so the runtime pool check on each take handles it.
+    """
     options: list[tuple[str, float]] = []
     for line in raw.splitlines():
         line = line.strip()
@@ -97,42 +127,72 @@ def parse_options(raw: str, *, max_stake: int, pool_amt: int) -> list[tuple[str,
             raise UserError(f"Couldn't read `{line}` — put each option as `<label> x<odds>`.")
         odds = parse_odds(tokens[-1])
         label = " ".join(tokens[:-1])
-        max_liability = int(max_stake * odds) - max_stake
-        if max_liability > pool_amt:
-            raise UserError(
-                f"`{label}` needs the pool to cover {max_liability} at max stake, but the "
-                f"pool is only {pool_amt}. Lower its odds/max stake or raise the pool."
-            )
+        if max_stake is not None and pool_amt is not None:
+            max_liability = liability_for(max_stake, odds)
+            if max_liability > pool_amt:
+                raise UserError(
+                    f"`{label}` needs the pool to cover {max_liability} at max stake, but the "
+                    f"pool is only {pool_amt}. Lower its odds/max stake or raise the pool."
+                )
         options.append((label, odds))
     if len(options) < 2:
         raise UserError("A multi-option bet needs at least 2 options.")
     return options
 
 
-def _validate_stakes(min_stake: int, max_stake: int, pool_amt: int) -> None:
-    if max_stake < min_stake:
+def _validate_stakes(min_stake: int | None, max_stake: int | None) -> None:
+    if min_stake is not None and max_stake is not None and max_stake < min_stake:
         raise UserError("Max stake must be at least the min stake.")
+
+
+def _stake_bounds_error(bet) -> str:
+    lo, hi = bet["min_stake"], bet["max_stake"]
+    if lo is not None and hi is not None:
+        return f"Stake must be between {lo} and {hi}."
+    if lo is not None:
+        return f"Stake must be at least {lo}."
+    return f"Stake must be at most {hi}."
+
+
+async def _require_admin_for_bot_funded(member, bot_funded: bool) -> None:
+    if bot_funded and not member.guild_permissions.administrator:
+        raise UserError("Only admins can create bot-funded bets.")
 
 
 # ── create ──
 
 async def create_single_bet(pool, guild, member, channel_id: int, *,
                             raw_odds: str, raw_min: str, raw_max: str,
-                            raw_pool: str, description: str):
+                            raw_pool: str, description: str, bot_funded: bool = False):
     await require_can_create(pool, guild, member)
+    await _require_admin_for_bot_funded(member, bot_funded)
     await _ensure_unlocked(pool, guild.id, member.id)
     odds = parse_odds(raw_odds)
-    min_stake = parse_amount(raw_min)
-    max_stake = parse_amount(raw_max)
-    pool_amt = parse_amount(raw_pool)
-    _validate_stakes(min_stake, max_stake, pool_amt)
+    min_stake = parse_optional_amount(raw_min)
+    max_stake = parse_optional_amount(raw_max)
+    _validate_stakes(min_stake, max_stake)
 
-    max_liability = int(max_stake * odds) - max_stake
-    if max_liability > pool_amt:
-        raise UserError(
-            f"Pool too small: a single max-stake bet would cost {max_liability} but the "
-            f"pool is only {pool_amt}. Raise the pool or lower the max stake."
-        )
+    if bot_funded:
+        # No host-funded pool: the bot covers every payout, so nothing is
+        # deducted and pool/pool_remaining stay NULL.
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                return await create_bet(
+                    conn, guild.id, channel_id, member.id,
+                    (description or "").strip(), odds, min_stake, max_stake, None,
+                    bot_funded=True,
+                )
+
+    pool_amt = parse_amount(raw_pool)
+    # A max stake lets us reject an under-funded pool up front; with no max, the
+    # per-take pool check caps how much a player can actually stake.
+    if max_stake is not None:
+        max_liability = liability_for(max_stake, odds)
+        if max_liability > pool_amt:
+            raise UserError(
+                f"Pool too small: a single max-stake bet would cost {max_liability} but the "
+                f"pool is only {pool_amt}. Raise the pool or lower the max stake."
+            )
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -152,14 +212,27 @@ async def create_single_bet(pool, guild, member, channel_id: int, *,
 
 async def create_multi_bet(pool, guild, member, channel_id: int, *,
                            raw_min: str, raw_max: str, raw_pool: str,
-                           description: str, raw_options: str):
+                           description: str, raw_options: str, bot_funded: bool = False):
     await require_can_create(pool, guild, member)
+    await _require_admin_for_bot_funded(member, bot_funded)
     await _ensure_unlocked(pool, guild.id, member.id)
-    min_stake = parse_amount(raw_min)
-    max_stake = parse_amount(raw_max)
-    pool_amt = parse_amount(raw_pool)
-    _validate_stakes(min_stake, max_stake, pool_amt)
+    min_stake = parse_optional_amount(raw_min)
+    max_stake = parse_optional_amount(raw_max)
+    pool_amt = None if bot_funded else parse_amount(raw_pool)
+    _validate_stakes(min_stake, max_stake)
     options = parse_options(raw_options, max_stake=max_stake, pool_amt=pool_amt)
+
+    if bot_funded:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                bet = await create_bet(
+                    conn, guild.id, channel_id, member.id,
+                    (description or "").strip(), None, min_stake, max_stake, None,
+                    is_multi=True, bot_funded=True,
+                )
+                for i, (label, odds) in enumerate(options, start=1):
+                    await add_bet_option(conn, bet["id"], i, label, odds)
+        return bet, options
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -205,16 +278,18 @@ async def place_take(pool, guild, member, bet_id: int, *, option_idx: int | None
                     raise UserError(f"No option #{option_idx} on this bet.")
                 if await get_user_take(conn, bet_id, member.id):
                     raise UserError("You've already picked an option on this bet — one entry per bet.")
-                odds = float(option["odds"])
+                odds = option["odds"]
             else:
-                odds = float(bet["odds"])
+                odds = bet["odds"]
 
             stake = parse_amount(raw_stake)
-            if stake < bet["min_stake"] or stake > bet["max_stake"]:
-                raise UserError(f"Stake must be between {bet['min_stake']} and {bet['max_stake']}.")
+            if bet["min_stake"] is not None and stake < bet["min_stake"]:
+                raise UserError(_stake_bounds_error(bet))
+            if bet["max_stake"] is not None and stake > bet["max_stake"]:
+                raise UserError(_stake_bounds_error(bet))
 
-            liability = int(stake * odds) - stake
-            if liability > bet["pool_remaining"]:
+            liability = liability_for(stake, odds)
+            if not bet["bot_funded"] and liability > bet["pool_remaining"]:
                 raise UserError(
                     f"The pool can only cover {bet['pool_remaining']} more in winnings; "
                     f"your bet would need {liability}."
@@ -227,11 +302,12 @@ async def place_take(pool, guild, member, bet_id: int, *, option_idx: int | None
 
             await update_wallet(conn, guild.id, member.id, -stake)
             await add_transaction(conn, guild.id, member.id, -stake, "bet_take", f"Bet on #{bet_id}")
-            await decrement_bet_pool(conn, bet_id, liability)
+            if not bet["bot_funded"]:
+                await decrement_bet_pool(conn, bet_id, liability)
             await add_bet_take(conn, bet_id, member.id, stake, liability,
                                option_id=option["id"] if option else None)
 
-    return TakeResult(bet_id=bet_id, stake=stake, payout=int(stake * odds),
+    return TakeResult(bet_id=bet_id, stake=stake, payout=payout_for(stake, odds),
                       option_label=option["label"] if option else None)
 
 
@@ -262,7 +338,7 @@ async def resolve_bet(pool, guild, member, bet_id: int, outcome_raw: str) -> Res
                     raise UserError(f"No option #{option_idx} on this bet.")
                 winners = [t for t in takes if t["option_id"] == winning_option["id"]]
                 losers = [t for t in takes if t["option_id"] != winning_option["id"]]
-                win_odds = float(winning_option["odds"])
+                win_odds = winning_option["odds"]
                 status = "resolved"
             else:
                 outcome = str(outcome_raw).strip().lower()
@@ -270,21 +346,26 @@ async def resolve_bet(pool, guild, member, bet_id: int, outcome_raw: str) -> Res
                     raise UserError("Outcome must be `win` (players win) or `lose` (players lose).")
                 winners = takes if outcome == "win" else []
                 losers = takes if outcome == "lose" else []
-                win_odds = float(bet["odds"]) if bet["odds"] is not None else None
+                win_odds = bet["odds"]
                 status = "won" if outcome == "win" else "lost"
 
             payouts = []
             for t in winners:
-                payout = int(t["stake"] * win_odds)
+                payout = payout_for(t["stake"], win_odds)
                 await update_wallet(conn, guild.id, t["user_id"], payout)
                 await add_transaction(conn, guild.id, t["user_id"], payout, "bet_win", f"Won bet #{bet_id}")
                 payouts.append((t["user_id"], t["stake"], payout))
 
-            # Host keeps whatever pool was never reserved, plus liability freed by
-            # losing takes (never paid out), plus the losers' stakes.
-            host_gain = (bet["pool_remaining"]
-                         + sum(t["liability"] for t in losers)
-                         + sum(t["stake"] for t in losers))
+            # A bot-funded bet has no host stake: the bot pays winners and absorbs
+            # losers' stakes, so the host neither profits nor is refunded.
+            if bet["bot_funded"]:
+                host_gain = 0
+            else:
+                # Host keeps whatever pool was never reserved, plus liability freed
+                # by losing takes (never paid out), plus the losers' stakes.
+                host_gain = (bet["pool_remaining"]
+                             + sum(t["liability"] for t in losers)
+                             + sum(t["stake"] for t in losers))
             if host_gain > 0:
                 reason = "bet_pool_refund" if not losers else "bet_lose"
                 await update_wallet(conn, guild.id, bet["host_id"], host_gain)
@@ -313,11 +394,14 @@ async def cancel_bet(pool, guild, member, bet_id: int) -> int:
                 raise UserError(
                     f"Can't cancel: {len(takes)} bet(s) already placed. Resolve it instead."
                 )
-            await update_wallet(conn, guild.id, bet["host_id"], bet["pool"])
-            await add_transaction(conn, guild.id, bet["host_id"], bet["pool"],
-                                  "bet_cancel", f"Cancelled bet #{bet_id}")
+            # Bot-funded bets took no host pool, so there's nothing to refund.
+            refund = 0 if bet["bot_funded"] else bet["pool"]
+            if refund > 0:
+                await update_wallet(conn, guild.id, bet["host_id"], refund)
+                await add_transaction(conn, guild.id, bet["host_id"], refund,
+                                      "bet_cancel", f"Cancelled bet #{bet_id}")
             await set_bet_status(conn, bet_id, "cancelled")
-    return bet["pool"]
+    return refund
 
 
 # ── browse ──

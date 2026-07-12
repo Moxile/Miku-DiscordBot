@@ -18,9 +18,22 @@ COLOR = discord.Color.dark_gold()
 
 
 def _stake_range(bet) -> str:
-    if bet["min_stake"] == bet["max_stake"]:
-        return f"{bet['min_stake']}"
-    return f"{bet['min_stake']}-{bet['max_stake']}"
+    lo, hi = bet["min_stake"], bet["max_stake"]
+    if lo is None and hi is None:
+        return "any"
+    if lo is None:
+        return f"≤{hi}"
+    if hi is None:
+        return f"≥{lo}"
+    if lo == hi:
+        return f"{lo}"
+    return f"{lo}-{hi}"
+
+
+def _pool_label(bet, cur) -> str:
+    if bet["bot_funded"]:
+        return "🤖 bot-funded"
+    return f"{bet['pool_remaining']}/{bet['pool']}{cur.emoji} left"
 
 
 # ── main page ──
@@ -51,6 +64,13 @@ class BetsPage(Page):
                                      style=discord.ButtonStyle.success, row=1))
             items.append(self.button("Create Multi-Bet", self._create_multi, emoji="🎯",
                                      style=discord.ButtonStyle.success, row=1))
+        # Bot-funded bets create money on payout, so they're admin-only. The bot
+        # covers the pool, meaning no funding is deducted from the host.
+        if self.user.guild_permissions.administrator:
+            items.append(self.button("Create Bot Bet", self._create_bot, emoji="🤖",
+                                     style=discord.ButtonStyle.secondary, row=2))
+            items.append(self.button("Create Bot Multi-Bet", self._create_bot_multi, emoji="🤖",
+                                     style=discord.ButtonStyle.secondary, row=2))
         return embed, items
 
     async def _view(self, interaction: discord.Interaction):
@@ -61,6 +81,12 @@ class BetsPage(Page):
 
     async def _create_multi(self, interaction: discord.Interaction):
         await interaction.response.send_modal(CreateMultiBetModal(self.hub))
+
+    async def _create_bot(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(CreateBetModal(self.hub, bot_funded=True))
+
+    async def _create_bot_multi(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(CreateMultiBetModal(self.hub, bot_funded=True))
 
 
 # ── browse ──
@@ -86,7 +112,7 @@ class BetsListPage(Page):
             lines.append(
                 f"**#{bet['id']}** — {desc}\n"
                 f"　{host_name} · {odds} · stake {_stake_range(bet)}{cur.emoji} · "
-                f"pool {bet['pool_remaining']}/{bet['pool']}{cur.emoji}"
+                f"pool {_pool_label(bet, cur)}"
             )
             options.append(discord.SelectOption(
                 label=f"#{bet['id']} — {desc[:80]}",
@@ -129,8 +155,7 @@ class BetDetailPage(Page):
         else:
             embed.add_field(name="Odds", value=f"x{service.format_odds(bet['odds'])}", inline=True)
         embed.add_field(name="Stake", value=f"{_stake_range(bet)}{cur.emoji}", inline=True)
-        embed.add_field(name="Pool",
-                        value=f"{bet['pool_remaining']}/{bet['pool']}{cur.emoji} left", inline=True)
+        embed.add_field(name="Pool", value=_pool_label(bet, cur), inline=True)
         embed.add_field(name="Bets placed", value=str(len(takes)), inline=True)
 
         if takes:
@@ -140,11 +165,11 @@ class BetDetailPage(Page):
                 name = format_name(member, self.guild, fallback=str(t["user_id"]))
                 if bet["is_multi"]:
                     opt = options_by_id.get(t["option_id"])
-                    potential = int(t["stake"] * float(opt["odds"])) if opt else 0
+                    potential = service.payout_for(t["stake"], opt["odds"]) if opt else 0
                     lines.append(f"{name} → {opt['label'] if opt else '?'}: "
                                  f"{t['stake']}{cur.emoji} (wins {potential})")
                 else:
-                    potential = int(t["stake"] * float(bet["odds"]))
+                    potential = service.payout_for(t["stake"], bet["odds"])
                     lines.append(f"{name}: {t['stake']}{cur.emoji} (wins {potential})")
             if len(takes) > 15:
                 lines.append(f"… and {len(takes) - 15} more")
@@ -182,9 +207,9 @@ class BetDetailPage(Page):
 
     async def _cancel(self, interaction: discord.Interaction):
         refund = await service.cancel_bet(self.pool, self.guild, self.user, self.bet_id)
-        await self.hub.pop(
-            interaction,
-            notice=f"🗑️ Bet #{self.bet_id} cancelled. Pool of **{refund}**{self.currency.emoji} refunded.")
+        tail = (f" Pool of **{refund}**{self.currency.emoji} refunded."
+                if refund > 0 else "")
+        await self.hub.pop(interaction, notice=f"🗑️ Bet #{self.bet_id} cancelled.{tail}")
 
 
 class PickOptionPage(Page):
@@ -320,37 +345,57 @@ class StakeModal(HubModal):
 
 
 class CreateBetModal(HubModal):
-    def __init__(self, hub):
-        super().__init__(hub, title="Create a bet")
+    def __init__(self, hub, *, bot_funded: bool = False):
+        super().__init__(hub, title="Create a bot-funded bet" if bot_funded else "Create a bet")
+        self.bot_funded = bot_funded
         self.odds = discord.ui.TextInput(label="Odds (e.g. 2.5 or 10)", placeholder="10", max_length=10)
-        self.min_stake = discord.ui.TextInput(label="Min stake", placeholder="100", max_length=20)
-        self.max_stake = discord.ui.TextInput(label="Max stake", placeholder="200", max_length=20)
-        self.pool = discord.ui.TextInput(label="Pool (your funded exposure)", placeholder="5000", max_length=20)
+        self.min_stake = discord.ui.TextInput(label="Min stake (optional)", placeholder="no limit",
+                                              required=False, max_length=20)
+        self.max_stake = discord.ui.TextInput(label="Max stake (optional)", placeholder="no limit",
+                                              required=False, max_length=20)
+        self.add_item(self.odds)
+        self.add_item(self.min_stake)
+        self.add_item(self.max_stake)
+        # A bot-funded bet has no host pool — the bot covers every payout.
+        if not bot_funded:
+            self.pool = discord.ui.TextInput(label="Pool (your funded exposure)",
+                                             placeholder="5000", max_length=20)
+            self.add_item(self.pool)
         self.description = discord.ui.TextInput(
             label="Description", placeholder="Pens win tonight",
             style=discord.TextStyle.paragraph, required=False, max_length=200)
-        for item in (self.odds, self.min_stake, self.max_stake, self.pool, self.description):
-            self.add_item(item)
+        self.add_item(self.description)
 
     async def on_submit(self, interaction: discord.Interaction):
         bet = await service.create_single_bet(
             self.hub.session.pool, self.hub.session.guild, self.hub.session.user,
             self.hub.session.channel_id,
             raw_odds=self.odds.value, raw_min=self.min_stake.value,
-            raw_max=self.max_stake.value, raw_pool=self.pool.value,
-            description=self.description.value)
+            raw_max=self.max_stake.value,
+            raw_pool=None if self.bot_funded else self.pool.value,
+            description=self.description.value, bot_funded=self.bot_funded)
+        tag = " (🤖 bot-funded)" if self.bot_funded else ""
         await self.hub.refresh(
             interaction,
-            notice=f"➕ Created bet **#{bet['id']}** at x{service.format_odds(bet['odds'])}. "
+            notice=f"➕ Created bet **#{bet['id']}** at x{service.format_odds(bet['odds'])}{tag}. "
                    f"It's now open under **View Open Bets**.")
 
 
 class CreateMultiBetModal(HubModal):
-    def __init__(self, hub):
-        super().__init__(hub, title="Create a multi-option bet")
-        self.min_stake = discord.ui.TextInput(label="Min stake", placeholder="100", max_length=20)
-        self.max_stake = discord.ui.TextInput(label="Max stake", placeholder="200", max_length=20)
-        self.pool = discord.ui.TextInput(label="Pool (your funded exposure)", placeholder="5000", max_length=20)
+    def __init__(self, hub, *, bot_funded: bool = False):
+        super().__init__(hub, title="Create a bot-funded multi-bet" if bot_funded
+                         else "Create a multi-option bet")
+        self.bot_funded = bot_funded
+        self.min_stake = discord.ui.TextInput(label="Min stake (optional)", placeholder="no limit",
+                                              required=False, max_length=20)
+        self.max_stake = discord.ui.TextInput(label="Max stake (optional)", placeholder="no limit",
+                                              required=False, max_length=20)
+        self.add_item(self.min_stake)
+        self.add_item(self.max_stake)
+        if not bot_funded:
+            self.pool = discord.ui.TextInput(label="Pool (your funded exposure)",
+                                             placeholder="5000", max_length=20)
+            self.add_item(self.pool)
         self.description = discord.ui.TextInput(
             label="Description", placeholder="Tournament winner",
             style=discord.TextStyle.paragraph, required=False, max_length=200)
@@ -358,17 +403,19 @@ class CreateMultiBetModal(HubModal):
             label="Options — one 'label x<odds>' per line",
             placeholder="Alice x3\nBob x2.5\nCarol x4",
             style=discord.TextStyle.paragraph, max_length=500)
-        for item in (self.min_stake, self.max_stake, self.pool, self.description, self.options):
-            self.add_item(item)
+        self.add_item(self.description)
+        self.add_item(self.options)
 
     async def on_submit(self, interaction: discord.Interaction):
         bet, options = await service.create_multi_bet(
             self.hub.session.pool, self.hub.session.guild, self.hub.session.user,
             self.hub.session.channel_id,
             raw_min=self.min_stake.value, raw_max=self.max_stake.value,
-            raw_pool=self.pool.value, description=self.description.value,
-            raw_options=self.options.value)
+            raw_pool=None if self.bot_funded else self.pool.value,
+            description=self.description.value,
+            raw_options=self.options.value, bot_funded=self.bot_funded)
+        tag = " (🤖 bot-funded)" if self.bot_funded else ""
         await self.hub.refresh(
             interaction,
-            notice=f"🎯 Created multi-option bet **#{bet['id']}** with {len(options)} options. "
+            notice=f"🎯 Created multi-option bet **#{bet['id']}** with {len(options)} options{tag}. "
                    f"It's now open under **View Open Bets**.")
