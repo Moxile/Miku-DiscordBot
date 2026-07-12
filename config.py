@@ -12,7 +12,7 @@ WORK_COOLDOWN = 3600 # 1 hour in seconds
 # Crime (.crime) — owner-customizable risk/reward command
 CRIME_COOLDOWN = 3600              # 1 hour in seconds (independent of .work)
 DEFAULT_CRIME_SUCCESS_RATE = 40    # percent chance of success
-DEFAULT_CRIME_PENALTY_PCT = 20     # on failure, lose this % of total (wallet + bank)
+DEFAULT_CRIME_PENALTY_PCT = 5      # on failure, lose this % of total (wallet + bank)
 CRIME_MIN_PAYOUT = 100             # smallest successful payout
 CRIME_MAX_PAYOUT = 1000            # largest successful payout
 CRIME_PAYOUT_EXPONENT = 3          # >1 skews payouts toward CRIME_MIN_PAYOUT (diminishing odds of big wins)
