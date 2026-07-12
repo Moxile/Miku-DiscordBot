@@ -41,7 +41,7 @@ def _pool_label(bet, cur) -> str:
 class BetsPage(Page):
     async def build(self):
         bets = await service.list_open_bets(self.pool, self.guild.id)
-        can_create = await service.can_create(self.pool, self.guild, self.user)
+        can_create = await service.can_create(self.pool, self.guild, self.user, self.bot)
 
         embed = discord.Embed(
             title="🎲 Bets",
@@ -64,9 +64,10 @@ class BetsPage(Page):
                                      style=discord.ButtonStyle.success, row=1))
             items.append(self.button("Create Multi-Bet", self._create_multi, emoji="🎯",
                                      style=discord.ButtonStyle.success, row=1))
-        # Bot-funded bets create money on payout, so they're admin-only. The bot
-        # covers the pool, meaning no funding is deducted from the host.
-        if self.user.guild_permissions.administrator:
+        # Bot-funded bets create money on payout, so they're admin-only (bot
+        # owner, guild owner, Administrator, or the owner role — Bot.is_owner).
+        # The bot covers the pool, so no funding is deducted from the host.
+        if await self.bot.is_owner(self.user):
             items.append(self.button("Create Bot Bet", self._create_bot, emoji="🤖",
                                      style=discord.ButtonStyle.secondary, row=2))
             items.append(self.button("Create Bot Multi-Bet", self._create_bot_multi, emoji="🤖",
@@ -373,7 +374,8 @@ class CreateBetModal(HubModal):
             raw_odds=self.odds.value, raw_min=self.min_stake.value,
             raw_max=self.max_stake.value,
             raw_pool=None if self.bot_funded else self.pool.value,
-            description=self.description.value, bot_funded=self.bot_funded)
+            description=self.description.value, bot_funded=self.bot_funded,
+            bot=self.hub.session.bot)
         tag = " (🤖 bot-funded)" if self.bot_funded else ""
         await self.hub.refresh(
             interaction,
@@ -413,7 +415,8 @@ class CreateMultiBetModal(HubModal):
             raw_min=self.min_stake.value, raw_max=self.max_stake.value,
             raw_pool=None if self.bot_funded else self.pool.value,
             description=self.description.value,
-            raw_options=self.options.value, bot_funded=self.bot_funded)
+            raw_options=self.options.value, bot_funded=self.bot_funded,
+            bot=self.hub.session.bot)
         tag = " (🤖 bot-funded)" if self.bot_funded else ""
         await self.hub.refresh(
             interaction,

@@ -65,9 +65,17 @@ class ResolveResult:
 
 # ── permissions ──
 
-async def can_create(pool, guild, member) -> bool:
-    """Admin, or a holder of the configured predictor role (shared with Predictions)."""
-    if member.guild_permissions.administrator:
+async def can_create(pool, guild, member, bot=None) -> bool:
+    """Admin, or a holder of the configured predictor role (shared with Predictions).
+
+    "Admin" is the bot's own owner check (bot owner, guild owner, Administrator,
+    or the configured owner role — Bot.is_owner). Falls back to the raw
+    Administrator permission if no bot is supplied.
+    """
+    if bot is not None:
+        if await bot.is_owner(member):
+            return True
+    elif member.guild_permissions.administrator:
         return True
     row = await pool.fetchrow(
         "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = 'predictor_role'",
@@ -79,8 +87,8 @@ async def can_create(pool, guild, member) -> bool:
     return any(r.id == role_id for r in member.roles)
 
 
-async def require_can_create(pool, guild, member) -> None:
-    if not await can_create(pool, guild, member):
+async def require_can_create(pool, guild, member, bot=None) -> None:
+    if not await can_create(pool, guild, member, bot):
         raise UserError("You don't have permission to create bets.")
 
 
@@ -154,8 +162,10 @@ def _stake_bounds_error(bet) -> str:
     return f"Stake must be at most {hi}."
 
 
-async def _require_admin_for_bot_funded(member, bot_funded: bool) -> None:
-    if bot_funded and not member.guild_permissions.administrator:
+async def _require_admin_for_bot_funded(bot, member, bot_funded: bool) -> None:
+    # "Admin" = the bot's own owner check: bot owner, guild owner, Administrator,
+    # or the configured owner role (see Bot.is_owner).
+    if bot_funded and not await bot.is_owner(member):
         raise UserError("Only admins can create bot-funded bets.")
 
 
@@ -163,9 +173,10 @@ async def _require_admin_for_bot_funded(member, bot_funded: bool) -> None:
 
 async def create_single_bet(pool, guild, member, channel_id: int, *,
                             raw_odds: str, raw_min: str, raw_max: str,
-                            raw_pool: str, description: str, bot_funded: bool = False):
-    await require_can_create(pool, guild, member)
-    await _require_admin_for_bot_funded(member, bot_funded)
+                            raw_pool: str, description: str, bot_funded: bool = False,
+                            bot=None):
+    await require_can_create(pool, guild, member, bot)
+    await _require_admin_for_bot_funded(bot, member, bot_funded)
     await _ensure_unlocked(pool, guild.id, member.id)
     odds = parse_odds(raw_odds)
     min_stake = parse_optional_amount(raw_min)
@@ -212,9 +223,10 @@ async def create_single_bet(pool, guild, member, channel_id: int, *,
 
 async def create_multi_bet(pool, guild, member, channel_id: int, *,
                            raw_min: str, raw_max: str, raw_pool: str,
-                           description: str, raw_options: str, bot_funded: bool = False):
-    await require_can_create(pool, guild, member)
-    await _require_admin_for_bot_funded(member, bot_funded)
+                           description: str, raw_options: str, bot_funded: bool = False,
+                           bot=None):
+    await require_can_create(pool, guild, member, bot)
+    await _require_admin_for_bot_funded(bot, member, bot_funded)
     await _ensure_unlocked(pool, guild.id, member.id)
     min_stake = parse_optional_amount(raw_min)
     max_stake = parse_optional_amount(raw_max)
