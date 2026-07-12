@@ -51,8 +51,6 @@ def _normalize_lang(lang: str) -> str:
 # Pure text transforms with no network dependency. Kept as standalone functions
 # so the command wrappers stay one-liners.
 
-_FUN_MAX_CHARS = 500  # novelty transforms can inflate length (e.g. binary ×8)
-
 _MORSE = {
     "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.",
     "G": "--.", "H": "....", "I": "..", "J": ".---", "K": "-.-", "L": ".-..",
@@ -102,11 +100,6 @@ def _from_binary(text: str) -> str:
     return byte_vals.decode("utf-8", errors="replace")
 
 
-def _looks_binary(text: str) -> bool:
-    stripped = text.replace(" ", "")
-    return bool(stripped) and set(stripped) <= {"0", "1"}
-
-
 def _to_morse(text: str) -> str:
     # Encode word-by-word, joining words with " / " so it round-trips with
     # _from_morse. Unknown characters within a word are dropped.
@@ -127,10 +120,6 @@ def _from_morse(text: str) -> str:
     return " ".join(decoded)
 
 
-def _looks_morse(text: str) -> bool:
-    return bool(text.strip()) and set(text) <= {".", "-", "/", " "}
-
-
 def _mock(text: str) -> str:
     out = []
     upper = False
@@ -141,6 +130,45 @@ def _mock(text: str) -> str:
         else:
             out.append(ch)
     return "".join(out)
+
+
+# Novelty "languages" usable as an origin or target in .trans.
+#   One-way effects apply wherever they appear (origin or target).
+#   Codecs are directional: encode when used as target, decode when used as origin.
+_FX_ONEWAY = {
+    "uwu": _uwuify,
+    "leet": lambda t: t.translate(_LEET),
+    "mock": _mock,
+    "clap": lambda t: " 👏 ".join(t.split()),
+    "reverse": lambda t: t[::-1],
+}
+_FX_CODEC = {  # name: (encode, decode)
+    "binary": (_to_binary, _from_binary),
+    "morse": (_to_morse, _from_morse),
+}
+_FX_ALIASES = {
+    "1337": "leet", "spongebob": "mock", "mocking": "mock",
+    "morsecode": "morse", "backwards": "reverse",
+}
+
+
+def _resolve_fx(token: str) -> str | None:
+    """Return the canonical novelty-effect name for a token, or None if it's not
+    an effect (i.e. treat it as a real language)."""
+    key = token.strip().lower()
+    key = _FX_ALIASES.get(key, key)
+    if key in _FX_ONEWAY or key in _FX_CODEC:
+        return key
+    return None
+
+
+def _apply_fx(name: str, text: str, *, as_origin: bool) -> str:
+    """Apply a novelty stage. Codecs decode as origin, encode as target; one-way
+    effects apply the same regardless of position."""
+    if name in _FX_ONEWAY:
+        return _FX_ONEWAY[name](text)
+    encode, decode = _FX_CODEC[name]
+    return decode(text) if as_origin else encode(text)
 
 
 class Utility(commands.Cog):
@@ -313,13 +341,25 @@ class Utility(commands.Cog):
         **Named languages** (or pass any ISO code directly)
         _LANG_LIST_
 
-        **For fun** — `.uwu` · `.binary` · `.morse` · `.leet` · `.mock` · `.clap` · `.reverse`"""
+        **Novelty "languages"** — use as the origin or target:
+        `uwu` `leet` `mock` `clap` `reverse` (effects, apply anywhere)
+        `binary` `morse` (encode as target, decode as origin)
+        Examples: `.trans en leet Hello` · `.trans uwu leet hi there` · `.trans en morse sos` · `.trans morse en ... --- ...`"""
         text = text.strip()
         if not text:
             await ctx.send("Give me some text to translate.")
             return
         if len(text) > _TRANSLATE_MAX_CHARS:
             await ctx.send(f"That text is too long — keep it under {_TRANSLATE_MAX_CHARS} characters.")
+            return
+
+        fx_origin = _resolve_fx(origin)
+        fx_target = _resolve_fx(target)
+
+        # If either side is a novelty effect, run the pipeline instead of a real
+        # translation (a real translation needs a genuine language pair).
+        if fx_origin or fx_target:
+            await self._run_fx(ctx, origin, target, fx_origin, fx_target, text)
             return
 
         sl = _normalize_lang(origin)
@@ -342,6 +382,25 @@ class Utility(commands.Cog):
             color=discord.Color.blurple(),
         )
         embed.set_author(name=f"{source_label} → {tl}")
+        await ctx.send(embed=embed)
+
+    async def _run_fx(self, ctx, origin, target, fx_origin, fx_target, text):
+        """Pass text through the origin stage then the target stage. A stage that
+        isn't a novelty effect (a real language) is a passthrough."""
+        try:
+            if fx_origin:
+                text = _apply_fx(fx_origin, text, as_origin=True)
+            if fx_target:
+                text = _apply_fx(fx_target, text, as_origin=False)
+        except ValueError:
+            await ctx.send("That doesn't look like valid binary (needs whole bytes).")
+            return
+
+        if not text:
+            await ctx.send("Nothing translatable in there.")
+            return
+        embed = discord.Embed(description=text[:4096], color=discord.Color.blurple())
+        embed.set_author(name=f"{origin.lower()} → {target.lower()}")
         await ctx.send(embed=embed)
 
     async def _translate(self, sl: str, tl: str, text: str) -> tuple[str, str | None]:
@@ -380,82 +439,6 @@ class Utility(commands.Cog):
         if len(data) > 2 and isinstance(data[2], str):
             detected = data[2]
         return translated, detected
-
-    # ── Novelty translators ──────────────────────────────────────────────────
-
-    @staticmethod
-    def _fun_check(text: str) -> str | None:
-        """Validate/trim novelty-transform input; return an error message or None."""
-        if not text.strip():
-            return "Give me some text."
-        if len(text) > _FUN_MAX_CHARS:
-            return f"Keep it under {_FUN_MAX_CHARS} characters."
-        return None
-
-    @commands.command(extras={"example": ".uwu hello world"})
-    async def uwu(self, ctx: commands.Context, *, text: str):
-        """UwU-ify your text. Example: .uwu hello there"""
-        if err := self._fun_check(text):
-            await ctx.send(err)
-            return
-        await ctx.send(_uwuify(text)[:2000])
-
-    @commands.command(extras={"example": ".binary hello"})
-    async def binary(self, ctx: commands.Context, *, text: str):
-        """Text → binary, or binary → text if you give it 0s and 1s.
-        Examples: .binary hello · .binary 01101000 01101001"""
-        if err := self._fun_check(text):
-            await ctx.send(err)
-            return
-        try:
-            result = _from_binary(text) if _looks_binary(text) else _to_binary(text)
-        except ValueError:
-            await ctx.send("That doesn't look like valid binary (needs whole bytes).")
-            return
-        await ctx.send(result[:2000] or "…")
-
-    @commands.command(aliases=["morsecode"], extras={"example": ".morse sos"})
-    async def morse(self, ctx: commands.Context, *, text: str):
-        """Text → Morse, or Morse → text if you give it dots and dashes.
-        Word separator on decode is ` / `. Examples: .morse sos · .morse ... --- ..."""
-        if err := self._fun_check(text):
-            await ctx.send(err)
-            return
-        result = _from_morse(text) if _looks_morse(text) else _to_morse(text)
-        await ctx.send(result[:2000] or "Nothing translatable in there.")
-
-    @commands.command(aliases=["1337"], extras={"example": ".leet elite hacker"})
-    async def leet(self, ctx: commands.Context, *, text: str):
-        """Convert text to l33t speak. Example: .leet elite hacker"""
-        if err := self._fun_check(text):
-            await ctx.send(err)
-            return
-        await ctx.send(text.translate(_LEET)[:2000])
-
-    @commands.command(aliases=["spongebob", "mocking"], extras={"example": ".mock stop copying me"})
-    async def mock(self, ctx: commands.Context, *, text: str):
-        """mOcKiNg SpOnGeBoB text. Example: .mock stop copying me"""
-        if err := self._fun_check(text):
-            await ctx.send(err)
-            return
-        await ctx.send(_mock(text)[:2000])
-
-    @commands.command(extras={"example": ".clap you are amazing"})
-    async def clap(self, ctx: commands.Context, *, text: str):
-        """Put 👏 between 👏 every 👏 word. Example: .clap you are amazing"""
-        if err := self._fun_check(text):
-            await ctx.send(err)
-            return
-        clapped = " 👏 ".join(text.split())
-        await ctx.send(clapped[:2000])
-
-    @commands.command(aliases=["backwards"], extras={"example": ".reverse hello world"})
-    async def reverse(self, ctx: commands.Context, *, text: str):
-        """Reverse your text. Example: .reverse hello world"""
-        if err := self._fun_check(text):
-            await ctx.send(err)
-            return
-        await ctx.send(text[::-1][:2000])
 
 
 # Fill the language list into .trans's help from the single source of truth, so
