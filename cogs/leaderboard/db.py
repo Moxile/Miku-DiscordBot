@@ -69,7 +69,7 @@ async def lb_waifu(conn: Conn, guild_id: int) -> list:
 
 
 async def lb_net(conn: Conn, guild_id: int) -> list:
-    """Net worth = wallet + bank + portfolio value + harem value."""
+    """Net worth = wallet + bank + portfolio value + harem value + real-stock value."""
     return await conn.fetch(
         """WITH last_prices AS (
                SELECT DISTINCT ON (guild_id, stock_channel_id)
@@ -98,14 +98,28 @@ async def lb_net(conn: Conn, guild_id: int) -> list:
                FROM waifus
                WHERE guild_id = $1 AND owner_id IS NOT NULL
                GROUP BY owner_id
+           ),
+           real_prices AS (
+               SELECT DISTINCT ON (symbol) symbol, price
+               FROM real_price_history
+               ORDER BY symbol, recorded_at DESC, id DESC
+           ),
+           real_value AS (
+               SELECT h.user_id, COALESCE(SUM(h.quantity * rp.price), 0) AS realstock
+               FROM real_holdings h
+               JOIN real_prices rp ON rp.symbol = h.symbol
+               WHERE h.guild_id = $1 AND h.quantity > 0
+               GROUP BY h.user_id
            )
            SELECT b.user_id,
                   (b.wallet + b.bank
                    + COALESCE(pv.port, 0)
-                   + COALESCE(hv.harem, 0)) AS score
+                   + COALESCE(hv.harem, 0)
+                   + COALESCE(rv.realstock, 0)) AS score
            FROM balances b
            LEFT JOIN port_value pv ON pv.user_id = b.user_id
            LEFT JOIN harem_value hv ON hv.user_id = b.user_id
+           LEFT JOIN real_value rv ON rv.user_id = b.user_id
            WHERE b.guild_id = $1
            ORDER BY score DESC""",
         guild_id,
