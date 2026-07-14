@@ -71,6 +71,9 @@ REALSTOCK_MAX_LOT         = 1_000_000  # safety cap for absurdly cheap tickers
 WAIFU_BASE_VALUE = 5000
 WAIFU_VALUE_MULTIPLIER = 1.5   # value after buy = max(paid, current) * 1.5
 WAIFU_DECAY_RATE = 0.10        # lose 10% of excess per day
+WAIFU_RESALE_RATE = 0.80       # fraction of a buy the previous owner receives (rest is a sink)
+WAIFU_GIFT_RATE = 0.05         # daily gift to your waifu needed to pause decay = 5% of their value
+WAIFU_GIFT_MIN = 500           # ... but never less than this much
 MARRIAGE_FEE = 10_000          # Flowers to propose
 ENGAGEMENT_DAYS = 7            # days of mutual ownership before proposing
 REMINDER_MAX_DAYS = 10         # max reminder duration

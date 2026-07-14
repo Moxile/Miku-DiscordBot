@@ -68,6 +68,36 @@ SCHEMA = """
         PRIMARY KEY (guild_id, stock_channel_id, revenue_date),
         FOREIGN KEY (guild_id, stock_channel_id) REFERENCES companies(guild_id, stock_channel_id) ON DELETE CASCADE
     );
+
+    -- One row per weekly close, per company. Deliberately has NO foreign key to
+    -- companies: a company is deleted on bankruptcy/dissolution, and we want its
+    -- earnings history (including the final bankrupt week) to survive that. The
+    -- company name is denormalised for the same reason.
+    CREATE TABLE IF NOT EXISTS company_financials (
+        id                 BIGSERIAL PRIMARY KEY,
+        guild_id           BIGINT NOT NULL,
+        stock_channel_id   BIGINT NOT NULL,
+        company_name       TEXT NOT NULL,
+        week_start         DATE NOT NULL,
+        week_end           DATE NOT NULL,
+        weekly_revenue     BIGINT NOT NULL DEFAULT 0,
+        overhead           BIGINT NOT NULL DEFAULT 0,
+        cost               BIGINT NOT NULL DEFAULT 0,
+        profit             BIGINT NOT NULL DEFAULT 0,
+        shocked            BOOLEAN NOT NULL DEFAULT FALSE,
+        dividend_per_share BIGINT NOT NULL DEFAULT 0,
+        dividends_paid     BIGINT NOT NULL DEFAULT 0,
+        treasury_before    BIGINT NOT NULL DEFAULT 0,
+        treasury_after     BIGINT NOT NULL DEFAULT 0,
+        company_level      INTEGER NOT NULL DEFAULT 0,
+        new_shares         INTEGER NOT NULL DEFAULT 0,
+        total_shares       INTEGER NOT NULL DEFAULT 0,
+        bankrupt           BOOLEAN NOT NULL DEFAULT FALSE,
+        recorded_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_company_financials_lookup
+        ON company_financials (guild_id, stock_channel_id, week_start DESC);
 """
 
 MIGRATIONS = [

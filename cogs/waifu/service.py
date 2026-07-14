@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from cogs.economy.db import ensure_wallet, lock_wallet, update_wallet, add_transaction
 from cogs.waifu.db import (
     ensure_waifu, get_waifu, get_harem,
-    set_waifu_owner, set_engagement,
+    set_waifu_owner, engage_if_mutual,
 )
 from core.errors import UserError
-from config import WAIFU_VALUE_MULTIPLIER
+from config import WAIFU_VALUE_MULTIPLIER, WAIFU_RESALE_RATE
 
 
 @dataclass
@@ -19,6 +19,15 @@ class WaifuBuyResult:
     target_id: int
     paid: int
     new_value: int
+    engaged: bool
+    prev_owner_id: int | None = None
+    payout: int = 0
+
+
+@dataclass
+class WaifuGiftResult:
+    """Result of gifting a waifu away."""
+    value: int
     engaged: bool
 
 
@@ -45,34 +54,44 @@ async def buy_waifu(pool, guild_id: int, buyer_id: int, target_id: int, amount: 
             if buyer_bal["wallet"] < pay:
                 raise UserError(f"You don't have enough to pay {pay:,}.")
 
+            prev_owner = target_row["owner_id"]
             new_value = int(max(pay, current_value) * WAIFU_VALUE_MULTIPLIER)
             await update_wallet(conn, guild_id, buyer_id, -pay)
             await add_transaction(conn, guild_id, buyer_id, -pay, "waifu_buy",
                                  f"Bought user {target_id} as waifu")
+
+            # Previous owner is paid a share of the sale; the rest is a money sink.
+            payout = 0
+            if prev_owner and prev_owner != buyer_id:
+                payout = int(pay * WAIFU_RESALE_RATE)
+                await ensure_wallet(conn, guild_id, prev_owner)
+                await update_wallet(conn, guild_id, prev_owner, payout)
+                await add_transaction(conn, guild_id, prev_owner, payout, "waifu_sale",
+                                     f"Sold {target_id} to {buyer_id}")
+
             await set_waifu_owner(conn, guild_id, target_id, buyer_id, new_value)
-
-            buyer_waifu = await get_waifu(conn, guild_id, buyer_id)
-            engaged = buyer_waifu and buyer_waifu["owner_id"] == target_id
-
-            if engaged:
-                await set_engagement(conn, guild_id, buyer_id)
-                await set_engagement(conn, guild_id, target_id)
+            engaged = await engage_if_mutual(conn, guild_id, buyer_id, target_id)
 
     return WaifuBuyResult(
         target_id=target_id,
         paid=pay,
         new_value=new_value,
         engaged=engaged,
+        prev_owner_id=prev_owner if payout else None,
+        payout=payout,
     )
 
 
-async def gift_waifu(pool, guild_id: int, giver_id: int, waifu_id: int, recipient_id: int) -> int:
-    """Gift a waifu to another user. Returns the waifu's value. Raises UserError on validation failure."""
+async def gift_waifu(pool, guild_id: int, giver_id: int, waifu_id: int, recipient_id: int) -> WaifuGiftResult:
+    """Gift a waifu to another user. Raises UserError on validation failure."""
     async with pool.acquire() as conn:
-        row = await get_waifu(conn, guild_id, waifu_id)
-        if not row or row["owner_id"] != giver_id:
-            raise UserError(f"You don't own this user.")
-        if row["spouse_id"] is not None:
-            raise UserError(f"This user is married and cannot be gifted.")
-        await set_waifu_owner(conn, guild_id, waifu_id, recipient_id, row["value"])
-    return row["value"]
+        async with conn.transaction():
+            row = await get_waifu(conn, guild_id, waifu_id)
+            if not row or row["owner_id"] != giver_id:
+                raise UserError(f"You don't own this user.")
+            if row["spouse_id"] is not None:
+                raise UserError(f"This user is married and cannot be gifted.")
+            await set_waifu_owner(conn, guild_id, waifu_id, recipient_id, row["value"])
+            # A gift can create mutual ownership, which engages the pair.
+            engaged = await engage_if_mutual(conn, guild_id, recipient_id, waifu_id)
+    return WaifuGiftResult(value=row["value"], engaged=engaged)

@@ -4,12 +4,14 @@ from discord.ext import commands, tasks
 
 from config import (
     WAIFU_BASE_VALUE, WAIFU_VALUE_MULTIPLIER, WAIFU_DECAY_RATE,
+    WAIFU_RESALE_RATE, WAIFU_GIFT_RATE, WAIFU_GIFT_MIN,
     MARRIAGE_FEE, ENGAGEMENT_DAYS,
 )
 from cogs.economy.db import ensure_wallet, lock_wallet, update_wallet, add_transaction
 from cogs.waifu.db import (
     ensure_waifu, get_waifu, get_harem,
-    set_waifu_owner, set_engagement, set_marriage, dissolve_marriage,
+    set_waifu_owner, engage_if_mutual, set_gifted,
+    set_marriage, dissolve_marriage,
     decay_waifu_values, remove_member_waifus,
 )
 from core.checks import require_not_locked
@@ -52,6 +54,23 @@ class Waifu(commands.Cog):
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await remove_member_waifus(conn, member.guild.id, member.id)
+
+    @staticmethod
+    def _gift_required(value: int) -> int:
+        """Minimum money-gift that pauses a waifu's decay for the day."""
+        return max(WAIFU_GIFT_MIN, int(value * WAIFU_GIFT_RATE))
+
+    @commands.Cog.listener()
+    async def on_money_gift(self, guild_id: int, giver_id: int, recipient_id: int, amount: int):
+        """Dispatched by the economy `.gift` flow. If an owner gifts their own waifu
+        at least the required amount, refresh their decay clock so their value holds."""
+        async with self.pool.acquire() as conn:
+            row = await get_waifu(conn, guild_id, recipient_id)
+            if not row or row["owner_id"] != giver_id:
+                return
+            if amount < self._gift_required(row["value"]):
+                return
+            await set_gifted(conn, guild_id, recipient_id)
 
     # ── Helpers ──
 
@@ -121,19 +140,24 @@ class Waifu(commands.Cog):
                     )
                     return
 
+                prev_owner = target_row["owner_id"]
                 new_value = int(max(pay, current_value) * WAIFU_VALUE_MULTIPLIER)
                 await update_wallet(conn, ctx.guild.id, ctx.author.id, -pay)
                 await add_transaction(conn, ctx.guild.id, ctx.author.id, -pay, "waifu_buy",
                                       f"Bought {member.id} as waifu")
-                await set_waifu_owner(conn, ctx.guild.id, member.id, ctx.author.id, new_value)
 
-                buyer_waifu = await get_waifu(conn, ctx.guild.id, ctx.author.id)
-                if buyer_waifu and buyer_waifu["owner_id"] == member.id:
-                    await set_engagement(conn, ctx.guild.id, ctx.author.id)
-                    await set_engagement(conn, ctx.guild.id, member.id)
-                    engaged = True
-                else:
-                    engaged = False
+                # The previous owner is paid out a share of the sale; the rest is a
+                # money sink. With no previous owner the whole payment is sunk.
+                payout = 0
+                if prev_owner and prev_owner != ctx.author.id:
+                    payout = int(pay * WAIFU_RESALE_RATE)
+                    await ensure_wallet(conn, ctx.guild.id, prev_owner)
+                    await update_wallet(conn, ctx.guild.id, prev_owner, payout)
+                    await add_transaction(conn, ctx.guild.id, prev_owner, payout, "waifu_sale",
+                                          f"Sold {member.id} to {ctx.author.id}")
+
+                await set_waifu_owner(conn, ctx.guild.id, member.id, ctx.author.id, new_value)
+                engaged = await engage_if_mutual(conn, ctx.guild.id, ctx.author.id, member.id)
 
         embed = discord.Embed(
             title="Waifu Purchased!",
@@ -142,6 +166,13 @@ class Waifu(commands.Cog):
         embed.add_field(name="New Waifu", value=member.mention, inline=True)
         embed.add_field(name="Paid", value=f"{cur.emoji} {pay:,}", inline=True)
         embed.add_field(name="New Value", value=f"{cur.emoji} {new_value:,}", inline=True)
+        if payout:
+            prev_name = await self._get_display_name(ctx.guild, prev_owner)
+            embed.add_field(
+                name="Previous owner paid",
+                value=f"**{prev_name}** received {cur.emoji} {payout:,}",
+                inline=False,
+            )
         if engaged:
             embed.add_field(
                 name="💍 Engaged!",
@@ -237,12 +268,21 @@ class Waifu(commands.Cog):
                 await ctx.send(f"**{format_name(waifu)}** is married — they cannot be gifted.")
                 return
             await set_waifu_owner(conn, ctx.guild.id, waifu.id, recipient.id, row["value"])
+            # A gift can create mutual ownership (recipient already owns the giver) —
+            # that engages them, same as a buy would.
+            engaged = await engage_if_mutual(conn, ctx.guild.id, recipient.id, waifu.id)
 
         embed = discord.Embed(
             description=f"{ctx.author.mention} gifted **{format_name(waifu)}** to {recipient.mention}! 🎁",
             color=discord.Color.from_rgb(255, 105, 180),
         )
         embed.add_field(name="Value", value=f"{cur.emoji} {row['value']:,}", inline=True)
+        if engaged:
+            embed.add_field(
+                name="💍 Engaged!",
+                value=f"{recipient.mention} and **{format_name(waifu)}** now own each other — they're **engaged**!",
+                inline=False,
+            )
         await ctx.send(embed=embed)
 
     @commands.command()

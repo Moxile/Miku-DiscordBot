@@ -461,3 +461,36 @@ async def get_avg_buy_price(conn: Conn, guild_id: int, user_id: int, stock_chann
     if row["total_qty"] == 0:
         return 0
     return row["total_cost"] // row["total_qty"]
+
+
+async def record_financials(conn: Conn, guild_id: int, stock_channel_id: int, company_name: str,
+                            week_start, week_end, *,
+                            weekly_revenue: int, overhead: int, cost: int, profit: int, shocked: bool,
+                            dividend_per_share: int, dividends_paid: int,
+                            treasury_before: int, treasury_after: int,
+                            company_level: int, new_shares: int, total_shares: int, bankrupt: bool):
+    """Append one weekly-close snapshot to the company_financials history log."""
+    await conn.execute(
+        """INSERT INTO company_financials
+               (guild_id, stock_channel_id, company_name, week_start, week_end,
+                weekly_revenue, overhead, cost, profit, shocked,
+                dividend_per_share, dividends_paid, treasury_before, treasury_after,
+                company_level, new_shares, total_shares, bankrupt)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                   $11, $12, $13, $14, $15, $16, $17, $18)""",
+        guild_id, stock_channel_id, company_name, week_start, week_end,
+        weekly_revenue, overhead, cost, profit, shocked,
+        dividend_per_share, dividends_paid, treasury_before, treasury_after,
+        company_level, new_shares, total_shares, bankrupt,
+    )
+
+
+async def get_financial_history(conn: Conn, guild_id: int, stock_channel_id: int, limit: int = 12):
+    """Most recent weekly-close snapshots for a company, newest first."""
+    return await conn.fetch(
+        """SELECT * FROM company_financials
+           WHERE guild_id = $1 AND stock_channel_id = $2
+           ORDER BY week_start DESC
+           LIMIT $3""",
+        guild_id, stock_channel_id, limit,
+    )

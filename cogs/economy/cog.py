@@ -342,6 +342,7 @@ class Economy(commands.Cog):
     async def gift(self, ctx, member: discord.Member, amount: str):
         """Gift money from your wallet to another user's wallet. You must mention the recipient and specify the amount."""
         amount = await service.gift(self.pool, ctx.guild.id, ctx.author, member, amount)
+        self.bot.dispatch("money_gift", ctx.guild.id, ctx.author.id, member.id, amount)
         cur = self.bot.get_currency(ctx.guild.id)
         await ctx.send(f"You gifted {amount}{cur.emoji} to {member.mention}!")
 

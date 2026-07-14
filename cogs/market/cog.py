@@ -21,6 +21,7 @@ from cogs.market.db import (
     remove_member_shares,
     process_dilution,
     refund_company_buy_orders,
+    record_financials, get_financial_history,
 )
 from core.checks import require_channel, invalidate, require_not_locked, user_is_locked
 from core.money import parse_amount, AmountError
@@ -370,6 +371,8 @@ class Market(commands.Cog):
                 leveled_up = False
                 next_level = 1
                 dilution = {"new_shares": 0}
+                did_close = False
+                treasury_after = 0
 
                 async with self.pool.acquire() as conn:
                     async with conn.transaction():
@@ -393,6 +396,7 @@ class Market(commands.Cog):
                             )
 
                             fin = weekly_close(company, weekly_revenue)
+                            did_close = True
                             overhead, cost, shocked = fin["overhead"], fin["cost"], fin["shocked"]
                             profit = fin["profit"]
                             dividend_per_share = fin["dividend_per_share"]
@@ -463,6 +467,29 @@ class Market(commands.Cog):
                         "dilution": dilution,
                         "company_level": updated["company_level"],
                     })
+
+                # Log the weekly close to the financial-history table (skipped for
+                # companies dissolved for never trading — no close ran for them).
+                if did_close:
+                    if killed:  # bankruptcy — company row is gone, use its last known state
+                        level_after = company["company_level"]
+                        shares_after = company["total_shares"]
+                        new_shares = 0
+                    else:
+                        treasury_after = updated["treasury"]
+                        level_after = updated["company_level"]
+                        shares_after = updated["total_shares"]
+                        new_shares = dilution["new_shares"]
+                    await record_financials(
+                        self.pool, guild.id, comp["stock_channel_id"], company["name"],
+                        monday, saturday,
+                        weekly_revenue=weekly_revenue, overhead=overhead, cost=cost,
+                        profit=profit, shocked=shocked,
+                        dividend_per_share=dividend_per_share, dividends_paid=dividends_paid,
+                        treasury_before=company["treasury"], treasury_after=treasury_after,
+                        company_level=level_after, new_shares=new_shares,
+                        total_shares=shares_after, bankrupt=killed,
+                    )
 
             if owner_channel:
                 embed = discord.Embed(
@@ -616,6 +643,45 @@ class Market(commands.Cog):
         if len(rows) > 15:
             embed.description += f"\n*... and {len(rows) - 15} more*"
         embed.add_field(name="Total dividends received", value=f"{total:,}{cur.emoji}", inline=False)
+        await ctx.send(embed=embed)
+
+    @commands.command(aliases=['finhist', 'fh'])
+    async def financialhistory(self, ctx, stock: discord.TextChannel):
+        """Show a company's weekly earnings/cost history. Use with a stock channel."""
+        rows = await get_financial_history(self.pool, ctx.guild.id, stock.id, limit=12)
+        if not rows:
+            await ctx.send(
+                "No financial history recorded for this company yet. "
+                "Weeks are logged from the first weekly close after this feature went live — "
+                "earlier weeks weren't stored anywhere and can't be shown."
+            )
+            return
+
+        cur = self.bot.get_currency(ctx.guild.id)
+        name = rows[0]["company_name"]
+        embed = discord.Embed(title=f"{name} — Financial History", color=discord.Color.blue())
+        lines = []
+        for r in rows:
+            wk = r["week_start"].strftime("%b %d")
+            flags = []
+            if r["shocked"]:
+                flags.append("⚡ shock")
+            if r["new_shares"]:
+                flags.append(f"+{r['new_shares']:,} shares")
+            if r["bankrupt"]:
+                flags.append("💀 bankrupt")
+            tag = f"  ({', '.join(flags)})" if flags else ""
+            profit = r["profit"]
+            profit_str = f"+{profit:,}" if profit >= 0 else f"{profit:,}"
+            lines.append(
+                f"**`{wk}`** · Lvl {r['company_level']}{tag}\n"
+                f"Revenue **{r['weekly_revenue']:,}**{cur.emoji} · Cost {r['cost']:,}{cur.emoji} · "
+                f"Profit {profit_str}{cur.emoji}\n"
+                f"DPS {r['dividend_per_share']:,}{cur.emoji} · Paid out {r['dividends_paid']:,}{cur.emoji} · "
+                f"Treasury {r['treasury_after']:,}{cur.emoji}"
+            )
+        embed.description = "\n\n".join(lines)
+        embed.set_footer(text="Newest first · ⚡ = cost shock week")
         await ctx.send(embed=embed)
 
     async def _render_window(self, guild_id, channel, company, key):

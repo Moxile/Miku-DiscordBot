@@ -196,22 +196,26 @@ class WaifuBuyConfirmPage(Page):
         ]
         return embed, items
 
-    async def _pay_minimum(self, interaction: discord.Interaction):
-        result = await service.buy_waifu(self.pool, self.guild.id, self.user.id, self.target_id, None)
+    def _buy_notice(self, result) -> str:
         msg = f"💕 Bought **{format_name(self.guild.get_member(result.target_id), self.guild)}** for {self.currency.emoji} {result.paid:,}!"
+        if result.payout:
+            prev = self.guild.get_member(result.prev_owner_id)
+            prev_name = format_name(prev, self.guild) if prev else "the previous owner"
+            msg += f" **{prev_name}** got {self.currency.emoji} {result.payout:,}."
         if result.engaged:
             msg += " 💍 You're now engaged!"
+        return msg
+
+    async def _pay_minimum(self, interaction: discord.Interaction):
+        result = await service.buy_waifu(self.pool, self.guild.id, self.user.id, self.target_id, None)
         await self.hub.pop(interaction)
-        await self.hub.refresh(interaction, notice=msg)
+        await self.hub.refresh(interaction, notice=self._buy_notice(result))
 
     async def _custom_amount(self, interaction: discord.Interaction):
         async def _do(modal_interaction, amount):
             result = await service.buy_waifu(self.pool, self.guild.id, self.user.id, self.target_id, amount)
-            msg = f"💕 Bought **{format_name(self.guild.get_member(result.target_id), self.guild)}** for {self.currency.emoji} {result.paid:,}!"
-            if result.engaged:
-                msg += " 💍 You're now engaged!"
             await self.hub.pop(modal_interaction)
-            await self.hub.refresh(modal_interaction, notice=msg)
+            await self.hub.refresh(modal_interaction, notice=self._buy_notice(result))
 
         await interaction.response.send_modal(WaifuAmountModal(self.hub, handler=_do))
 
@@ -288,11 +292,13 @@ class WaifuGiftRecipientPage(Page):
 
     async def _pick_recipient(self, interaction: discord.Interaction):
         recipient_id = int(self._select.values[0])
-        value = await service.gift_waifu(self.pool, self.guild.id, self.user.id, self.waifu_id, recipient_id)
+        result = await service.gift_waifu(self.pool, self.guild.id, self.user.id, self.waifu_id, recipient_id)
         waifu_member = self.guild.get_member(self.waifu_id)
         recipient_member = self.guild.get_member(recipient_id)
         msg = f"🎁 Gifted **{format_name(waifu_member, self.guild) if waifu_member else 'User'}** " \
-              f"to **{format_name(recipient_member, self.guild) if recipient_member else 'User'}** ({self.currency.emoji} {value:,})!"
+              f"to **{format_name(recipient_member, self.guild) if recipient_member else 'User'}** ({self.currency.emoji} {result.value:,})!"
+        if result.engaged:
+            msg += " 💍 They're now engaged!"
         await self.hub.pop(interaction)
         await self.hub.pop(interaction)
         await self.hub.refresh(interaction, notice=msg)

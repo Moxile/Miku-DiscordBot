@@ -126,6 +126,7 @@ class GiftPage(Page):
 
         async def _do_gift(modal_interaction: discord.Interaction, raw: str):
             amount = await service.gift(self.pool, self.guild.id, self.user, target, raw)
+            self.bot.dispatch("money_gift", self.guild.id, self.user.id, target.id, amount)
             await self.hub.pop(
                 modal_interaction,
                 notice=f"🎁 Gifted **{amount:,}**{self.currency.emoji} to **{format_name(target)}**.")
