@@ -46,6 +46,16 @@ SCHEMA = """
         ON real_price_history (symbol, recorded_at DESC);
 """
 
+MIGRATIONS = [
+    # Cached company fundamentals (Finnhub profile2/metric), refreshed periodically —
+    # see RealStocks.refresh_profiles. NULL until first fetched.
+    "ALTER TABLE real_symbols ADD COLUMN IF NOT EXISTS industry TEXT",
+    "ALTER TABLE real_symbols ADD COLUMN IF NOT EXISTS domain TEXT",
+    "ALTER TABLE real_symbols ADD COLUMN IF NOT EXISTS market_cap DOUBLE PRECISION",
+    "ALTER TABLE real_symbols ADD COLUMN IF NOT EXISTS eps DOUBLE PRECISION",
+    "ALTER TABLE real_symbols ADD COLUMN IF NOT EXISTS profile_updated_at TIMESTAMPTZ",
+]
+
 CONSTRAINTS = [
     "ALTER TABLE real_holdings ADD CONSTRAINT real_quantity_non_negative CHECK (quantity >= 0)",
 ]

@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -36,6 +37,15 @@ class Quote:
     price: float       # last traded price, USD
     prev_close: float  # previous session close, USD
     fetched_at: float  # time.monotonic() of the fetch
+
+
+@dataclass
+class CompanyProfile:
+    """Slow-moving fundamentals — cached in the DB rather than fetched per view."""
+    industry: str | None      # e.g. "Semiconductors"
+    domain: str | None        # e.g. "nvidia.com"
+    market_cap: float | None  # millions of USD, per Finnhub's profile2
+    eps: float | None         # trailing-twelve-month EPS
 
 
 def lot_size_for(price_usd: float) -> int:
@@ -120,3 +130,28 @@ class QuoteService:
         except QuoteError:
             return None
         return data.get("name") or None
+
+    async def lookup_profile(self, symbol: str) -> CompanyProfile:
+        """Fundamentals for the detail view — best effort, individual fields may be
+        None if Finnhub doesn't have them (or the metric endpoint isn't on-plan)."""
+        industry = domain = market_cap = eps = None
+        try:
+            data = await self._get("/stock/profile2", {"symbol": symbol})
+            industry = data.get("finnhubIndustry") or None
+            domain = self._domain_from_url(data.get("weburl"))
+            market_cap = data.get("marketCapitalization") or None
+        except QuoteError:
+            pass
+        try:
+            data = await self._get("/stock/metric", {"symbol": symbol, "metric": "all"})
+            eps = (data.get("metric") or {}).get("epsTTM")
+        except QuoteError:
+            pass
+        return CompanyProfile(industry=industry, domain=domain, market_cap=market_cap, eps=eps)
+
+    @staticmethod
+    def _domain_from_url(weburl: str | None) -> str | None:
+        if not weburl:
+            return None
+        netloc = urlparse(weburl).netloc.removeprefix("www.")
+        return netloc or None

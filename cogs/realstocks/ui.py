@@ -3,17 +3,21 @@ from __future__ import annotations
 """Real-stock pages for the Miku Menu: live-price list → stock detail with
 chart and buy/sell, plus the real-stock portfolio."""
 
+import math
+
 import discord
 
 from cogs.realstocks import service
 from cogs.realstocks.db import (
     get_avg_buy_price, get_guild_stock, get_holding, get_last_recorded_price,
-    get_user_holdings, list_guild_stocks,
+    get_user_holdings,
 )
-from cogs.realstocks.quotes import QuoteError, unit_buy_price, unit_mid_price, unit_sell_price
+from cogs.realstocks.quotes import QuoteError, unit_buy_price, unit_sell_price
 from core.errors import UserError
 from core.names import format_name
 from core.ui import Page, QuantityModal
+
+STOCKS_PER_PAGE = 8
 
 
 def _lot_note(lot_size: int) -> str:
@@ -28,54 +32,94 @@ def _quotes(page: Page):
 
 
 class RealStocksPage(Page):
+    """Compact, paginated stock browser — sortable by name / top gainers / top losers.
+    The jump-to select only lists the current page, so it always has room for all
+    visible stocks even when there are more than Discord's 25-option limit overall."""
+
+    def __init__(self, hub):
+        super().__init__(hub)
+        self.page_no = 0
+        self.sort = "name"
+        self._max_page = 0
+
     async def build(self):
-        stocks = await list_guild_stocks(self.pool, self.guild.id)
         cur = self.currency
         quotes = _quotes(self)
+        rows = await service.list_stock_rows(self.pool, quotes, self.guild.id, self.sort)
 
         embed = discord.Embed(title="🌐 Real Stock Market", color=discord.Color.blue())
-        if not stocks:
+        if not rows:
             embed.description = "No real stocks are enabled here yet. An owner can add one with `.addstock <ticker>`."
             return embed, [self.button("My Real Stocks", self._portfolio, emoji="💼",
                                        style=discord.ButtonStyle.primary, row=1)]
 
-        for s in stocks:
-            try:
-                quote = await quotes.get_quote(s["symbol"])
-            except QuoteError:
-                embed.add_field(name=f"{s['name']} ({s['symbol']})", value="Price unavailable", inline=False)
+        self._max_page = max(0, math.ceil(len(rows) / STOCKS_PER_PAGE) - 1)
+        self.page_no = min(self.page_no, self._max_page)
+        page_rows = rows[self.page_no * STOCKS_PER_PAGE:(self.page_no + 1) * STOCKS_PER_PAGE]
+
+        lines = []
+        for r in page_rows:
+            s = r["stock"]
+            if not r["ok"]:
+                lines.append(f"**{s['symbol']}** — {s['name']} — price unavailable")
                 continue
-            lot = s["lot_size"]
-            unit = unit_mid_price(quote.price, lot)
-            pct = (quote.price - quote.prev_close) / quote.prev_close * 100 if quote.prev_close else 0
-            arrow = "📈" if pct >= 0 else "📉"
-            embed.add_field(
-                name=f"{s['name']} ({s['symbol']})",
-                value=f"{unit:,}{cur.emoji}/unit ({_lot_note(lot)}, ${quote.price:,.2f}) "
-                      f"{arrow} {pct:+.2f}% today",
-                inline=False,
+            arrow = "📈" if r["pct"] >= 0 else "📉"
+            lines.append(
+                f"**{s['symbol']}** — {s['name']}\n"
+                f"{r['unit']:,}{cur.emoji}/unit (${r['quote'].price:,.2f}) {arrow} {r['pct']:+.2f}% today"
             )
+        embed.description = "\n".join(lines)
+        embed.set_footer(text=f"Page {self.page_no + 1}/{self._max_page + 1} · "
+                              f"sorted by {service.SORT_LABELS[self.sort]} · {len(rows)} stocks")
 
         select = discord.ui.Select(
             placeholder="View a stock…",
             options=[
-                discord.SelectOption(label=f"{s['name']} ({s['symbol']})"[:100], value=s["symbol"])
-                for s in stocks[:25]
+                discord.SelectOption(label=f"{r['stock']['symbol']} — {r['stock']['name']}"[:100],
+                                     value=r["stock"]["symbol"])
+                for r in page_rows
             ],
             row=0,
         )
         select.callback = self._pick_stock
         self._select = select
 
+        sort_select = discord.ui.Select(
+            placeholder="Sort by…",
+            options=[
+                discord.SelectOption(label=label, value=key, default=key == self.sort)
+                for key, label in service.SORT_LABELS.items()
+            ],
+            row=1,
+        )
+        sort_select.callback = self._pick_sort
+        self._sort_select = sort_select
+
         items = [
             select,
+            sort_select,
+            self.button("◀ Prev", self._prev, row=2, disabled=self.page_no == 0),
+            self.button("Next ▶", self._next, row=2, disabled=self.page_no >= self._max_page),
             self.button("My Real Stocks", self._portfolio, emoji="💼",
-                        style=discord.ButtonStyle.primary, row=1),
+                        style=discord.ButtonStyle.primary, row=3),
         ]
         return embed, items
 
     async def _pick_stock(self, interaction: discord.Interaction):
         await self.hub.push(interaction, RealStockPage(self.hub, self._select.values[0]))
+
+    async def _pick_sort(self, interaction: discord.Interaction):
+        self.sort = self._sort_select.values[0]
+        self.page_no = 0
+        await self.hub.refresh(interaction)
+
+    async def _prev(self, interaction: discord.Interaction):
+        self.page_no = max(0, self.page_no - 1)
+        await self.hub.refresh(interaction)
+
+    async def _next(self, interaction: discord.Interaction):
+        self.page_no = min(self._max_page, self.page_no + 1)
+        await self.hub.refresh(interaction)
 
     async def _portfolio(self, interaction: discord.Interaction):
         await self.hub.push(interaction, RealPortfolioPage(self.hub))
@@ -106,6 +150,10 @@ class RealStockPage(Page):
                         value=f"{unit_buy_price(quote.price, lot):,}{cur.emoji} / "
                               f"{unit_sell_price(quote.price, lot):,}{cur.emoji}",
                         inline=True)
+
+        info_lines = service.company_info_lines(stock)
+        if info_lines:
+            embed.add_field(name="Company Info", value="\n".join(info_lines), inline=False)
 
         held = await get_holding(self.pool, self.guild.id, self.user.id, self.symbol)
         if held:

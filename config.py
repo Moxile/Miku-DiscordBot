@@ -66,6 +66,7 @@ REALSTOCK_QUOTE_TTL       = 180  # seconds a fetched quote stays fresh for tradi
 REALSTOCK_REFRESH_MINUTES = 5    # background refresh + chart-recording cadence
 REALSTOCK_MIN_UNIT_PRICE  = 20   # a unit (lot) must cost at least this many coins
 REALSTOCK_MAX_LOT         = 1_000_000  # safety cap for absurdly cheap tickers
+REALSTOCK_PROFILE_REFRESH_DAYS = 7  # how often cached fundamentals (sector/domain/EPS) refresh
 
 # Waifu system
 WAIFU_BASE_VALUE = 5000

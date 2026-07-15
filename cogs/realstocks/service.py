@@ -15,6 +15,7 @@ from cogs.realstocks.db import (
     get_guild_stock, lock_holding, update_holding,
     add_trade, record_price,
     get_price_history, get_price_history_since, get_last_price_before,
+    list_guild_stocks,
 )
 from cogs.realstocks.quotes import QuoteError, UnknownSymbolError, unit_buy_price, unit_sell_price, unit_mid_price
 from core.checks import get_required_channel, user_is_locked
@@ -153,6 +154,63 @@ async def sell(pool, quotes, guild_id: int, user_id: int, symbol: str,
 
     return RealTradeResult(stock_name=stock["name"], symbol=symbol, quantity=quantity,
                            unit_price=unit_price, total=total, lot_size=stock["lot_size"])
+
+
+SORT_LABELS = {"name": "Name (A→Z)", "gainers": "Top Gainers", "losers": "Top Losers"}
+
+
+async def list_stock_rows(pool, quotes, guild_id: int, sort: str = "name") -> list[dict]:
+    """Every enabled stock with its live quote, sorted for browsing. Each row is
+    ``{"stock": <db row>, "quote": Quote|None, "pct": float|None, "unit": int|None, "ok": bool}``
+    — ``ok`` is False when the quote couldn't be fetched (price fields are then None)."""
+    stocks = await list_guild_stocks(pool, guild_id)
+    rows = []
+    for s in stocks:
+        try:
+            quote = await quotes.get_quote(s["symbol"])
+            pct = (quote.price - quote.prev_close) / quote.prev_close * 100 if quote.prev_close else 0.0
+            unit = unit_mid_price(quote.price, s["lot_size"])
+            rows.append({"stock": s, "quote": quote, "pct": pct, "unit": unit, "ok": True})
+        except QuoteError:
+            rows.append({"stock": s, "quote": None, "pct": None, "unit": None, "ok": False})
+    return sort_stock_rows(rows, sort)
+
+
+def sort_stock_rows(rows: list[dict], sort: str) -> list[dict]:
+    """Re-sort rows already built by list_stock_rows — no re-fetching involved."""
+    if sort == "gainers":
+        rows.sort(key=lambda r: r["pct"] if r["ok"] else float("-inf"), reverse=True)
+    elif sort == "losers":
+        rows.sort(key=lambda r: r["pct"] if r["ok"] else float("inf"))
+    else:
+        rows.sort(key=lambda r: r["stock"]["name"].lower())
+    return rows
+
+
+def format_market_cap(cap_millions: float | None) -> str:
+    """Finnhub reports market cap in millions of USD."""
+    if not cap_millions:
+        return "—"
+    if cap_millions >= 1_000_000:
+        return f"${cap_millions / 1_000_000:,.2f}T"
+    if cap_millions >= 1_000:
+        return f"${cap_millions / 1_000:,.2f}B"
+    return f"${cap_millions:,.0f}M"
+
+
+def company_info_lines(stock) -> list[str]:
+    """Cached fundamentals for a stock row (sector, website, market cap, EPS) as
+    embed-ready lines. Empty when nothing has been fetched yet."""
+    lines = []
+    if stock["industry"]:
+        lines.append(f"Sector: {stock['industry']}")
+    if stock["domain"]:
+        lines.append(f"Website: [{stock['domain']}](https://{stock['domain']})")
+    if stock["market_cap"]:
+        lines.append(f"Market Cap: {format_market_cap(stock['market_cap'])}")
+    if stock["eps"] is not None:
+        lines.append(f"EPS (TTM): {stock['eps']:.2f}")
+    return lines
 
 
 async def record_live_price(pool, quotes, stock) -> None:

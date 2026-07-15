@@ -20,6 +20,29 @@ async def create_symbol(conn: Conn, symbol: str, name: str, lot_size: int):
     )
 
 
+async def update_symbol_profile(conn: Conn, symbol: str, industry: str | None, domain: str | None,
+                                market_cap: float | None, eps: float | None):
+    await conn.execute(
+        """UPDATE real_symbols
+           SET industry = $2, domain = $3, market_cap = $4, eps = $5, profile_updated_at = NOW()
+           WHERE symbol = $1""",
+        symbol, industry, domain, market_cap, eps,
+    )
+
+
+async def get_stale_profile_symbols(conn: Conn, older_than) -> list[str]:
+    """Enabled symbols whose fundamentals were never fetched or predate `older_than`."""
+    rows = await conn.fetch(
+        """SELECT DISTINCT s.symbol
+           FROM real_symbols s
+           JOIN guild_real_stocks g ON g.symbol = s.symbol
+           WHERE s.profile_updated_at IS NULL OR s.profile_updated_at < $1
+           ORDER BY s.symbol""",
+        older_than,
+    )
+    return [r["symbol"] for r in rows]
+
+
 # ── Per-guild enablement ──
 
 async def enable_stock(conn: Conn, guild_id: int, symbol: str, enabled_by: int):
@@ -41,7 +64,7 @@ async def disable_stock(conn: Conn, guild_id: int, symbol: str):
 async def get_guild_stock(conn: Conn, guild_id: int, symbol: str):
     """The guild's enablement row joined with the global symbol data, or None."""
     return await conn.fetchrow(
-        """SELECT g.*, s.name, s.lot_size, s.added_at
+        """SELECT g.*, s.name, s.lot_size, s.added_at, s.industry, s.domain, s.market_cap, s.eps
            FROM guild_real_stocks g
            JOIN real_symbols s ON s.symbol = g.symbol
            WHERE g.guild_id = $1 AND g.symbol = $2""",
@@ -51,7 +74,7 @@ async def get_guild_stock(conn: Conn, guild_id: int, symbol: str):
 
 async def list_guild_stocks(conn: Conn, guild_id: int):
     return await conn.fetch(
-        """SELECT g.*, s.name, s.lot_size, s.added_at
+        """SELECT g.*, s.name, s.lot_size, s.added_at, s.industry, s.domain, s.market_cap, s.eps
            FROM guild_real_stocks g
            JOIN real_symbols s ON s.symbol = g.symbol
            WHERE g.guild_id = $1
