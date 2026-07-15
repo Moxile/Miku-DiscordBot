@@ -26,6 +26,7 @@ from config import (
 from core.checks import get_required_channel, user_is_locked
 from core.errors import UserError
 from core.money import parse_amount
+from core.time_utils import humanize_duration
 
 
 def _fmt_remaining(seconds: float) -> str:
@@ -150,6 +151,41 @@ async def get_crime_config(pool, guild_id: int) -> tuple[int, int]:
     )
 
 
+async def get_crime_disabled_state(pool, guild_id: int) -> tuple[bool, int | None]:
+    """Whether `.crime` is turned off for a guild.
+
+    Returns (disabled, remaining_seconds): (False, 0) when enabled, (True, None) when
+    disabled with no end time, or (True, seconds) for a timed disable. An expired timed
+    disable is cleared here and reported as enabled, so it re-enables itself lazily on
+    the next `.crime` without needing a background task."""
+    val = await pool.fetchval(
+        "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = 'crime_disabled_until'",
+        guild_id,
+    )
+    if val is None:
+        return False, 0
+    if val == "inf":
+        return True, None
+    release = int(val)
+    now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+    if now >= release:
+        await pool.execute(
+            "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'crime_disabled_until'",
+            guild_id,
+        )
+        return False, 0
+    return True, release - now
+
+
+async def _ensure_crime_enabled(pool, guild_id: int):
+    disabled, remaining = await get_crime_disabled_state(pool, guild_id)
+    if not disabled:
+        return
+    if remaining is None:
+        raise UserError("🚫 `.crime` is currently disabled on this server.")
+    raise UserError(f"🚫 `.crime` is disabled here for another {humanize_duration(remaining, short=True)}.")
+
+
 @dataclass
 class CrimeResult:
     success: bool
@@ -165,6 +201,7 @@ async def crime(pool, guild_id: int, user_id: int, channel_id: int) -> CrimeResu
     regardless of the outcome."""
     await _ensure_unlocked(pool, guild_id, user_id)
     await _ensure_channel(pool, guild_id, channel_id, "work_channel")
+    await _ensure_crime_enabled(pool, guild_id)
 
     now = datetime.datetime.now(datetime.timezone.utc)
     cooldown = await _get_cooldown(pool, guild_id, user_id, "crime")

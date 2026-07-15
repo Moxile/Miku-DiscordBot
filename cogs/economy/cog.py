@@ -310,12 +310,21 @@ class Economy(commands.Cog):
             role_label = role.mention if role else f"`{jail_role_id}` (deleted)"
             jail_value = f"{role_label} for {humanize_duration(jail_seconds, short=True)}"
 
+        disabled, remaining = await service.get_crime_disabled_state(self.pool, ctx.guild.id)
+        if not disabled:
+            status_value = "✅ Enabled"
+        elif remaining is None:
+            status_value = "🚫 Disabled (until re-enabled)"
+        else:
+            status_value = f"🚫 Disabled for {humanize_duration(remaining, short=True)}"
+
         embed = discord.Embed(title="Crime Settings", color=discord.Color.dark_red())
+        embed.add_field(name="Status", value=status_value, inline=False)
         embed.add_field(name="Success rate", value=f"{rate}%")
         embed.add_field(name="Failure penalty", value=f"{penalty}% of total")
         embed.add_field(name="Jail on bust", value=jail_value, inline=False)
-        embed.set_footer(text="Change with .crimeconfig rate/penalty <percent>, "
-                              ".crimeconfig jailrole <role>, or .crimeconfig jailtime <duration>")
+        embed.set_footer(text="Change with .crimeconfig rate/penalty <percent>, jailrole <role>, "
+                              "jailtime <duration>, or disable [duration] / enable")
         await ctx.send(embed=embed)
 
     @crimeconfig.command(name="rate")
@@ -382,6 +391,39 @@ class Economy(commands.Cog):
         seconds = int(delta.total_seconds())
         await self._set_crime_setting(ctx.guild.id, "crime_jail_duration", seconds)
         await ctx.send(f"Jail time set to **{humanize_duration(seconds, short=True)}** for failed `.crime`s.")
+
+    @crimeconfig.command(name="disable")
+    @commands.is_owner()
+    async def crimeconfig_disable(self, ctx, *, duration: str = None):
+        """Owner: turn off `.crime` server-wide, optionally for a set time.
+        Usage: .crimeconfig disable  (until re-enabled)  or  .crimeconfig disable 2h"""
+        if duration is None:
+            await self._set_crime_setting(ctx.guild.id, "crime_disabled_until", "inf")
+            await ctx.send("🚫 `.crime` is now disabled here until you run `.crimeconfig enable`.")
+            return
+        delta = parse_duration(duration)
+        if delta is None or delta.total_seconds() <= 0:
+            await ctx.send("Invalid time. Use a duration like `30m`, `2h`, or `1d`.")
+            return
+        seconds = int(delta.total_seconds())
+        release = int((datetime.datetime.now(datetime.timezone.utc) + delta).timestamp())
+        await self._set_crime_setting(ctx.guild.id, "crime_disabled_until", str(release))
+        await ctx.send(
+            f"🚫 `.crime` disabled for **{humanize_duration(seconds, short=True)}** — it re-enables automatically."
+        )
+
+    @crimeconfig.command(name="enable")
+    @commands.is_owner()
+    async def crimeconfig_enable(self, ctx):
+        """Owner: re-enable `.crime` if it was disabled."""
+        result = await self.pool.execute(
+            "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'crime_disabled_until'",
+            ctx.guild.id,
+        )
+        if result == "DELETE 0":
+            await ctx.send("`.crime` is already enabled here.")
+        else:
+            await ctx.send("✅ `.crime` re-enabled.")
 
     @commands.group(invoke_without_command=True)
     @commands.is_owner()
