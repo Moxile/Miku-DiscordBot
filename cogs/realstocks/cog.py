@@ -401,15 +401,20 @@ class RealStocks(commands.Cog):
 
         holders = await get_symbol_holders(self.pool, ctx.guild.id, symbol)
         # Payout price: live quote when reachable, else the last recorded chart price.
+        # usd_price is the same price in raw USD, needed to settle any open CFD positions.
         payout_price = None
+        usd_price = None
         if self.quotes.configured:
             try:
                 quote = await self.quotes.get_quote(symbol)
                 payout_price = unit_sell_price(quote.price, stock["lot_size"])
+                usd_price = quote.price
             except QuoteError:
                 pass
         if payout_price is None:
             payout_price = await get_last_recorded_price(self.pool, symbol) or 0
+        if usd_price is None:
+            usd_price = payout_price / stock["lot_size"] if stock["lot_size"] else 0
 
         total_units = sum(h["quantity"] for h in holders)
         prompt = (f"Remove **{stock['name']} ({symbol})** from this server? "
@@ -430,10 +435,21 @@ class RealStocks(commands.Cog):
                         await update_wallet(conn, ctx.guild.id, h["user_id"], payout)
                         await add_transaction(conn, ctx.guild.id, h["user_id"], payout, "realstock_sell",
                                               f"Forced sale of {h['quantity']}x {symbol} units (delisted)")
+                # Force-close any open CFD / option positions on this symbol before the
+                # cascade delete removes them, settling them at the delisting price.
+                from cogs.cfd.service import force_close_symbol
+                from cogs.options.service import force_settle_symbol
+                cfd_count, cfd_paid = await force_close_symbol(conn, ctx.guild.id, symbol, usd_price)
+                opt_count, opt_paid = await force_settle_symbol(conn, ctx.guild.id, symbol, usd_price)
                 await disable_stock(conn, ctx.guild.id, symbol)
 
         paid = sum(h["quantity"] for h in holders) * payout_price
-        await ctx.send(f"**{symbol}** removed. Paid out {paid:,}{cur.emoji} to {len(holders)} holder(s).")
+        msg = f"**{symbol}** removed. Paid out {paid:,}{cur.emoji} to {len(holders)} holder(s)."
+        if cfd_count:
+            msg += f" Force-closed {cfd_count} CFD position(s) for {cfd_paid:,}{cur.emoji}."
+        if opt_count:
+            msg += f" Force-settled {opt_count} option position(s) for {opt_paid:,}{cur.emoji}."
+        await ctx.send(msg)
 
     # ── Public commands ──
 

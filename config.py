@@ -75,6 +75,32 @@ REALSTOCK_PROFILE_REFRESH_DAYS = 7  # how often cached fundamentals (sector/doma
 # delayed (15-min) tier, since the timestamp there always lags real time.
 REALSTOCK_MAX_QUOTE_AGE   = 300
 
+# CFD (contract-for-difference) trading — leveraged directional bets on the real
+# stocks above (see cogs/cfd). Cash-settled against the void like the spot market;
+# a position locks `notional / leverage` coins of margin and is auto-liquidated
+# when the live price crosses its liquidation level.
+CFD_MAX_LEVERAGE       = 10        # hard cap on leverage per position
+CFD_MIN_MARGIN         = 20        # a position must lock at least this many coins of margin
+CFD_MAX_NOTIONAL       = 5_000_000 # anti-exploit cap on a single position's exposure
+CFD_MAINTENANCE_MARGIN = 0.15      # liquidate once equity falls to this fraction of margin
+                                   # (a buffer against gap-throughs between price ticks)
+CFD_FINANCING_RATE     = 0.0005    # daily overnight financing fee, as a fraction of notional,
+                                   # accrued at each 24h rollover and settled on close
+CFD_REFRESH_MINUTES    = 2         # cadence of the liquidation + financing background check
+
+# Options trading — buy-only European calls/puts on the real stocks (see cogs/options).
+# Premiums are priced with Black-Scholes (cogs/options/pricing.py) since Finnhub's free
+# tier has no option chain; positions cash-settle at expiry against the void.
+OPTION_CONTRACT_MULTIPLIER = 100    # shares per contract (premium/payoff scale to coins)
+OPTION_MIN_DAYS            = 1       # shortest expiry a buyer may choose
+OPTION_MAX_DAYS            = 90      # longest expiry a buyer may choose
+OPTION_MAX_CONTRACTS       = 1_000  # anti-exploit cap on contracts per position
+OPTION_RISK_FREE_RATE      = 0.04   # annualized risk-free rate used in Black-Scholes
+OPTION_DEFAULT_IV          = 0.5    # fallback annualized volatility when history is thin
+OPTION_MIN_IV              = 0.10   # clamp floor for the realized-vol IV estimate
+OPTION_MAX_IV              = 2.00   # clamp ceiling for the realized-vol IV estimate
+OPTION_REFRESH_MINUTES     = 5      # cadence of the expiry-settlement background check
+
 # Waifu system
 WAIFU_BASE_VALUE = 5000
 WAIFU_VALUE_MULTIPLIER = 1.5   # value after buy = max(paid, current) * 1.5

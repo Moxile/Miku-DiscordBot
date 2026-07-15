@@ -21,6 +21,8 @@ EXTENSIONS = [
     "cogs.gambling",
     "cogs.market",
     "cogs.realstocks",
+    "cogs.cfd",  # leveraged CFD trading on the real stocks above
+    "cogs.options",  # buy-only options on the real stocks above
     "cogs.shop",
     "cogs.predictions",
     "cogs.bets",
