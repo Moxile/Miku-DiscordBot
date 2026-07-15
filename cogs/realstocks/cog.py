@@ -43,7 +43,7 @@ from core.time_utils import humanize_duration
 from config import REALSTOCK_QUOTE_TTL, REALSTOCK_REFRESH_MINUTES, REALSTOCK_PROFILE_REFRESH_DAYS
 
 STOCKS_PER_PAGE = 8
-TRADES_PER_PAGE = 10
+TRADES_PER_PAGE = 6  # rows are 2-3 lines each now (matched lots, not raw buy/sell events)
 SORT_LABELS = {"name": "Name (A→Z)", "gainers": "Top Gainers", "losers": "Top Losers"}
 
 SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,15}$")
@@ -182,8 +182,8 @@ class RealStocksListView(discord.ui.View):
 
 
 def _render_trade_history(history, page, member, cur) -> tuple[discord.Embed, int]:
-    """Build the .rtradehistory embed for one page of (already newest-first) trades.
-    Returns (embed, max_page)."""
+    """Build the .rtradehistory embed for one page of (already newest-first) matched
+    lots. Returns (embed, max_page)."""
     max_page = max(0, math.ceil(len(history) / TRADES_PER_PAGE) - 1)
     page = min(page, max_page)
     page_rows = history[page * TRADES_PER_PAGE:(page + 1) * TRADES_PER_PAGE]
@@ -191,17 +191,27 @@ def _render_trade_history(history, page, member, cur) -> tuple[discord.Embed, in
     embed = discord.Embed(title=f"📜 {format_name(member)}'s Real-Stock Trades",
                           color=discord.Color.blue())
     lines = []
-    for t in page_rows:
-        date = t["traded_at"].strftime("%Y-%m-%d %H:%M")
-        verb = "🟢 Bought" if t["side"] == "buy" else "🔴 Sold"
-        line = (f"`{date}` {verb} **{t['quantity']:,}x {t['symbol']}** "
-                f"@ {t['price']:,}{cur.emoji}")
-        if t["hold_seconds"] is not None:
-            line += f" — held {humanize_duration(t['hold_seconds'], short=True)}"
-        lines.append(line)
-    embed.description = "\n".join(lines) if lines else "No trades yet."
-    embed.set_footer(text=f"Page {page + 1}/{max_page + 1} · {len(history)} trade(s) · "
-                          f"hold time is since their last buy of that ticker")
+    for r in page_rows:
+        bought_date = r["bought_at"].strftime("%Y-%m-%d %H:%M")
+        held = humanize_duration(r["hold_seconds"], short=True)
+        header = f"**{r['quantity']:,}x {r['symbol']}** — {r['name']}"
+        buy_line = f"Bought {r['buy_price']:,}{cur.emoji} on `{bought_date}`"
+
+        if r["sold_at"] is not None:
+            sold_date = r["sold_at"].strftime("%Y-%m-%d %H:%M")
+            pl_str = f"+{r['pl']:,}" if r["pl"] >= 0 else f"{r['pl']:,}"
+            lines.append(
+                f"{header}\n{buy_line} → Sold {r['sell_price']:,}{cur.emoji} on `{sold_date}` "
+                f"(held {held})\nP/L: **{pl_str}**{cur.emoji}")
+        else:
+            pl_note = ""
+            if r["pl"] is not None:
+                pl_str = f"+{r['pl']:,}" if r["pl"] >= 0 else f"{r['pl']:,}"
+                pl_note = f"\nUnrealized P/L: **{pl_str}**{cur.emoji}"
+            lines.append(f"{header}\n{buy_line} — still held ({held} so far){pl_note}")
+
+    embed.description = "\n\n".join(lines) if lines else "No trades yet."
+    embed.set_footer(text=f"Page {page + 1}/{max_page + 1} · {len(history)} lot(s)")
     return embed, max_page
 
 
@@ -536,7 +546,7 @@ class RealStocks(commands.Cog):
         .rtradehistory [@member]"""
         member = member or ctx.author
         cur = self.bot.get_currency(ctx.guild.id)
-        history = await service.trade_history(self.pool, ctx.guild.id, member.id)
+        history = await service.trade_history(self.pool, self.quotes, ctx.guild.id, member.id)
         if not history:
             await ctx.send(f"{format_name(member)} hasn't made any real-stock trades.")
             return

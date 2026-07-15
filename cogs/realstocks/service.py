@@ -12,7 +12,7 @@ import discord
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction, lock_wallet
 from cogs.market.chart import render_price_chart
 from cogs.realstocks.db import (
-    get_guild_stock, lock_holding, update_holding,
+    get_guild_stock, get_symbol, lock_holding, update_holding,
     add_trade, record_price, get_trades,
     get_price_history, get_price_history_since, get_last_price_before,
     list_guild_stocks,
@@ -161,28 +161,72 @@ async def sell(pool, quotes, guild_id: int, user_id: int, symbol: str,
                            unit_price=unit_price, total=total, lot_size=stock["lot_size"])
 
 
-async def trade_history(pool, guild_id: int, user_id: int) -> list[dict]:
-    """A user's trades, newest first, each with a `hold_seconds` for sells — the time
-    since that user's most recent buy of the same symbol before the sell. Approximates
-    per-lot hold time without full FIFO accounting, which is plenty for spotting
-    flips (buy-then-sell-fast) at a glance."""
-    rows = await get_trades(pool, guild_id, user_id)  # oldest first
-    last_buy_at: dict[str, datetime.datetime] = {}
-    history = []
-    for t in rows:
-        hold_seconds = None
+async def trade_history(pool, quotes, guild_id: int, user_id: int) -> list[dict]:
+    """A user's trades, FIFO-matched per symbol into one row per lot rather than
+    separate buy/sell rows — so buying 100x NVDA and later selling that same 100
+    is one row with its hold time and P/L, and buying 50+50 then selling 100 at
+    once produces two rows (one per original buy), since those are genuinely
+    different holding periods.
+
+    Still-open lots (bought but not yet sold) get their own row too, with
+    hold_seconds counted up to now and `pl` as unrealized P/L against the current
+    quote (None if a quote isn't available). Rows are newest-first by whichever
+    event is most recent: sold_at for closed lots, bought_at for open ones.
+
+    Each row: symbol, name, quantity, buy_price, bought_at, sell_price (None if
+    still held), sold_at (None if still held), hold_seconds, pl."""
+    trades = await get_trades(pool, guild_id, user_id)  # oldest first
+    open_lots: dict[str, list[dict]] = {}
+    names: dict[str, str] = {}
+    closed = []
+    for t in trades:
+        symbol = t["symbol"]
+        names[symbol] = t["name"]
+        lots = open_lots.setdefault(symbol, [])
         if t["side"] == "buy":
-            last_buy_at[t["symbol"]] = t["traded_at"]
-        else:
-            bought_at = last_buy_at.get(t["symbol"])
-            if bought_at is not None:
-                hold_seconds = (t["traded_at"] - bought_at).total_seconds()
-        history.append({
-            "symbol": t["symbol"], "name": t["name"], "side": t["side"],
-            "quantity": t["quantity"], "price": t["price"], "traded_at": t["traded_at"],
-            "hold_seconds": hold_seconds,
-        })
-    history.reverse()
+            lots.append({"quantity": t["quantity"], "price": t["price"], "bought_at": t["traded_at"]})
+            continue
+        remaining = t["quantity"]
+        while remaining > 0 and lots:
+            lot = lots[0]
+            take = min(remaining, lot["quantity"])
+            closed.append({
+                "symbol": symbol, "name": t["name"], "quantity": take,
+                "buy_price": lot["price"], "bought_at": lot["bought_at"],
+                "sell_price": t["price"], "sold_at": t["traded_at"],
+                "hold_seconds": (t["traded_at"] - lot["bought_at"]).total_seconds(),
+                "pl": take * (t["price"] - lot["price"]),
+            })
+            lot["quantity"] -= take
+            remaining -= take
+            if lot["quantity"] == 0:
+                lots.pop(0)
+
+    open_rows = []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for symbol, lots in open_lots.items():
+        if not lots:
+            continue
+        current_price = None
+        sym_row = await get_symbol(pool, symbol)
+        if sym_row:
+            try:
+                quote = await quotes.get_quote(symbol)
+                current_price = unit_sell_price(quote.price, sym_row["lot_size"])
+            except QuoteError:
+                pass
+        for lot in lots:
+            pl = lot["quantity"] * (current_price - lot["price"]) if current_price is not None else None
+            open_rows.append({
+                "symbol": symbol, "name": names[symbol], "quantity": lot["quantity"],
+                "buy_price": lot["price"], "bought_at": lot["bought_at"],
+                "sell_price": None, "sold_at": None,
+                "hold_seconds": (now - lot["bought_at"]).total_seconds(),
+                "pl": pl,
+            })
+
+    history = closed + open_rows
+    history.sort(key=lambda r: r["sold_at"] or r["bought_at"], reverse=True)
     return history
 
 
