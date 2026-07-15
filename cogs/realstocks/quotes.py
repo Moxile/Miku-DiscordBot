@@ -34,9 +34,18 @@ class UnknownSymbolError(QuoteError):
 
 @dataclass
 class Quote:
-    price: float       # last traded price, USD
-    prev_close: float  # previous session close, USD
-    fetched_at: float  # time.monotonic() of the fetch
+    price: float        # last traded price, USD
+    prev_close: float   # previous session close, USD
+    fetched_at: float   # time.monotonic() of the fetch
+    exchange_ts: float  # Finnhub's last-trade timestamp (unix seconds); 0 if unknown
+
+    def age_seconds(self) -> float:
+        """Seconds since the last real trade behind this price. Large when the market
+        is closed, pre-open, halted, or the feed hasn't ticked — used to block trading
+        on a stale price. Returns +inf when the exchange timestamp is unknown."""
+        if not self.exchange_ts:
+            return float("inf")
+        return max(0.0, time.time() - self.exchange_ts)
 
 
 @dataclass
@@ -119,7 +128,8 @@ class QuoteService:
             raise UnknownSymbolError(f"Unknown ticker: {symbol}")
         quote = Quote(price=float(data["c"]),
                       prev_close=float(data.get("pc") or data["c"]),
-                      fetched_at=time.monotonic())
+                      fetched_at=time.monotonic(),
+                      exchange_ts=float(data.get("t") or 0))
         self._cache[symbol] = quote
         return quote
 

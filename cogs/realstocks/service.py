@@ -20,6 +20,8 @@ from cogs.realstocks.db import (
 from cogs.realstocks.quotes import QuoteError, UnknownSymbolError, unit_buy_price, unit_sell_price, unit_mid_price
 from core.checks import get_required_channel, user_is_locked
 from core.errors import UserError
+from core.time_utils import humanize_duration
+from config import REALSTOCK_MAX_QUOTE_AGE
 
 # Time windows offered by the price-chart buttons: key -> (chart subtitle, days)
 CHART_WINDOWS = {
@@ -44,6 +46,21 @@ async def fetch_quote(quotes, symbol: str, *, fresh: bool = False):
         raise UserError(f"Unknown ticker: **{symbol}**.")
     except QuoteError as e:
         raise UserError(str(e))
+
+
+def _ensure_tradeable_quote(quote):
+    """Refuse trades against a stale price. The quote's exchange timestamp only advances
+    while the stock is actually trading, so a large age means the market is closed,
+    pre-open, halted, or the feed hasn't ticked yet — exactly the windows where the shown
+    price lags the real one and can be arbitraged (e.g. buying at the pre-open price right
+    before it jumps at the open)."""
+    age = quote.age_seconds()
+    if age > REALSTOCK_MAX_QUOTE_AGE:
+        raise UserError(
+            "Trading is paused for this stock — the market looks closed or the price "
+            f"hasn't updated in {humanize_duration(int(age), short=True)}. Try again once "
+            "it's trading."
+        )
 
 
 async def _ensure_can_trade(pool, guild_id: int, user_id: int, channel_id: int):
@@ -114,6 +131,7 @@ async def buy(pool, quotes, guild_id: int, user_id: int, symbol: str,
     stock = await _require_stock(pool, guild_id, symbol)
 
     quote = await fetch_quote(quotes, symbol, fresh=True)
+    _ensure_tradeable_quote(quote)
     unit_price = unit_buy_price(quote.price, stock["lot_size"])
     total = unit_price * quantity
 
@@ -142,6 +160,7 @@ async def sell(pool, quotes, guild_id: int, user_id: int, symbol: str,
     stock = await _require_stock(pool, guild_id, symbol)
 
     quote = await fetch_quote(quotes, symbol, fresh=True)
+    _ensure_tradeable_quote(quote)
     unit_price = unit_sell_price(quote.price, stock["lot_size"])
     total = unit_price * quantity
 
