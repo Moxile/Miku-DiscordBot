@@ -123,7 +123,7 @@ async def work(pool, guild_id: int, user_id: int, channel_id: int) -> int:
             f"You need to wait *{_fmt_remaining(remaining.total_seconds())}* before you can work again."
         )
 
-    earnings = secrets.randbelow(201) + 100
+    earnings = secrets.randbelow(181) + 20
     await ensure_wallet(pool, guild_id, user_id)
     await update_wallet(pool, guild_id, user_id, earnings)
     await add_transaction(pool, guild_id, user_id, earnings, "work", "Earnings from work")
