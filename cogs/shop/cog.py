@@ -3,6 +3,7 @@ import math
 import discord
 from discord.ext import commands, tasks
 
+from cogs.economy.db import get_shop_purchases
 from cogs.shop import service
 from cogs.shop.db import (
     create_item, delete_item, get_item_by_name, get_item_by_id, get_shop_items,
@@ -17,6 +18,7 @@ from core.names import format_name
 SHOP_COLOR = discord.Color.from_rgb(57, 197, 187)  # Miku teal
 MIN_TEMP_ROLE_SECONDS = 60
 SHOP_ITEMS_PER_PAGE = 5  # one row of buy buttons per page (Discord caps a row at 5)
+SHOP_LOG_PER_PAGE = 10
 
 
 def _is_role_item(item) -> bool:
@@ -147,6 +149,57 @@ class ShopView(discord.ui.LayoutView):
                 pass
 
 
+class ShopLogView(discord.ui.View):
+    """Paginated view of every shop purchase in the guild, newest first."""
+
+    def __init__(self, guild: discord.Guild, rows: list, invoker_id: int, currency, *, timeout: float = 120):
+        super().__init__(timeout=timeout)
+        self.guild = guild
+        self.rows = rows
+        self.invoker_id = invoker_id
+        self.currency = currency
+        self.page = 0
+        self.max_page = max(0, math.ceil(len(rows) / SHOP_LOG_PER_PAGE) - 1)
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page >= self.max_page
+
+    def build_embed(self) -> discord.Embed:
+        start = self.page * SHOP_LOG_PER_PAGE
+        page_rows = self.rows[start:start + SHOP_LOG_PER_PAGE]
+        embed = discord.Embed(title=f"{self.guild.name} Shop Log", color=SHOP_COLOR)
+        lines = []
+        for row in page_rows:
+            member = self.guild.get_member(row["user_id"])
+            who = format_name(member) if member else f"<@{row['user_id']}>"
+            item_name = row["description"].removeprefix("Bought ") if row["description"] else "an item"
+            date = row["created_at"].strftime("%Y-%m-%d %H:%M")
+            lines.append(f"`{date}` **{who}** bought **{item_name}** for {-row['amount']:,}{self.currency.emoji}")
+        embed.description = "\n".join(lines) if lines else "No purchases yet."
+        embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1} — {len(self.rows)} total")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message("This isn't your shop log.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.max_page, self.page + 1)
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+
 class Shop(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -235,6 +288,19 @@ class Shop(commands.Cog):
                 inline=False,
             )
         await ctx.send(embed=embed)
+
+    @commands.command()
+    @commands.is_owner()
+    async def shoplog(self, ctx):
+        """View a log of every item bought from the shop: who, what, price, and when."""
+        rows = await get_shop_purchases(self.pool, ctx.guild.id)
+        if not rows:
+            await ctx.send("No purchases have been made from the shop yet.")
+            return
+
+        cur = self.bot.get_currency(ctx.guild.id)
+        view = ShopLogView(ctx.guild, rows, ctx.author.id, cur)
+        await ctx.send(embed=view.build_embed(), view=view)
 
     # ── Owner Commands ──
 

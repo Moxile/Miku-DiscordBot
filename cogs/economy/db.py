@@ -38,6 +38,16 @@ async def add_transaction(conn: Conn, guild_id: int, user_id: int, amount: int, 
     )
 
 
+async def get_shop_purchases(conn: Conn, guild_id: int) -> list:
+    """All shop purchases for a guild, newest first (who/what/price/when live in one row)."""
+    return await conn.fetch(
+        """SELECT user_id, amount, description, created_at FROM transactions
+           WHERE guild_id = $1 AND tx_type = 'shop_buy'
+           ORDER BY created_at DESC""",
+        guild_id,
+    )
+
+
 async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
     """Delete all economy data for a member who left/was removed from the guild.
 
