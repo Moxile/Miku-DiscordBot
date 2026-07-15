@@ -16,6 +16,7 @@ DEFAULT_CRIME_PENALTY_PCT = 5      # on failure, lose this % of total (wallet + 
 CRIME_MIN_PAYOUT = 100             # smallest successful payout
 CRIME_MAX_PAYOUT = 1000            # largest successful payout
 CRIME_PAYOUT_EXPONENT = 3          # >1 skews payouts toward CRIME_MIN_PAYOUT (diminishing odds of big wins)
+DEFAULT_JAIL_DURATION = 600        # on a failed crime, wear the prisoner role this many seconds (10 min)
 
 # Market economy
 REVENUE_BASE_MULTIPLIER = 800    # fallback multiplier if a company isn't solved at listing

@@ -40,6 +40,18 @@ SCHEMA = """
         amount           BIGINT NOT NULL,
         PRIMARY KEY (guild_id, role_id)
     );
+
+    -- Active .crime jail sentences: the prisoner role a member is wearing and when
+    -- it should be taken back off. A background task (Economy.release_jails) removes
+    -- the role once release_at passes, so sentences survive bot restarts. role_id is
+    -- stored per-row so the right role is removed even if the guild's config changes.
+    CREATE TABLE IF NOT EXISTS crime_jails (
+        guild_id   BIGINT NOT NULL,
+        user_id    BIGINT NOT NULL,
+        role_id    BIGINT NOT NULL,
+        release_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (guild_id, user_id)
+    );
 """
 
 MIGRATIONS = [

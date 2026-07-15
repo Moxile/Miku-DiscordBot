@@ -1,18 +1,20 @@
+import datetime
 import math
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from cogs.economy import service
 from cogs.economy.db import (
     ensure_wallet, update_wallet, update_bank, add_transaction, remove_member_data,
     set_salary_role, remove_salary_role, list_salary_roles,
+    get_jail_config, get_due_jails, remove_jail,
 )
 from cogs.market.db import remove_member_shares, create_company
 from core.money import parse_amount, AmountError
 from core.time_utils import parse_duration, humanize_duration
 from core.confirm import confirm
-from config import REVENUE_BASE_MULTIPLIER, WORK_COOLDOWN
+from config import REVENUE_BASE_MULTIPLIER, WORK_COOLDOWN, DEFAULT_JAIL_DURATION
 
 from core.currency import Currency
 from core.checks import require_channel, invalidate, require_not_locked, invalidate_lock
@@ -79,10 +81,40 @@ class TransactionPaginator(discord.ui.View):
 class Economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.release_jails.start()
+
+    def cog_unload(self):
+        self.release_jails.cancel()
 
     @property
     def pool(self):
         return self.bot.pool
+
+    # ── Jail release (removes expired .crime prisoner roles) ──
+
+    @tasks.loop(seconds=30)
+    async def release_jails(self):
+        """Take the prisoner role back off members whose jail sentence has expired.
+
+        Runs off the DB so sentences survive restarts. Rows are cleared even when the
+        role/member/guild is gone, so a stale sentence can't wedge the loop."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        due = await get_due_jails(self.pool, now)
+        for row in due:
+            guild = self.bot.get_guild(row["guild_id"])
+            if guild is not None:
+                member = guild.get_member(row["user_id"])
+                role = guild.get_role(row["role_id"])
+                if member is not None and role is not None and role in member.roles:
+                    try:
+                        await member.remove_roles(role, reason="Crime jail sentence served")
+                    except discord.HTTPException:
+                        continue  # keep the row; retry next cycle
+            await remove_jail(self.pool, row["guild_id"], row["user_id"])
+
+    @release_jails.before_loop
+    async def before_release_jails(self):
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
@@ -240,17 +272,50 @@ class Economy(commands.Cog):
                 ),
                 color=discord.Color.red(),
             )
+            await self._apply_jail(ctx, result, embed)
         await ctx.send(embed=embed)
+
+    async def _apply_jail(self, ctx, result, embed):
+        """Put the prisoner role on a busted member (the sentence is already recorded
+        in the DB by service.crime, so the background task frees them either way)."""
+        if result.jail_role_id is None:
+            return
+        role = ctx.guild.get_role(result.jail_role_id)
+        served = humanize_duration(result.jail_seconds, short=True)
+        if role is None:
+            embed.add_field(name="🔒 Jailed", value=f"Sentenced to **{served}** (prisoner role missing).", inline=False)
+            return
+        try:
+            await ctx.author.add_roles(role, reason="Busted committing a crime")
+        except discord.Forbidden:
+            embed.add_field(name="🔒 Jailed",
+                            value=f"Sentenced to **{served}** — but I lack permission to grant {role.mention}.",
+                            inline=False)
+            return
+        except discord.HTTPException:
+            embed.add_field(name="🔒 Jailed", value=f"Sentenced to **{served}**.", inline=False)
+            return
+        embed.add_field(name="🔒 Jailed", value=f"You're in {role.mention} for **{served}**.", inline=False)
 
     @commands.group(invoke_without_command=True)
     @commands.is_owner()
     async def crimeconfig(self, ctx):
         """Owner: view or change the `.crime` success rate and failure penalty."""
         rate, penalty = await service.get_crime_config(self.pool, ctx.guild.id)
+        jail_role_id, jail_seconds = await get_jail_config(self.pool, ctx.guild.id)
+        role = ctx.guild.get_role(jail_role_id) if jail_role_id else None
+        if jail_role_id is None:
+            jail_value = "Off — bind a role with `.crimeconfig jailrole <role>`"
+        else:
+            role_label = role.mention if role else f"`{jail_role_id}` (deleted)"
+            jail_value = f"{role_label} for {humanize_duration(jail_seconds, short=True)}"
+
         embed = discord.Embed(title="Crime Settings", color=discord.Color.dark_red())
         embed.add_field(name="Success rate", value=f"{rate}%")
         embed.add_field(name="Failure penalty", value=f"{penalty}% of total")
-        embed.set_footer(text="Change with .crimeconfig rate <percent> or .crimeconfig penalty <percent>")
+        embed.add_field(name="Jail on bust", value=jail_value, inline=False)
+        embed.set_footer(text="Change with .crimeconfig rate/penalty <percent>, "
+                              ".crimeconfig jailrole <role>, or .crimeconfig jailtime <duration>")
         await ctx.send(embed=embed)
 
     @crimeconfig.command(name="rate")
@@ -272,6 +337,51 @@ class Economy(commands.Cog):
             return
         await self._set_crime_setting(ctx.guild.id, "crime_penalty_pct", percent)
         await ctx.send(f"`.crime` failure penalty set to **{percent}%** of total money.")
+
+    @crimeconfig.command(name="jailrole")
+    @commands.is_owner()
+    async def crimeconfig_jailrole(self, ctx, role: discord.Role = None):
+        """Owner: bind (or clear) the prisoner role given on a failed `.crime`.
+        Pass a role to enable jail, or nothing to disable it. Usage: .crimeconfig jailrole @Prisoner"""
+        if role is None:
+            await self.pool.execute(
+                "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'crime_jail_role'",
+                ctx.guild.id,
+            )
+            await ctx.send("Crime jail disabled — no prisoner role will be given on a failed `.crime`.")
+            return
+        if role >= ctx.guild.me.top_role:
+            await ctx.send(
+                f"I can't manage {role.mention} — it's above my highest role. "
+                "Move my role above it (or pick a lower role) so I can jail and free members."
+            )
+            return
+        await self._set_crime_setting(ctx.guild.id, "crime_jail_role", role.id)
+        _, jail_seconds = await get_jail_config(self.pool, ctx.guild.id)
+        await ctx.send(
+            f"Prisoner role set to {role.mention}. Busted criminals wear it for "
+            f"**{humanize_duration(jail_seconds, short=True)}** (change with `.crimeconfig jailtime <duration>`)."
+        )
+
+    @crimeconfig.command(name="jailtime")
+    @commands.is_owner()
+    async def crimeconfig_jailtime(self, ctx, *, duration: str = None):
+        """Owner: set how long the prisoner role is worn after a failed `.crime`.
+        Usage: .crimeconfig jailtime 10m  (also accepts e.g. 30m, 1h, 2d)"""
+        if duration is None:
+            await self.pool.execute(
+                "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'crime_jail_duration'",
+                ctx.guild.id,
+            )
+            await ctx.send(f"Jail time reset to the default (**{humanize_duration(DEFAULT_JAIL_DURATION, short=True)}**).")
+            return
+        delta = parse_duration(duration)
+        if delta is None or delta.total_seconds() <= 0:
+            await ctx.send("Invalid time. Use a duration like `10m`, `1h`, or `2d`.")
+            return
+        seconds = int(delta.total_seconds())
+        await self._set_crime_setting(ctx.guild.id, "crime_jail_duration", seconds)
+        await ctx.send(f"Jail time set to **{humanize_duration(seconds, short=True)}** for failed `.crime`s.")
 
     @commands.group(invoke_without_command=True)
     @commands.is_owner()
@@ -334,8 +444,13 @@ class Economy(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_role_delete(self, role: discord.Role):
-        """Drop a role's salary binding when the role is deleted."""
+        """Drop a role's salary binding — and its use as the crime prisoner role — when
+        the role is deleted."""
         await remove_salary_role(self.pool, role.guild.id, role.id)
+        await self.pool.execute(
+            "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'crime_jail_role' AND value = $2",
+            role.guild.id, str(role.id),
+        )
 
     @commands.command()
     @require_not_locked()

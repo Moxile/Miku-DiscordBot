@@ -85,7 +85,24 @@ class EconomyPage(Page):
                       f"({result.penalty_pct}% of your total wallet + bank).")
         else:
             notice = "🚔 You got caught — lucky for you, you had nothing worth taking."
+        if not result.success and result.jail_role_id is not None:
+            notice += await self._apply_jail(result)
         await self.hub.refresh(interaction, notice=notice)
+
+    async def _apply_jail(self, result) -> str:
+        """Put the prisoner role on a busted member (sentence already recorded by
+        service.crime). Returns a short suffix describing the outcome for the notice."""
+        served = humanize_duration(result.jail_seconds, short=True)
+        role = self.guild.get_role(result.jail_role_id)
+        if role is None:
+            return f" 🔒 Jailed for {served} (prisoner role missing)."
+        try:
+            await self.user.add_roles(role, reason="Busted committing a crime")
+        except discord.Forbidden:
+            return f" 🔒 Sentenced to {served}, but I can't grant {role.name}."
+        except discord.HTTPException:
+            return f" 🔒 Jailed for {served}."
+        return f" 🔒 You're in {role.name} for {served}."
 
     async def _collect(self, interaction: discord.Interaction):
         result = await service.collect(self.pool, self.guild, self.user,

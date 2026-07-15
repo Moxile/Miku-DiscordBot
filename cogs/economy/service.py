@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 import discord
 
 from cogs.economy.db import (
-    add_transaction, ensure_wallet, get_salary_roles_for, update_bank, update_wallet,
+    add_jail, add_transaction, ensure_wallet, get_jail_config, get_salary_roles_for,
+    update_bank, update_wallet,
 )
 from config import (
     WORK_COOLDOWN, CRIME_COOLDOWN, DEFAULT_CRIME_SUCCESS_RATE, DEFAULT_CRIME_PENALTY_PCT,
@@ -152,9 +153,11 @@ async def get_crime_config(pool, guild_id: int) -> tuple[int, int]:
 @dataclass
 class CrimeResult:
     success: bool
-    payout: int = 0        # on success
-    loss: int = 0          # on failure
-    penalty_pct: int = 0   # on failure
+    payout: int = 0            # on success
+    loss: int = 0              # on failure
+    penalty_pct: int = 0       # on failure
+    jail_role_id: int = None   # on failure, when a prisoner role is configured
+    jail_seconds: int = 0      # how long the prisoner role should be worn
 
 
 async def crime(pool, guild_id: int, user_id: int, channel_id: int) -> CrimeResult:
@@ -187,6 +190,8 @@ async def crime(pool, guild_id: int, user_id: int, channel_id: int) -> CrimeResu
         return CrimeResult(success=True, payout=payout)
 
     # Failure: lose penalty_pct of total money, taken from the wallet first then the bank.
+    # The cash penalty is easily dodged by parking money elsewhere first, so the real
+    # deterrent is the prisoner role (jail), which can't be gifted away — see below.
     total = bal["wallet"] + bal["bank"]
     loss = total * penalty_pct // 100
     from_wallet = min(loss, bal["wallet"])
@@ -197,7 +202,16 @@ async def crime(pool, guild_id: int, user_id: int, channel_id: int) -> CrimeResu
         await update_bank(pool, guild_id, user_id, -from_bank)
     if loss > 0:
         await add_transaction(pool, guild_id, user_id, -loss, "crime", "Failed crime")
-    return CrimeResult(success=False, loss=loss, penalty_pct=penalty_pct)
+
+    # Jail: when the guild has bound a prisoner role, record the sentence so the
+    # background release task (and the command handler) can apply/remove it.
+    jail_role_id, jail_seconds = await get_jail_config(pool, guild_id)
+    if jail_role_id is not None:
+        release_at = now + datetime.timedelta(seconds=jail_seconds)
+        await add_jail(pool, guild_id, user_id, jail_role_id, release_at)
+
+    return CrimeResult(success=False, loss=loss, penalty_pct=penalty_pct,
+                       jail_role_id=jail_role_id, jail_seconds=jail_seconds)
 
 
 @dataclass
