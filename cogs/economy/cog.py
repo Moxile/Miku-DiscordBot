@@ -265,11 +265,7 @@ class Economy(commands.Cog):
         else:
             embed = discord.Embed(
                 title="Crime — Busted 🚔",
-                description=(
-                    f"You got caught and lost **{result.loss:,}**{cur.emoji} ({result.penalty_pct}% of your total wallet + bank)."
-                    if result.loss > 0 else
-                    "You got caught — lucky for you, you had nothing worth taking."
-                ),
+                description=f"You got caught and were fined **{result.loss:,}**{cur.emoji}.",
                 color=discord.Color.red(),
             )
             await self._apply_jail(ctx, result, embed)
@@ -300,8 +296,8 @@ class Economy(commands.Cog):
     @commands.group(invoke_without_command=True)
     @commands.is_owner()
     async def crimeconfig(self, ctx):
-        """Owner: view or change the `.crime` success rate and failure penalty."""
-        rate, penalty = await service.get_crime_config(self.pool, ctx.guild.id)
+        """Owner: view or change the `.crime` success rate, payout and fine."""
+        rate, payout, fine = await service.get_crime_config(self.pool, ctx.guild.id)
         jail_role_id, jail_seconds = await get_jail_config(self.pool, ctx.guild.id)
         role = ctx.guild.get_role(jail_role_id) if jail_role_id else None
         if jail_role_id is None:
@@ -310,21 +306,17 @@ class Economy(commands.Cog):
             role_label = role.mention if role else f"`{jail_role_id}` (deleted)"
             jail_value = f"{role_label} for {humanize_duration(jail_seconds, short=True)}"
 
-        disabled, remaining = await service.get_crime_disabled_state(self.pool, ctx.guild.id)
-        if not disabled:
-            status_value = "✅ Enabled"
-        elif remaining is None:
-            status_value = "🚫 Disabled (until re-enabled)"
-        else:
-            status_value = f"🚫 Disabled for {humanize_duration(remaining, short=True)}"
+        cur = self.bot.get_currency(ctx.guild.id)
+        ev = payout * rate // 100 - fine * (100 - rate) // 100
 
         embed = discord.Embed(title="Crime Settings", color=discord.Color.dark_red())
-        embed.add_field(name="Status", value=status_value, inline=False)
         embed.add_field(name="Success rate", value=f"{rate}%")
-        embed.add_field(name="Failure penalty", value=f"{penalty}% of total")
+        embed.add_field(name="Payout on success", value=f"{payout:,}{cur.emoji}")
+        embed.add_field(name="Fine on failure", value=f"{fine:,}{cur.emoji}")
+        embed.add_field(name="Expected value", value=f"{ev:+,}{cur.emoji} per attempt", inline=False)
         embed.add_field(name="Jail on bust", value=jail_value, inline=False)
-        embed.set_footer(text="Change with .crimeconfig rate/penalty <percent>, jailrole <role>, "
-                              "jailtime <duration>, or disable [duration] / enable")
+        embed.set_footer(text="Change with .crimeconfig rate <percent>, payout/fine <amount>, "
+                              "jailrole <role>, or jailtime <duration>")
         await ctx.send(embed=embed)
 
     @crimeconfig.command(name="rate")
@@ -337,15 +329,25 @@ class Economy(commands.Cog):
         await self._set_crime_setting(ctx.guild.id, "crime_success_rate", percent)
         await ctx.send(f"`.crime` success rate set to **{percent}%**.")
 
-    @crimeconfig.command(name="penalty")
+    @crimeconfig.command(name="payout")
     @commands.is_owner()
-    async def crimeconfig_penalty(self, ctx, percent: int):
-        """Owner: set the `.crime` failure penalty as a % of total wallet + bank (0–100%)."""
-        if not 0 <= percent <= 100:
-            await ctx.send("Penalty must be between 0 and 100.")
+    async def crimeconfig_payout(self, ctx, amount: int):
+        """Owner: set the flat reward for a successful `.crime`."""
+        if amount < 0:
+            await ctx.send("Payout can't be negative.")
             return
-        await self._set_crime_setting(ctx.guild.id, "crime_penalty_pct", percent)
-        await ctx.send(f"`.crime` failure penalty set to **{percent}%** of total money.")
+        await self._set_crime_setting(ctx.guild.id, "crime_payout", amount)
+        await ctx.send(f"`.crime` success payout set to **{amount:,}**.")
+
+    @crimeconfig.command(name="fine")
+    @commands.is_owner()
+    async def crimeconfig_fine(self, ctx, amount: int):
+        """Owner: set the flat fine for a failed `.crime` (can push a wallet negative)."""
+        if amount < 0:
+            await ctx.send("Fine can't be negative.")
+            return
+        await self._set_crime_setting(ctx.guild.id, "crime_fine", amount)
+        await ctx.send(f"`.crime` failure fine set to **{amount:,}**.")
 
     @crimeconfig.command(name="jailrole")
     @commands.is_owner()
@@ -391,39 +393,6 @@ class Economy(commands.Cog):
         seconds = int(delta.total_seconds())
         await self._set_crime_setting(ctx.guild.id, "crime_jail_duration", seconds)
         await ctx.send(f"Jail time set to **{humanize_duration(seconds, short=True)}** for failed `.crime`s.")
-
-    @crimeconfig.command(name="disable")
-    @commands.is_owner()
-    async def crimeconfig_disable(self, ctx, *, duration: str = None):
-        """Owner: turn off `.crime` server-wide, optionally for a set time.
-        Usage: .crimeconfig disable  (until re-enabled)  or  .crimeconfig disable 2h"""
-        if duration is None:
-            await self._set_crime_setting(ctx.guild.id, "crime_disabled_until", "inf")
-            await ctx.send("🚫 `.crime` is now disabled here until you run `.crimeconfig enable`.")
-            return
-        delta = parse_duration(duration)
-        if delta is None or delta.total_seconds() <= 0:
-            await ctx.send("Invalid time. Use a duration like `30m`, `2h`, or `1d`.")
-            return
-        seconds = int(delta.total_seconds())
-        release = int((datetime.datetime.now(datetime.timezone.utc) + delta).timestamp())
-        await self._set_crime_setting(ctx.guild.id, "crime_disabled_until", str(release))
-        await ctx.send(
-            f"🚫 `.crime` disabled for **{humanize_duration(seconds, short=True)}** — it re-enables automatically."
-        )
-
-    @crimeconfig.command(name="enable")
-    @commands.is_owner()
-    async def crimeconfig_enable(self, ctx):
-        """Owner: re-enable `.crime` if it was disabled."""
-        result = await self.pool.execute(
-            "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'crime_disabled_until'",
-            ctx.guild.id,
-        )
-        if result == "DELETE 0":
-            await ctx.send("`.crime` is already enabled here.")
-        else:
-            await ctx.send("✅ `.crime` re-enabled.")
 
     @commands.group(invoke_without_command=True)
     @commands.is_owner()

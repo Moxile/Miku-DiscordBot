@@ -80,11 +80,8 @@ class EconomyPage(Page):
         cur = self.currency
         if result.success:
             notice = f"🤑 Crime success! You got away with **{result.payout:,}**{cur.emoji}."
-        elif result.loss > 0:
-            notice = (f"🚔 Busted! You lost **{result.loss:,}**{cur.emoji} "
-                      f"({result.penalty_pct}% of your total wallet + bank).")
         else:
-            notice = "🚔 You got caught — lucky for you, you had nothing worth taking."
+            notice = f"🚔 Busted! You were fined **{result.loss:,}**{cur.emoji}."
         if not result.success and result.jail_role_id is not None:
             notice += await self._apply_jail(result)
         await self.hub.refresh(interaction, notice=notice)

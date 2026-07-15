@@ -20,13 +20,12 @@ from cogs.economy.db import (
     update_bank, update_wallet,
 )
 from config import (
-    WORK_COOLDOWN, CRIME_COOLDOWN, DEFAULT_CRIME_SUCCESS_RATE, DEFAULT_CRIME_PENALTY_PCT,
-    CRIME_MIN_PAYOUT, CRIME_MAX_PAYOUT, CRIME_PAYOUT_EXPONENT,
+    WORK_COOLDOWN, CRIME_COOLDOWN, DEFAULT_CRIME_SUCCESS_RATE,
+    DEFAULT_CRIME_PAYOUT, DEFAULT_CRIME_FINE,
 )
 from core.checks import get_required_channel, user_is_locked
 from core.errors import UserError
 from core.money import parse_amount
-from core.time_utils import humanize_duration
 
 
 def _fmt_remaining(seconds: float) -> str:
@@ -138,60 +137,25 @@ async def work(pool, guild_id: int, user_id: int, channel_id: int) -> int:
     return earnings
 
 
-async def get_crime_config(pool, guild_id: int) -> tuple[int, int]:
-    """(success_rate, penalty_pct) for this guild, falling back to defaults."""
+async def get_crime_config(pool, guild_id: int) -> tuple[int, int, int]:
+    """(success_rate, payout, fine) for this guild, falling back to defaults."""
     rows = await pool.fetch(
         "SELECT key, value FROM guild_settings WHERE guild_id = $1 AND key = ANY($2)",
-        guild_id, ["crime_success_rate", "crime_penalty_pct"],
+        guild_id, ["crime_success_rate", "crime_payout", "crime_fine"],
     )
     settings = {r["key"]: int(r["value"]) for r in rows}
     return (
         settings.get("crime_success_rate", DEFAULT_CRIME_SUCCESS_RATE),
-        settings.get("crime_penalty_pct", DEFAULT_CRIME_PENALTY_PCT),
+        settings.get("crime_payout", DEFAULT_CRIME_PAYOUT),
+        settings.get("crime_fine", DEFAULT_CRIME_FINE),
     )
-
-
-async def get_crime_disabled_state(pool, guild_id: int) -> tuple[bool, int | None]:
-    """Whether `.crime` is turned off for a guild.
-
-    Returns (disabled, remaining_seconds): (False, 0) when enabled, (True, None) when
-    disabled with no end time, or (True, seconds) for a timed disable. An expired timed
-    disable is cleared here and reported as enabled, so it re-enables itself lazily on
-    the next `.crime` without needing a background task."""
-    val = await pool.fetchval(
-        "SELECT value FROM guild_settings WHERE guild_id = $1 AND key = 'crime_disabled_until'",
-        guild_id,
-    )
-    if val is None:
-        return False, 0
-    if val == "inf":
-        return True, None
-    release = int(val)
-    now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
-    if now >= release:
-        await pool.execute(
-            "DELETE FROM guild_settings WHERE guild_id = $1 AND key = 'crime_disabled_until'",
-            guild_id,
-        )
-        return False, 0
-    return True, release - now
-
-
-async def _ensure_crime_enabled(pool, guild_id: int):
-    disabled, remaining = await get_crime_disabled_state(pool, guild_id)
-    if not disabled:
-        return
-    if remaining is None:
-        raise UserError("🚫 `.crime` is currently disabled on this server.")
-    raise UserError(f"🚫 `.crime` is disabled here for another {humanize_duration(remaining, short=True)}.")
 
 
 @dataclass
 class CrimeResult:
     success: bool
-    payout: int = 0            # on success
-    loss: int = 0              # on failure
-    penalty_pct: int = 0       # on failure
+    payout: int = 0            # on success, the flat reward
+    loss: int = 0              # on failure, the flat fine
     jail_role_id: int = None   # on failure, when a prisoner role is configured
     jail_seconds: int = 0      # how long the prisoner role should be worn
 
@@ -201,7 +165,6 @@ async def crime(pool, guild_id: int, user_id: int, channel_id: int) -> CrimeResu
     regardless of the outcome."""
     await _ensure_unlocked(pool, guild_id, user_id)
     await _ensure_channel(pool, guild_id, channel_id, "work_channel")
-    await _ensure_crime_enabled(pool, guild_id)
 
     now = datetime.datetime.now(datetime.timezone.utc)
     cooldown = await _get_cooldown(pool, guild_id, user_id, "crime")
@@ -211,34 +174,26 @@ async def crime(pool, guild_id: int, user_id: int, channel_id: int) -> CrimeResu
             f"You're laying low after your last job. Wait *{_fmt_remaining(remaining.total_seconds())}* before your next crime."
         )
 
-    success_rate, penalty_pct = await get_crime_config(pool, guild_id)
+    success_rate, payout, fine = await get_crime_config(pool, guild_id)
     bal = await ensure_wallet(pool, guild_id, user_id)
+    # Only the solvent may risk it — a failed job can push your wallet into the red,
+    # so people already in debt are locked out until they climb back above zero.
+    if bal["wallet"] <= 0:
+        raise UserError("You're broke — pay off your debt before you can risk another job.")
+
     await _set_cooldown(pool, guild_id, user_id, "crime",
                         now + datetime.timedelta(seconds=CRIME_COOLDOWN))
 
     if secrets.randbelow(100) < success_rate:
-        # Skew the payout toward CRIME_MIN_PAYOUT: a uniform roll raised to an
-        # exponent makes large payouts increasingly unlikely.
-        roll = secrets.randbelow(1_000_000) / 1_000_000
-        span = CRIME_MAX_PAYOUT - CRIME_MIN_PAYOUT
-        payout = CRIME_MIN_PAYOUT + int(span * (roll ** CRIME_PAYOUT_EXPONENT))
         await update_wallet(pool, guild_id, user_id, payout)
         await add_transaction(pool, guild_id, user_id, payout, "crime", "Successful crime")
         return CrimeResult(success=True, payout=payout)
 
-    # Failure: lose penalty_pct of total money, taken from the wallet first then the bank.
-    # The cash penalty is easily dodged by parking money elsewhere first, so the real
-    # deterrent is the prisoner role (jail), which can't be gifted away — see below.
-    total = bal["wallet"] + bal["bank"]
-    loss = total * penalty_pct // 100
-    from_wallet = min(loss, bal["wallet"])
-    from_bank = loss - from_wallet
-    if from_wallet > 0:
-        await update_wallet(pool, guild_id, user_id, -from_wallet)
-    if from_bank > 0:
-        await update_bank(pool, guild_id, user_id, -from_bank)
-    if loss > 0:
-        await add_transaction(pool, guild_id, user_id, -loss, "crime", "Failed crime")
+    # Failure: pay a flat fine straight out of the wallet. Unlike the old percentage
+    # penalty this is not clamped to the balance, so a bad run can leave the wallet
+    # negative — the debt then blocks crime (and every other bet) until it's cleared.
+    await update_wallet(pool, guild_id, user_id, -fine)
+    await add_transaction(pool, guild_id, user_id, -fine, "crime", "Failed crime")
 
     # Jail: when the guild has bound a prisoner role, record the sentence so the
     # background release task (and the command handler) can apply/remove it.
@@ -247,7 +202,7 @@ async def crime(pool, guild_id: int, user_id: int, channel_id: int) -> CrimeResu
         release_at = now + datetime.timedelta(seconds=jail_seconds)
         await add_jail(pool, guild_id, user_id, jail_role_id, release_at)
 
-    return CrimeResult(success=False, loss=loss, penalty_pct=penalty_pct,
+    return CrimeResult(success=False, loss=fine,
                        jail_role_id=jail_role_id, jail_seconds=jail_seconds)
 
 
