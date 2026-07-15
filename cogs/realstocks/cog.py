@@ -39,9 +39,11 @@ from core.checks import require_channel, require_not_locked
 from core.confirm import confirm
 from core.errors import UserError
 from core.names import format_name
+from core.time_utils import humanize_duration
 from config import REALSTOCK_QUOTE_TTL, REALSTOCK_REFRESH_MINUTES, REALSTOCK_PROFILE_REFRESH_DAYS
 
 STOCKS_PER_PAGE = 8
+TRADES_PER_PAGE = 10
 SORT_LABELS = {"name": "Name (A→Z)", "gainers": "Top Gainers", "losers": "Top Losers"}
 
 SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,15}$")
@@ -156,6 +158,67 @@ class RealStocksListView(discord.ui.View):
             opt.default = opt.value == self.sort
         embed = self._sync()
         await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        embed = self._sync()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page += 1
+        embed = self._sync()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+def _render_trade_history(history, page, member, cur) -> tuple[discord.Embed, int]:
+    """Build the .rtradehistory embed for one page of (already newest-first) trades.
+    Returns (embed, max_page)."""
+    max_page = max(0, math.ceil(len(history) / TRADES_PER_PAGE) - 1)
+    page = min(page, max_page)
+    page_rows = history[page * TRADES_PER_PAGE:(page + 1) * TRADES_PER_PAGE]
+
+    embed = discord.Embed(title=f"📜 {format_name(member)}'s Real-Stock Trades",
+                          color=discord.Color.blue())
+    lines = []
+    for t in page_rows:
+        date = t["traded_at"].strftime("%Y-%m-%d %H:%M")
+        verb = "🟢 Bought" if t["side"] == "buy" else "🔴 Sold"
+        line = (f"`{date}` {verb} **{t['quantity']:,}x {t['symbol']}** "
+                f"@ {t['price']:,}{cur.emoji}")
+        if t["hold_seconds"] is not None:
+            line += f" — held {humanize_duration(t['hold_seconds'], short=True)}"
+        lines.append(line)
+    embed.description = "\n".join(lines) if lines else "No trades yet."
+    embed.set_footer(text=f"Page {page + 1}/{max_page + 1} · {len(history)} trade(s) · "
+                          f"hold time is since their last buy of that ticker")
+    return embed, max_page
+
+
+class TradeHistoryView(discord.ui.View):
+    def __init__(self, history, member, cur, *, timeout=180):
+        super().__init__(timeout=timeout)
+        self.history = history
+        self.member = member
+        self.cur = cur
+        self.page = 0
+        self.message = None
+
+    def _sync(self):
+        embed, max_page = _render_trade_history(self.history, self.page, self.member, self.cur)
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page >= max_page
+        return embed
 
     @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -465,6 +528,22 @@ class RealStocks(commands.Cog):
                         value=f"Total value: {total_value:,}{cur.emoji} | Total P/L: {total_pl_str}{cur.emoji}",
                         inline=False)
         await ctx.send(embed=embed)
+
+    @commands.command(aliases=['rth', 'rtrades'])
+    async def rtradehistory(self, ctx, member: discord.Member = None):
+        """Show a member's full real-stock trade log, including how long they held
+        each sold position. Use with a mention to see someone else's. Usage:
+        .rtradehistory [@member]"""
+        member = member or ctx.author
+        cur = self.bot.get_currency(ctx.guild.id)
+        history = await service.trade_history(self.pool, ctx.guild.id, member.id)
+        if not history:
+            await ctx.send(f"{format_name(member)} hasn't made any real-stock trades.")
+            return
+
+        embed, _max_page = _render_trade_history(history, 0, member, cur)
+        view = TradeHistoryView(history, member, cur)
+        view.message = await ctx.send(embed=embed, view=view)
 
     @commands.command(aliases=['rb'])
     @require_not_locked()

@@ -170,6 +170,19 @@ async def add_trade(conn: Conn, guild_id: int, user_id: int, symbol: str,
     )
 
 
+async def get_trades(conn: Conn, guild_id: int, user_id: int):
+    """All of a user's real-stock trades, oldest first — the ordering hold-time
+    calculations in service.py depend on."""
+    return await conn.fetch(
+        """SELECT t.*, s.name
+           FROM real_trades t
+           JOIN real_symbols s ON s.symbol = t.symbol
+           WHERE t.guild_id = $1 AND t.user_id = $2
+           ORDER BY t.traded_at ASC, t.id ASC""",
+        guild_id, user_id,
+    )
+
+
 async def get_avg_buy_price(conn: Conn, guild_id: int, user_id: int, symbol: str) -> int:
     row = await conn.fetchrow(
         """SELECT COALESCE(SUM(quantity * price), 0) AS total_cost,

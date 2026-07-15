@@ -13,7 +13,7 @@ from cogs.economy.db import ensure_wallet, update_wallet, add_transaction, lock_
 from cogs.market.chart import render_price_chart
 from cogs.realstocks.db import (
     get_guild_stock, lock_holding, update_holding,
-    add_trade, record_price,
+    add_trade, record_price, get_trades,
     get_price_history, get_price_history_since, get_last_price_before,
     list_guild_stocks,
 )
@@ -29,12 +29,17 @@ CHART_WINDOWS = {
 }
 
 
-async def fetch_quote(quotes, symbol: str):
-    """Get a live quote or raise UserError with the friendly message."""
+async def fetch_quote(quotes, symbol: str, *, fresh: bool = False):
+    """Get a quote or raise UserError with the friendly message.
+
+    `fresh=True` bypasses the quote cache entirely (max_age=0) — required for buy/sell
+    so a trade always executes at the true live price rather than a price up to
+    REALSTOCK_QUOTE_TTL seconds old, which would otherwise let someone trade against
+    a price they know is already stale."""
     if not quotes.configured:
         raise UserError("Real-stock trading is not configured (missing `FINNHUB_API_KEY`).")
     try:
-        return await quotes.get_quote(symbol)
+        return await quotes.get_quote(symbol, max_age=0 if fresh else None)
     except UnknownSymbolError:
         raise UserError(f"Unknown ticker: **{symbol}**.")
     except QuoteError as e:
@@ -108,7 +113,7 @@ async def buy(pool, quotes, guild_id: int, user_id: int, symbol: str,
         raise UserError("Quantity must be positive.")
     stock = await _require_stock(pool, guild_id, symbol)
 
-    quote = await fetch_quote(quotes, symbol)
+    quote = await fetch_quote(quotes, symbol, fresh=True)
     unit_price = unit_buy_price(quote.price, stock["lot_size"])
     total = unit_price * quantity
 
@@ -136,7 +141,7 @@ async def sell(pool, quotes, guild_id: int, user_id: int, symbol: str,
         raise UserError("Quantity must be positive.")
     stock = await _require_stock(pool, guild_id, symbol)
 
-    quote = await fetch_quote(quotes, symbol)
+    quote = await fetch_quote(quotes, symbol, fresh=True)
     unit_price = unit_sell_price(quote.price, stock["lot_size"])
     total = unit_price * quantity
 
@@ -154,6 +159,31 @@ async def sell(pool, quotes, guild_id: int, user_id: int, symbol: str,
 
     return RealTradeResult(stock_name=stock["name"], symbol=symbol, quantity=quantity,
                            unit_price=unit_price, total=total, lot_size=stock["lot_size"])
+
+
+async def trade_history(pool, guild_id: int, user_id: int) -> list[dict]:
+    """A user's trades, newest first, each with a `hold_seconds` for sells — the time
+    since that user's most recent buy of the same symbol before the sell. Approximates
+    per-lot hold time without full FIFO accounting, which is plenty for spotting
+    flips (buy-then-sell-fast) at a glance."""
+    rows = await get_trades(pool, guild_id, user_id)  # oldest first
+    last_buy_at: dict[str, datetime.datetime] = {}
+    history = []
+    for t in rows:
+        hold_seconds = None
+        if t["side"] == "buy":
+            last_buy_at[t["symbol"]] = t["traded_at"]
+        else:
+            bought_at = last_buy_at.get(t["symbol"])
+            if bought_at is not None:
+                hold_seconds = (t["traded_at"] - bought_at).total_seconds()
+        history.append({
+            "symbol": t["symbol"], "name": t["name"], "side": t["side"],
+            "quantity": t["quantity"], "price": t["price"], "traded_at": t["traded_at"],
+            "hold_seconds": hold_seconds,
+        })
+    history.reverse()
+    return history
 
 
 SORT_LABELS = {"name": "Name (A→Z)", "gainers": "Top Gainers", "losers": "Top Losers"}
