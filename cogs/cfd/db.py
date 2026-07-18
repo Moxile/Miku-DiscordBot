@@ -108,6 +108,13 @@ async def update_financing(conn: Conn, position_id: int, financing_accrued: int,
     )
 
 
+async def set_margin_call_sent(conn: Conn, position_id: int, sent: bool):
+    await conn.execute(
+        "UPDATE cfd_positions SET margin_call_sent = $2 WHERE id = $1",
+        position_id, sent,
+    )
+
+
 async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
     """Delete a leaving member's CFD positions. Open positions simply vanish, mirroring
     how RealStocks discards a leaving member's holdings (the locked margin is not refunded)."""

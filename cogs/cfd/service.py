@@ -36,14 +36,14 @@ from cogs.realstocks.service import fetch_quote
 from cogs.cfd.db import (
     create_position, get_open_position, lock_position, get_user_open_positions,
     get_all_open_positions, get_open_positions_for_symbol, get_position_history,
-    settle_position, update_financing,
+    settle_position, update_financing, set_margin_call_sent,
 )
 from core.checks import get_required_channel, user_is_locked
 from core.errors import UserError
 from core.time_utils import humanize_duration
 from config import (
     CFD_MAX_LEVERAGE, CFD_MIN_MARGIN, CFD_MAX_NOTIONAL,
-    CFD_MAINTENANCE_MARGIN, CFD_FINANCING_RATE, REALSTOCK_MAX_QUOTE_AGE,
+    CFD_MAINTENANCE_MARGIN, CFD_MARGIN_CALL_MARGIN, CFD_FINANCING_RATE, REALSTOCK_MAX_QUOTE_AGE,
 )
 
 DAY_SECONDS = 86400
@@ -258,19 +258,33 @@ async def all_open_positions(pool):
     return await get_all_open_positions(pool)
 
 
-async def settle_or_accrue(pool, pos, price: float) -> bool:
-    """Process one open position against a fresh `price`: accrue any due overnight
-    financing, then liquidate if equity has fallen to the maintenance margin.
+@dataclass
+class SettleResult:
+    liquidated: bool
+    margin_call: bool
+    guild_id: int = None
+    user_id: int = None
+    symbol: str = None
+    direction: str = None
+    margin: int = None
+    equity: float = None
+    price: float = None
 
-    Returns True if the position was liquidated. Re-locks the row inside its own
-    transaction, so a concurrent user-initiated close is handled safely (the row
-    will no longer be 'open')."""
+
+async def settle_or_accrue(pool, pos, price: float) -> SettleResult:
+    """Process one open position against a fresh `price`: accrue any due overnight
+    financing, then liquidate if equity has fallen to the maintenance margin. If
+    equity has fallen to the (higher) margin-call level instead, flags it for a
+    warning DM — once per drop, resetting if equity recovers above that level.
+
+    Re-locks the row inside its own transaction, so a concurrent user-initiated
+    close is handled safely (the row will no longer be 'open')."""
     now = datetime.datetime.now(datetime.timezone.utc)
     async with pool.acquire() as conn:
         async with conn.transaction():
             row = await lock_position(conn, pos["id"])
             if not row or row["status"] != "open":
-                return False
+                return SettleResult(liquidated=False, margin_call=False)
 
             financing = row["financing_accrued"]
             last_financed = row["last_financed_at"]
@@ -284,11 +298,23 @@ async def settle_or_accrue(pool, pos, price: float) -> bool:
             if equity <= CFD_MAINTENANCE_MARGIN * row["margin"]:
                 # Liquidated: the house keeps the remaining margin, payout is zero.
                 await settle_position(conn, row["id"], price, -row["margin"], "liquidated")
-                return True
+                return SettleResult(liquidated=True, margin_call=False)
+
+            margin_call = False
+            if equity <= CFD_MARGIN_CALL_MARGIN * row["margin"]:
+                if not row["margin_call_sent"]:
+                    margin_call = True
+                    await set_margin_call_sent(conn, row["id"], True)
+            elif row["margin_call_sent"]:
+                await set_margin_call_sent(conn, row["id"], False)
 
             if financing != row["financing_accrued"]:
                 await update_financing(conn, row["id"], financing, last_financed)
-            return False
+
+            return SettleResult(liquidated=False, margin_call=margin_call,
+                                guild_id=row["guild_id"], user_id=row["user_id"],
+                                symbol=row["symbol"], direction=row["direction"],
+                                margin=row["margin"], equity=equity, price=price)
 
 
 # ── Read models for the position / history views ──

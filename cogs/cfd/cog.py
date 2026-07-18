@@ -89,7 +89,30 @@ class CFDTrading(commands.Cog):
             price = prices[symbol]
             if price is None:
                 continue
-            await service.settle_or_accrue(self.pool, pos, price)
+            result = await service.settle_or_accrue(self.pool, pos, price)
+            if result.margin_call:
+                await self._send_margin_call_dm(result)
+
+    async def _send_margin_call_dm(self, result: service.SettleResult):
+        """Warn a trader by DM once their equity drops to the margin-call level, well
+        before liquidation. Silently drops the DM if the user has DMs closed."""
+        try:
+            user = await self.bot.fetch_user(result.user_id)
+        except discord.HTTPException:
+            return
+        cur = self.bot.get_currency(result.guild_id)
+        embed = discord.Embed(
+            title="⚠️ Margin Call",
+            description=(f"Your {result.direction} {result.symbol} CFD position is running low "
+                        f"on equity and is at risk of liquidation."),
+            color=discord.Color.orange())
+        embed.add_field(name="Equity", value=f"{result.equity:,.0f}{cur.emoji}", inline=True)
+        embed.add_field(name="Margin", value=f"{result.margin:,}{cur.emoji}", inline=True)
+        embed.set_footer(text="Close the position or let it ride — no further action is required.")
+        try:
+            await user.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
     @settle_loop.before_loop
     async def before_settle(self):

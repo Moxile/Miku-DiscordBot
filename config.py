@@ -84,6 +84,8 @@ CFD_MAX_LEVERAGE       = 10        # hard cap on leverage per position
 CFD_MIN_MARGIN         = 20        # a position must lock at least this many coins of margin
 CFD_MAX_NOTIONAL       = 5_000_000 # anti-exploit cap on a single position's exposure
 CFD_MAINTENANCE_MARGIN = 0.15      # liquidate once equity falls to this fraction of margin
+CFD_MARGIN_CALL_MARGIN = 0.35      # DM a warning once equity falls to this fraction of margin
+                                    # (above the liquidation floor, so the trader has a chance to react)
                                    # (a buffer against gap-throughs between price ticks)
 CFD_FINANCING_RATE     = 0.0005    # daily overnight financing fee, as a fraction of notional,
                                    # accrued at each 24h rollover and settled on close

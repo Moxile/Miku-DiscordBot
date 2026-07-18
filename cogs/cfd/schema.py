@@ -31,3 +31,9 @@ SCHEMA = """
     CREATE INDEX IF NOT EXISTS cfd_positions_user_idx
         ON cfd_positions (guild_id, user_id);
 """
+
+MIGRATIONS = [
+    # Tracks whether the margin-call DM has already gone out for this position, so the
+    # background loop warns once per drop instead of every refresh cycle.
+    "ALTER TABLE cfd_positions ADD COLUMN IF NOT EXISTS margin_call_sent BOOLEAN NOT NULL DEFAULT FALSE;",
+]
