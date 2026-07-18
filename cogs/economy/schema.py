@@ -71,9 +71,11 @@ MIGRATIONS = [
     END $$;""",
     "ALTER TABLE transactions ADD CONSTRAINT transactions_balances_fkey "
     "FOREIGN KEY (guild_id, user_id) REFERENCES balances(guild_id, user_id) ON DELETE CASCADE",
+    # Failed .crime fines are meant to be able to push wallet negative (debt), but this
+    # constraint blocked that with a CheckViolationError. Drop it from already-provisioned DBs.
+    "ALTER TABLE balances DROP CONSTRAINT IF EXISTS wallet_non_negative",
 ]
 
 CONSTRAINTS = [
-    "ALTER TABLE balances ADD CONSTRAINT wallet_non_negative CHECK (wallet >= 0)",
     "ALTER TABLE balances ADD CONSTRAINT bank_non_negative CHECK (bank >= 0)",
 ]
