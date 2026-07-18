@@ -86,4 +86,12 @@ MIGRATIONS = [
     "ALTER TABLE bets ALTER COLUMN max_stake DROP NOT NULL",
     "ALTER TABLE bets ALTER COLUMN pool DROP NOT NULL",
     "ALTER TABLE bets ALTER COLUMN pool_remaining DROP NOT NULL",
+    # Databases migrated from the legacy `offers` table kept its status CHECK
+    # (named offers_status_check, only allowing open/won/lost/cancelled) since
+    # renaming a table doesn't rename its constraints. Replace it with the
+    # current shape so 'resolved' (used for is_multi bets) is accepted.
+    "ALTER TABLE bets DROP CONSTRAINT IF EXISTS offers_status_check",
+    "ALTER TABLE bets DROP CONSTRAINT IF EXISTS bets_status_check",
+    "ALTER TABLE bets ADD CONSTRAINT bets_status_check "
+    "CHECK (status IN ('open', 'won', 'lost', 'resolved', 'cancelled'))",
 ]
