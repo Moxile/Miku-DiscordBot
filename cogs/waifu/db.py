@@ -30,11 +30,33 @@ async def get_harem(conn: Conn, guild_id: int, owner_id: int) -> list:
 
 async def set_waifu_owner(conn: Conn, guild_id: int, user_id: int,
                            new_owner_id: int, new_value: int):
+    await _clear_stale_engagement(conn, guild_id, user_id)
     await conn.execute(
         """UPDATE waifus SET owner_id = $3, value = $4, last_bought_at = NOW()
            WHERE guild_id = $1 AND user_id = $2""",
         guild_id, user_id, new_owner_id, new_value,
     )
+
+
+async def _clear_stale_engagement(conn: Conn, guild_id: int, user_id: int):
+    """user_id's owner_id is about to change, which breaks mutual ownership with
+    whoever they're currently engaged to. There's no separate "engaged to" column —
+    engagement is only ever inferred from mutual owner_id — so clear engaged_since
+    on both sides now, before it goes stale and misattributes to the new owner."""
+    row = await get_waifu(conn, guild_id, user_id)
+    if not row or row["engaged_since"] is None:
+        return
+    partner_id = row["owner_id"]
+    if partner_id is None:
+        await conn.execute(
+            "UPDATE waifus SET engaged_since = NULL WHERE guild_id = $1 AND user_id = $2",
+            guild_id, user_id,
+        )
+    else:
+        await conn.execute(
+            "UPDATE waifus SET engaged_since = NULL WHERE guild_id = $1 AND user_id IN ($2, $3)",
+            guild_id, user_id, partner_id,
+        )
 
 
 async def set_engagement(conn: Conn, guild_id: int, user_id: int):
