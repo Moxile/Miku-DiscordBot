@@ -94,7 +94,8 @@ async def build_profile(bot, guild: discord.Guild, member: discord.Member,
                f"Harem: {harem['count']} waifus ({harem['total']:,}{cur.emoji})"),
         inline=True,
     )
-    buf = render_price_chart(f"{name}'s {GRAPH_LABELS[graph]}", points, period_label=period_label)
+    buf = render_price_chart(f"{name}'s {GRAPH_LABELS[graph]}", points, period_label=period_label,
+                             zero_line=graph == "gambling")
     file = discord.File(buf, filename="profile.png")
     embed.set_image(url="attachment://profile.png")
     return embed, file

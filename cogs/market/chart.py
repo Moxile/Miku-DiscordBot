@@ -20,14 +20,25 @@ SUBTEXT = (146, 150, 162)
 UP = (66, 196, 124)
 DOWN = (224, 84, 84)
 MARKER_RING = (255, 255, 255)
+ZERO_LINE = (120, 124, 138)
 
 
-def render_price_chart(name: str, points, period_label: str | None = None) -> io.BytesIO:
+def _dashed_hline(d, x0, x1, y, fill, width, dash, gap):
+    x = x0
+    while x < x1:
+        d.line([x, y, min(x + dash, x1), y], fill=fill, width=width)
+        x += dash + gap
+
+
+def render_price_chart(name: str, points, period_label: str | None = None, zero_line: bool = False) -> io.BytesIO:
     """Render a price line chart to a PNG BytesIO.
 
     `points` is a chronological list of (datetime, price). The line is drawn green when the
     latest price is at or above the first, red otherwise. `period_label` (e.g. "Past 7 days")
-    is drawn as a small subtitle under the company name when provided.
+    is drawn as a small subtitle under the company name when provided. `zero_line` draws a
+    dashed reference line (and axis label) at 0, and forces 0 into the plotted range even if
+    every point is on one side of it — for charts like gambling P/L where "above/below zero"
+    is the whole point, not just an incidental gridline value.
     """
     w, h = WIDTH * SS, HEIGHT * SS
     ml, mr, mt, mb = ML * SS, MR * SS, MT * SS, MB * SS
@@ -41,6 +52,8 @@ def render_price_chart(name: str, points, period_label: str | None = None) -> io
 
     prices = [p for _, p in points]
     lo, hi = min(prices), max(prices)
+    if zero_line:
+        lo, hi = min(lo, 0), max(hi, 0)
     if lo == hi:  # flat history — pad so the line sits mid-panel
         pad = max(1, abs(hi) // 10)
         lo, hi = lo - pad, hi + pad
@@ -68,6 +81,13 @@ def render_price_chart(name: str, points, period_label: str | None = None) -> io
         bb = d.textbbox((0, 0), lab, font=font_axis)
         d.text((x0 - 12 * SS - (bb[2] - bb[0]), gy - (bb[3] - bb[1]) / 2 - bb[1]),
                lab, font=font_axis, fill=SUBTEXT)
+
+    if zero_line and lo <= 0 <= hi:
+        zy = y1 - (0 - lo) / rng * ph
+        _dashed_hline(d, x0, x1, zy, fill=ZERO_LINE, width=SS, dash=14 * SS, gap=10 * SS)
+        bb = d.textbbox((0, 0), "0", font=font_axis)
+        d.text((x0 - 12 * SS - (bb[2] - bb[0]), zy - (bb[3] - bb[1]) / 2 - bb[1]),
+               "0", font=font_axis, fill=TEXT)
 
     up = prices[-1] >= prices[0]
     col = UP if up else DOWN
