@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import sys
 import time
 
 import discord
@@ -588,6 +589,8 @@ class Gambling(commands.Cog):
         self.shoes = {}
         # guild_id -> max bet, or None if unset/no limit
         self._max_bet_cache: dict[int, int | None] = {}
+        # guild_id -> terminal row index for the live "next card" display (see _print_next_card)
+        self._shoe_rows: dict[int, int] = {}
 
     @property
     def pool(self):
@@ -883,7 +886,27 @@ class Gambling(commands.Cog):
         deck = game["deck"]
         if not deck:
             deck.extend(self.create_deck(BLACKJACK_SHOE_DECKS))
-        return deck.pop()
+        card = deck.pop()
+        self._print_next_card(game["guild_id"], deck)
+        return card
+
+    def _print_next_card(self, guild_id, deck):
+        """Live-update a per-guild terminal row showing the next card at the top of its shoe."""
+        top = deck[-1] if deck else None
+        card_str = f"{top[0]}{top[1]}" if top else "(empty — will reshuffle)"
+        line = f"[shoe] guild {guild_id}: next card = {card_str}"
+
+        if guild_id not in self._shoe_rows:
+            self._shoe_rows[guild_id] = len(self._shoe_rows)
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+            return
+
+        row = self._shoe_rows[guild_id]
+        rows_up = len(self._shoe_rows) - row
+        # Move cursor up to the guild's row, clear it, print, then return to the bottom.
+        sys.stdout.write(f"\x1b[{rows_up}A\r\x1b[2K{line}\x1b[{rows_up}B\r")
+        sys.stdout.flush()
 
     def deal_to_current(self, game):
         """Draw one card to the current hand. Returns True if it busts."""
