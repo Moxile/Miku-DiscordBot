@@ -99,6 +99,99 @@ async def get_net_worth_points(conn: Conn, guild_id: int, user_id: int, wallet: 
     return points
 
 
+async def get_gambling_points(conn: Conn, guild_id: int, user_id: int,
+                               since: datetime = None, limit: int | None = NET_WORTH_HISTORY_LIMIT) -> list:
+    """Cumulative gambling won/lost over time, relative to the start of the window — the
+    leftmost point is always 0, so the line shows how gambling went *within the selected
+    period* rather than an absolute lifetime total. See GAMBLING_TX_TYPES for what counts.
+    `since`/`limit` follow the same three modes as get_net_worth_points."""
+    if since is not None:
+        rows = await conn.fetch(
+            """SELECT amount, created_at FROM transactions
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type = ANY($3) AND created_at >= $4
+               ORDER BY created_at ASC, id ASC""",
+            guild_id, user_id, GAMBLING_TX_TYPES, since,
+        )
+        points = [(since, 0)]
+        running = 0
+        for r in rows:
+            running += r["amount"]
+            points.append((r["created_at"], running))
+        return points
+
+    if limit is None:
+        rows = await conn.fetch(
+            """SELECT amount, created_at FROM transactions
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type = ANY($3)
+               ORDER BY created_at ASC, id ASC""",
+            guild_id, user_id, GAMBLING_TX_TYPES,
+        )
+    else:
+        rows = await conn.fetch(
+            """SELECT amount, created_at FROM transactions
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type = ANY($3)
+               ORDER BY created_at DESC, id DESC
+               LIMIT $4""",
+            guild_id, user_id, GAMBLING_TX_TYPES, limit,
+        )
+        rows = list(reversed(rows))
+
+    if not rows:
+        return [(datetime.now(timezone.utc), 0)]
+
+    points = [(rows[0]["created_at"], 0)]
+    running = 0
+    for r in rows:
+        running += r["amount"]
+        points.append((r["created_at"], running))
+    return points
+
+
+async def get_all_balances(conn: Conn) -> list:
+    """Every (guild_id, user_id, wallet, bank) row — used by the net-worth snapshot job."""
+    return await conn.fetch("SELECT guild_id, user_id, wallet, bank FROM balances")
+
+
+async def insert_net_worth_snapshot(conn: Conn, guild_id: int, user_id: int, net_worth: int):
+    await conn.execute(
+        "INSERT INTO net_worth_snapshots (guild_id, user_id, net_worth) VALUES ($1, $2, $3)",
+        guild_id, user_id, net_worth,
+    )
+
+
+async def get_net_worth_snapshot_points(conn: Conn, guild_id: int, user_id: int,
+                                        since: datetime = None, limit: int | None = NET_WORTH_HISTORY_LIMIT) -> list:
+    """Recorded (timestamp, net_worth) snapshots — see net_worth_snapshots (schema.py) and
+    the Profile cog's record_net_worth_snapshots background job that populates it. Unlike
+    get_net_worth_points this isn't reconstructed from transactions, so there's no anchor
+    trick: it's just whatever snapshots have been recorded, which is why history only starts
+    accumulating from whenever this feature was deployed."""
+    if since is not None:
+        rows = await conn.fetch(
+            """SELECT net_worth, recorded_at FROM net_worth_snapshots
+               WHERE guild_id = $1 AND user_id = $2 AND recorded_at >= $3
+               ORDER BY recorded_at ASC""",
+            guild_id, user_id, since,
+        )
+    elif limit is None:
+        rows = await conn.fetch(
+            """SELECT net_worth, recorded_at FROM net_worth_snapshots
+               WHERE guild_id = $1 AND user_id = $2
+               ORDER BY recorded_at ASC""",
+            guild_id, user_id,
+        )
+    else:
+        rows = await conn.fetch(
+            """SELECT net_worth, recorded_at FROM net_worth_snapshots
+               WHERE guild_id = $1 AND user_id = $2
+               ORDER BY recorded_at DESC
+               LIMIT $3""",
+            guild_id, user_id, limit,
+        )
+        rows = list(reversed(rows))
+    return [(r["recorded_at"], r["net_worth"]) for r in rows]
+
+
 async def get_portfolio_value(conn: Conn, guild_id: int, user_id: int) -> tuple[int, int]:
     """Total value of a user's stock holdings (last trade price, falling back to IPO price), and how many."""
     holdings = await conn.fetch(

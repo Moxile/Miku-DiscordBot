@@ -17,6 +17,10 @@ from . import db as profile_db
 # Friendlier labels for the common shorthands; anything else falls back to a humanized duration.
 PERIOD_LABELS = {"1d": "Past 24 hours", "7d": "Past 7 days", "30d": "Past 30 days", "90d": "Past 90 days"}
 
+# Which history the profile chart shows. "gambling" and "net worth" are relative/absolute
+# but otherwise share the same period picker as the default wallet+bank view.
+GRAPH_LABELS = {"wallet": "Wallet + Bank", "networth": "Net Worth", "gambling": "Gambling P/L"}
+
 
 def resolve_period(period: str | None):
     """Turn a raw period argument into (since, history_limit, period_label).
@@ -34,8 +38,8 @@ def resolve_period(period: str | None):
 
 
 async def build_profile(bot, guild: discord.Guild, member: discord.Member,
-                        period: str | None = None) -> tuple[discord.Embed, discord.File]:
-    """The full profile card: stats embed + wallet+bank history chart."""
+                        period: str | None = None, graph: str = "wallet") -> tuple[discord.Embed, discord.File]:
+    """The full profile card: stats embed + a history chart (`graph`: wallet/networth/gambling)."""
     since, history_limit, period_label = resolve_period(period)
     guild_id, user_id = guild.id, member.id
     cur = bot.get_currency(guild_id)
@@ -46,11 +50,21 @@ async def build_profile(bot, guild: discord.Guild, member: discord.Member,
         portfolio_value, holding_count = await profile_db.get_portfolio_value(conn, guild_id, user_id)
         inventory = await profile_db.get_inventory_totals(conn, guild_id, user_id)
         harem = await profile_db.get_harem_value(conn, guild_id, user_id)
-        points = await profile_db.get_net_worth_points(
-            conn, guild_id, user_id, wallet, bank, since=since, limit=history_limit,
-        )
 
-    net_worth = wallet + bank + portfolio_value + harem["total"]
+        net_worth = wallet + bank + portfolio_value + harem["total"]
+
+        if graph == "gambling":
+            points = await profile_db.get_gambling_points(conn, guild_id, user_id, since=since, limit=history_limit)
+        elif graph == "networth":
+            points = await profile_db.get_net_worth_snapshot_points(
+                conn, guild_id, user_id, since=since, limit=history_limit,
+            )
+            if not points:  # no snapshots recorded yet for this window
+                points = [(datetime.now(timezone.utc), net_worth)]
+        else:
+            points = await profile_db.get_net_worth_points(
+                conn, guild_id, user_id, wallet, bank, since=since, limit=history_limit,
+            )
     name = format_name(member, guild)
 
     embed = discord.Embed(
@@ -80,7 +94,22 @@ async def build_profile(bot, guild: discord.Guild, member: discord.Member,
                f"Harem: {harem['count']} waifus ({harem['total']:,}{cur.emoji})"),
         inline=True,
     )
-    buf = render_price_chart(f"{name}'s Wallet + Bank", points, period_label=period_label)
+    buf = render_price_chart(f"{name}'s {GRAPH_LABELS[graph]}", points, period_label=period_label)
     file = discord.File(buf, filename="profile.png")
     embed.set_image(url="attachment://profile.png")
     return embed, file
+
+
+async def record_net_worth_snapshots(pool):
+    """Snapshot every member's current net worth (wallet+bank+portfolio+harem) for the
+    "Net Worth" graph — called periodically by the Profile cog's background task. There's
+    no way to reconstruct this retroactively (unlike wallet+bank), so it only accumulates
+    history going forward from whenever this job starts running."""
+    async with pool.acquire() as conn:
+        balances = await profile_db.get_all_balances(conn)
+        for row in balances:
+            guild_id, user_id = row["guild_id"], row["user_id"]
+            portfolio_value, _ = await profile_db.get_portfolio_value(conn, guild_id, user_id)
+            harem = await profile_db.get_harem_value(conn, guild_id, user_id)
+            net_worth = row["wallet"] + row["bank"] + portfolio_value + harem["total"]
+            await profile_db.insert_net_worth_snapshot(conn, guild_id, user_id, net_worth)

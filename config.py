@@ -69,6 +69,11 @@ REALSTOCK_REFRESH_MINUTES = 5    # background refresh + chart-recording cadence
 REALSTOCK_MIN_UNIT_PRICE  = 20   # a unit (lot) must cost at least this many coins
 REALSTOCK_MAX_LOT         = 1_000_000  # safety cap for absurdly cheap tickers
 REALSTOCK_PROFILE_REFRESH_DAYS = 7  # how often cached fundamentals (sector/domain/EPS) refresh
+
+# Profile "Net Worth" graph (see cogs/profile). Net worth can't be reconstructed from the
+# transaction log like wallet+bank can (stock/waifu holdings value isn't logged), so it's
+# tracked with periodic snapshots instead.
+PROFILE_SNAPSHOT_MINUTES = 60
 # Trades are refused when the quote's own exchange timestamp is older than this many
 # seconds — i.e. the market is closed, pre-open, halted, or the feed hasn't ticked yet.
 # This closes the "buy at the stale pre-open price before it updates" arbitrage.

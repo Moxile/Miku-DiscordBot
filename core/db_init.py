@@ -11,6 +11,7 @@ import asyncpg
 
 from core import schema as core_schema
 from cogs.economy import schema as economy_schema
+from cogs.profile import schema as profile_schema
 from cogs.market import schema as market_schema
 from cogs.realstocks import schema as realstocks_schema
 from cogs.cfd import schema as cfd_schema
@@ -34,6 +35,7 @@ from cogs.leaderboard import schema as leaderboard_schema
 _FEATURE_MODULES = [
     core_schema,
     economy_schema,
+    profile_schema,  # after economy_schema — its FK targets balances
     market_schema,
     realstocks_schema,
     cfd_schema,  # after realstocks — its FK targets guild_real_stocks

@@ -3,56 +3,81 @@ from __future__ import annotations
 from typing import Optional
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from cogs.profile import service
+from config import PROFILE_SNAPSHOT_MINUTES
 
 
 class ProfileChartView(discord.ui.View):
-    """Recent / 7d / 30d / 90d / All toggles for a profile's wallet+bank chart."""
+    """Recent / 7d / 30d / 90d / All period toggles, plus a Wallet+Bank / Net Worth /
+    Gambling graph-type row, for a profile's history chart."""
 
     def __init__(self, bot, guild: discord.Guild, member: discord.Member, *,
-                 current: str | None = None, timeout: int = 180):
+                 period: str | None = None, graph: str = "wallet", timeout: int = 180):
         super().__init__(timeout=timeout)
         self.bot = bot
         self.guild = guild
         self.member = member
-        self.current = current
+        self.period = period
+        self.graph = graph
         self.message: discord.Message | None = None
         self._sync_buttons()
 
     def _sync_buttons(self):
-        self.recent_btn.disabled = self.current is None
-        self.week_btn.disabled = self.current == "7d"
-        self.month_btn.disabled = self.current == "30d"
-        self.quarter_btn.disabled = self.current == "90d"
-        self.all_btn.disabled = self.current == "all"
+        self.recent_btn.disabled = self.period is None
+        self.week_btn.disabled = self.period == "7d"
+        self.month_btn.disabled = self.period == "30d"
+        self.quarter_btn.disabled = self.period == "90d"
+        self.all_btn.disabled = self.period == "all"
+        self.wallet_btn.disabled = self.graph == "wallet"
+        self.networth_btn.disabled = self.graph == "networth"
+        self.gambling_btn.disabled = self.graph == "gambling"
 
-    async def _switch(self, interaction: discord.Interaction, period: str | None):
-        self.current = period
+    async def _refresh(self, interaction: discord.Interaction):
         self._sync_buttons()
-        embed, file = await service.build_profile(self.bot, self.guild, self.member, period)
+        embed, file = await service.build_profile(self.bot, self.guild, self.member, self.period, self.graph)
         await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
 
-    @discord.ui.button(label="Recent", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Recent", style=discord.ButtonStyle.secondary, row=0)
     async def recent_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._switch(interaction, None)
+        self.period = None
+        await self._refresh(interaction)
 
-    @discord.ui.button(label="7d", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="7d", style=discord.ButtonStyle.secondary, row=0)
     async def week_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._switch(interaction, "7d")
+        self.period = "7d"
+        await self._refresh(interaction)
 
-    @discord.ui.button(label="30d", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="30d", style=discord.ButtonStyle.secondary, row=0)
     async def month_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._switch(interaction, "30d")
+        self.period = "30d"
+        await self._refresh(interaction)
 
-    @discord.ui.button(label="90d", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="90d", style=discord.ButtonStyle.secondary, row=0)
     async def quarter_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._switch(interaction, "90d")
+        self.period = "90d"
+        await self._refresh(interaction)
 
-    @discord.ui.button(label="All", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="All", style=discord.ButtonStyle.primary, row=0)
     async def all_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._switch(interaction, "all")
+        self.period = "all"
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Wallet + Bank", style=discord.ButtonStyle.secondary, row=1)
+    async def wallet_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.graph = "wallet"
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Net Worth", style=discord.ButtonStyle.secondary, row=1)
+    async def networth_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.graph = "networth"
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Gambling", style=discord.ButtonStyle.secondary, row=1)
+    async def gambling_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.graph = "gambling"
+        await self._refresh(interaction)
 
     async def on_timeout(self):
         for child in self.children:
@@ -67,21 +92,35 @@ class ProfileChartView(discord.ui.View):
 class Profile(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.record_snapshots.start()
+
+    def cog_unload(self):
+        self.record_snapshots.cancel()
 
     @property
     def pool(self):
         return self.bot.pool
 
+    @tasks.loop(minutes=PROFILE_SNAPSHOT_MINUTES)
+    async def record_snapshots(self):
+        """Periodically record every member's net worth for the "Net Worth" graph — see
+        service.record_net_worth_snapshots for why this can't just be reconstructed on demand."""
+        await service.record_net_worth_snapshots(self.pool)
+
+    @record_snapshots.before_loop
+    async def before_record_snapshots(self):
+        await self.bot.wait_until_ready()
+
     @commands.command(name="profileinfo", aliases=["pinfo", "pi"], extras={"example": ".profileinfo @user 30d"})
     async def profileinfo(self, ctx: commands.Context, member: Optional[discord.Member] = None, period: str = None):
         """Show a player's economic profile: balances, gambling stats, holdings, and a
-        wallet+bank history graph.
+        history graph.
 
         `period` widens (or narrows) the graph's time window, e.g. `7d`, `30d`, `90d`, `all`.
-        Without it, the graph shows the last 60 balance-changing transactions. Use the buttons
-        below the graph to switch it afterwards.
+        Without it, the graph shows recent activity. Use the buttons below the graph to
+        switch the time window or the graph itself (Wallet+Bank / Net Worth / Gambling).
         Usage: .profileinfo [@user] [period]"""
         member = member or ctx.author
         embed, file = await service.build_profile(self.bot, ctx.guild, member, period)
-        view = ProfileChartView(self.bot, ctx.guild, member, current=period.lower() if period else None)
+        view = ProfileChartView(self.bot, ctx.guild, member, period=period.lower() if period else None)
         view.message = await ctx.send(embed=embed, file=file, view=view)
