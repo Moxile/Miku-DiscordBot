@@ -48,7 +48,7 @@ class BetsPage(Page):
             description=(
                 "Bookmaker-style fixed-odds bets. A host funds a pool and offers odds; "
                 "players accept with a stake and win **stake × odds** if they're right.\n\n"
-                f"**{len(bets)}** open bet(s) right now."
+                f"**{len(bets)}** bet(s) still active (open or closed, awaiting resolution)."
             ),
             color=COLOR,
         )
@@ -110,13 +110,14 @@ class BetsListPage(Page):
             else:
                 odds = f"x{service.format_odds(bet['odds'])}"
             desc = bet["description"] or "(no description)"
+            tag = " 🔒" if bet["status"] == "closed" else ""
             lines.append(
-                f"**#{bet['id']}** — {desc}\n"
+                f"**#{bet['id']}**{tag} — {desc}\n"
                 f"　{host_name} · {odds} · stake {_stake_range(bet)}{cur.emoji} · "
                 f"pool {_pool_label(bet, cur)}"
             )
             options.append(discord.SelectOption(
-                label=f"#{bet['id']} — {desc[:80]}",
+                label=f"#{bet['id']}{tag} — {desc[:80]}",
                 value=str(bet["id"]),
                 description=f"{odds} · stake {_stake_range(bet)}",
             ))
@@ -151,7 +152,12 @@ class BetDetailPage(Page):
         )
         embed.add_field(name="Host", value=host_name, inline=True)
         if bet["is_multi"]:
-            opt_lines = [f"{o['idx']}. {o['label']} — x{service.format_odds(o['odds'])}" for o in options]
+            totals = service.option_totals(takes)
+            opt_lines = [
+                f"{o['idx']}. {o['label']} — x{service.format_odds(o['odds'])} "
+                f"({totals.get(o['id'], 0)}{cur.emoji} staked)"
+                for o in options
+            ]
             embed.add_field(name="Options", value="\n".join(opt_lines) or "None", inline=False)
         else:
             embed.add_field(name="Odds", value=f"x{service.format_odds(bet['odds'])}", inline=True)
@@ -178,6 +184,7 @@ class BetDetailPage(Page):
 
         items = []
         is_open = bet["status"] == "open"
+        is_closed = bet["status"] == "closed"
         is_host = bet["host_id"] == self.user.id
         can_manage = is_host or self.user.guild_permissions.administrator
 
@@ -185,12 +192,21 @@ class BetDetailPage(Page):
             items.append(self.button("Place Bet", self._place, emoji="💰",
                                      style=discord.ButtonStyle.primary, row=0))
         if is_open and can_manage:
+            items.append(self.button("Close Betting", self._close, emoji="🔒",
+                                     style=discord.ButtonStyle.secondary, row=1))
+        if (is_open or is_closed) and can_manage:
             items.append(self.button("Resolve", self._resolve, emoji="🏁",
                                      style=discord.ButtonStyle.success, row=1))
             if not takes:
                 items.append(self.button("Cancel Bet", self._cancel, emoji="🗑️",
                                          style=discord.ButtonStyle.danger, row=1))
         return embed, items
+
+    async def _close(self, interaction: discord.Interaction):
+        await service.close_bet(self.pool, self.guild, self.user, self.bet_id)
+        await self.hub.refresh(
+            interaction,
+            notice=f"🔒 Bet #{self.bet_id} closed — no new bets can be placed. Resolve it when the result is in.")
 
     # placing a bet
     async def _place(self, interaction: discord.Interaction):
@@ -222,6 +238,9 @@ class PickOptionPage(Page):
         self.options = options
 
     async def build(self):
+        cur = self.currency
+        _, _, takes = await service.get_bet_detail(self.pool, self.guild.id, self.bet_id)
+        totals = service.option_totals(takes)
         embed = discord.Embed(
             title="🎯 Pick an option",
             description="Choose the outcome you want to back — you'll enter your stake next.",
@@ -233,7 +252,8 @@ class PickOptionPage(Page):
                 discord.SelectOption(
                     label=f"{o['idx']}. {o['label'][:80]}",
                     value=str(o["idx"]),
-                    description=f"x{service.format_odds(o['odds'])}",
+                    description=f"x{service.format_odds(o['odds'])} · "
+                                f"{totals.get(o['id'], 0)}{cur.emoji} staked",
                 )
                 for o in self.options[:25]
             ],

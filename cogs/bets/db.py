@@ -39,7 +39,10 @@ async def get_bet_option_by_idx(conn: Conn, bet_id: int, idx: int):
 
 
 async def get_user_take(conn: Conn, bet_id: int, user_id: int):
-    """A user's existing take on this bet, if any (multi-option bets allow only one)."""
+    """One of a user's existing takes on this bet, if any — used only to check
+    which option they've committed to (multi-option bets can't be hedged across
+    options, but adding more stake to the same option is fine, so all of a
+    user's takes on a given multi-bet share one option_id)."""
     return await conn.fetchrow(
         "SELECT * FROM bet_takes WHERE bet_id = $1 AND user_id = $2",
         bet_id, user_id,
@@ -56,8 +59,10 @@ async def lock_bet(conn: asyncpg.Connection, bet_id: int):
 
 
 async def get_active_bets(conn: Conn, guild_id: int):
+    """Bets still reachable from the browse list: open (accepting takes) and
+    closed (awaiting resolution) — anything not yet settled or cancelled."""
     return await conn.fetch(
-        "SELECT * FROM bets WHERE guild_id = $1 AND status = 'open' ORDER BY id",
+        "SELECT * FROM bets WHERE guild_id = $1 AND status IN ('open', 'closed') ORDER BY id",
         guild_id,
     )
 
@@ -90,6 +95,15 @@ async def set_bet_status(conn: Conn, bet_id: int, status: str):
     await conn.execute(
         "UPDATE bets SET status = $2, closed_at = NOW() WHERE id = $1",
         bet_id, status,
+    )
+
+
+async def mark_bet_closed(conn: Conn, bet_id: int):
+    """Stop new takes without touching closed_at — that column marks final
+    settlement (resolve/cancel), not this intermediate "no longer accepting entries" state."""
+    await conn.execute(
+        "UPDATE bets SET status = 'closed' WHERE id = $1",
+        bet_id,
     )
 
 

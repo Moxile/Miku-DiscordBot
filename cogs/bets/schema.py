@@ -39,7 +39,7 @@ SCHEMA = """
         bot_funded      BOOLEAN NOT NULL DEFAULT FALSE,
         is_multi        BOOLEAN NOT NULL DEFAULT FALSE,
         status          TEXT NOT NULL DEFAULT 'open'
-                        CHECK (status IN ('open', 'won', 'lost', 'resolved', 'cancelled')),
+                        CHECK (status IN ('open', 'closed', 'won', 'lost', 'resolved', 'cancelled')),
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         closed_at       TIMESTAMPTZ
     );
@@ -92,6 +92,8 @@ MIGRATIONS = [
     # current shape so 'resolved' (used for is_multi bets) is accepted.
     "ALTER TABLE bets DROP CONSTRAINT IF EXISTS offers_status_check",
     "ALTER TABLE bets DROP CONSTRAINT IF EXISTS bets_status_check",
+    # 'closed' lets a host stop new takes (once an outcome looks likely) without
+    # resolving payouts yet — added after the original open/won/lost/resolved/cancelled set.
     "ALTER TABLE bets ADD CONSTRAINT bets_status_check "
-    "CHECK (status IN ('open', 'won', 'lost', 'resolved', 'cancelled'))",
+    "CHECK (status IN ('open', 'closed', 'won', 'lost', 'resolved', 'cancelled'))",
 ]

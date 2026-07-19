@@ -15,7 +15,7 @@ from decimal import ROUND_FLOOR, Decimal
 from cogs.bets.db import (
     add_bet_option, add_bet_take, create_bet, decrement_bet_pool, get_active_bets,
     get_bet, get_bet_option_by_idx, get_bet_options, get_bet_takes, get_user_take,
-    lock_bet, set_bet_status,
+    lock_bet, mark_bet_closed, set_bet_status,
 )
 from cogs.economy.db import add_transaction, ensure_wallet, lock_wallet, update_wallet
 from core.checks import user_is_locked
@@ -288,8 +288,12 @@ async def place_take(pool, guild, member, bet_id: int, *, option_idx: int | None
                 option = await get_bet_option_by_idx(conn, bet_id, option_idx)
                 if not option:
                     raise UserError(f"No option #{option_idx} on this bet.")
-                if await get_user_take(conn, bet_id, member.id):
-                    raise UserError("You've already picked an option on this bet — one entry per bet.")
+                existing = await get_user_take(conn, bet_id, member.id)
+                if existing and existing["option_id"] != option["id"]:
+                    raise UserError(
+                        "You've already picked a different option on this bet — "
+                        "you can add to your existing pick, but can't switch options."
+                    )
                 odds = option["odds"]
             else:
                 odds = bet["odds"]
@@ -323,7 +327,25 @@ async def place_take(pool, guild, member, bet_id: int, *, option_idx: int | None
                       option_label=option["label"] if option else None)
 
 
-# ── resolve / cancel ──
+# ── close / resolve / cancel ──
+
+async def close_bet(pool, guild, member, bet_id: int) -> None:
+    """Stop new takes on an open bet without resolving it yet.
+
+    Lets a host cut off betting once an outcome looks likely, instead of
+    players racing to pile on right before the result is known.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            bet = await lock_bet(conn, bet_id)
+            if not bet or bet["guild_id"] != guild.id:
+                raise UserError("That bet no longer exists.")
+            if bet["host_id"] != member.id and not member.guild_permissions.administrator:
+                raise UserError("Only the host (or an admin) can close this bet.")
+            if bet["status"] != "open":
+                raise UserError("This bet isn't open.")
+            await mark_bet_closed(conn, bet_id)
+
 
 async def resolve_bet(pool, guild, member, bet_id: int, outcome_raw: str) -> ResolveResult:
     async with pool.acquire() as conn:
@@ -333,7 +355,7 @@ async def resolve_bet(pool, guild, member, bet_id: int, outcome_raw: str) -> Res
                 raise UserError("That bet no longer exists.")
             if bet["host_id"] != member.id and not member.guild_permissions.administrator:
                 raise UserError("Only the host (or an admin) can resolve this bet.")
-            if bet["status"] != "open":
+            if bet["status"] not in ("open", "closed"):
                 raise UserError("This bet is already resolved.")
 
             takes = await get_bet_takes(conn, bet_id)
@@ -399,7 +421,7 @@ async def cancel_bet(pool, guild, member, bet_id: int) -> int:
                 raise UserError("That bet no longer exists.")
             if bet["host_id"] != member.id and not member.guild_permissions.administrator:
                 raise UserError("Only the host (or an admin) can cancel this bet.")
-            if bet["status"] != "open":
+            if bet["status"] not in ("open", "closed"):
                 raise UserError("This bet is already resolved.")
             takes = await get_bet_takes(conn, bet_id)
             if takes:
@@ -434,3 +456,12 @@ async def get_bet_detail(pool, guild_id: int, bet_id: int):
 
 async def get_options(pool, bet_id: int):
     return await get_bet_options(pool, bet_id)
+
+
+def option_totals(takes) -> dict[int, int]:
+    """Sum of stakes placed on each option_id, for the multi-bet pool breakdown."""
+    totals: dict[int, int] = {}
+    for t in takes:
+        if t["option_id"] is not None:
+            totals[t["option_id"]] = totals.get(t["option_id"], 0) + t["stake"]
+    return totals
