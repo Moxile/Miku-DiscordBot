@@ -166,21 +166,33 @@ class BetDetailPage(Page):
         embed.add_field(name="Bets placed", value=str(len(takes)), inline=True)
 
         if takes:
-            lines = []
-            for t in takes[:15]:
+            all_lines = []
+            for t in takes:
                 member = self.guild.get_member(t["user_id"])
                 name = format_name(member, self.guild, fallback=str(t["user_id"]))
                 if bet["is_multi"]:
                     opt = options_by_id.get(t["option_id"])
                     potential = service.payout_for(t["stake"], opt["odds"]) if opt else 0
-                    lines.append(f"{name} → {opt['label'] if opt else '?'}: "
-                                 f"{t['stake']}{cur.emoji} (wins {potential})")
+                    all_lines.append(f"{name} → {opt['label'] if opt else '?'}: "
+                                      f"{t['stake']}{cur.emoji} (wins {potential})")
                 else:
                     potential = service.payout_for(t["stake"], bet["odds"])
-                    lines.append(f"{name}: {t['stake']}{cur.emoji} (wins {potential})")
-            if len(takes) > 15:
-                lines.append(f"… and {len(takes) - 15} more")
-            embed.add_field(name="Current bets", value="\n".join(lines), inline=False)
+                    all_lines.append(f"{name}: {t['stake']}{cur.emoji} (wins {potential})")
+
+            lines = []
+            shown = 0
+            for line in all_lines[:15]:
+                remaining = len(all_lines) - shown - 1
+                more_suffix_len = len(f"\n… and {remaining} more") if remaining > 0 else 0
+                budget = 1024 - more_suffix_len
+                candidate = "\n".join(lines + [line])
+                if len(candidate) > budget:
+                    break
+                lines.append(line)
+                shown += 1
+            if len(all_lines) > shown:
+                lines.append(f"… and {len(all_lines) - shown} more")
+            embed.add_field(name="Current bets", value="\n".join(lines) or "None", inline=False)
 
         items = []
         is_open = bet["status"] == "open"
