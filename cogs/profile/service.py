@@ -24,13 +24,13 @@ def resolve_period(period: str | None):
     if period is None:
         return None, profile_db.NET_WORTH_HISTORY_LIMIT, "Recent activity"
     if period.lower() in ("all", "max"):
-        return None, profile_db.NET_WORTH_HISTORY_LIMIT_WINDOWED, "All time"
+        return None, None, "All time"
     delta = parse_duration(period.lower())
     if delta is None:
         raise UserError(f"Invalid period `{period}`. Try something like `7d`, `30d`, `90d`, or `all`.")
     since = datetime.now(timezone.utc) - delta
     label = PERIOD_LABELS.get(period.lower(), f"Past {humanize_duration(int(delta.total_seconds()))}")
-    return since, profile_db.NET_WORTH_HISTORY_LIMIT_WINDOWED, label
+    return since, None, label
 
 
 async def build_profile(bot, guild: discord.Guild, member: discord.Member,

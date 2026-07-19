@@ -19,7 +19,6 @@ GAMBLING_TX_TYPES = [
 NET_WORTH_EXCLUDED_TX_TYPES = ("deposit", "withdraw")
 
 NET_WORTH_HISTORY_LIMIT = 60
-NET_WORTH_HISTORY_LIMIT_WINDOWED = 250
 
 
 async def get_balance(conn: Conn, guild_id: int, user_id: int) -> tuple[int, int]:
@@ -43,21 +42,41 @@ async def get_gambling_totals(conn: Conn, guild_id: int, user_id: int):
 
 
 async def get_net_worth_points(conn: Conn, guild_id: int, user_id: int, wallet: int, bank: int,
-                                since: datetime = None, limit: int = NET_WORTH_HISTORY_LIMIT) -> list:
+                                since: datetime = None, limit: int | None = NET_WORTH_HISTORY_LIMIT) -> list:
     """Reconstruct (timestamp, wallet+bank) points from the transaction log.
 
-    Takes the most recent `limit` entries on/after `since` (or the most recent `limit` overall
-    if `since` is None). Anchored to the current wallet+bank so the last point always matches
-    the live balance — see NET_WORTH_EXCLUDED_TX_TYPES for why deposit/withdraw are skipped.
+    - `since` set: every matching transaction from `since` onward, unbounded — the chart always
+      spans the whole requested window instead of being cut short once it hits a row-count cap
+      (which is what made long windows look truncated). A synthetic point is anchored at `since`
+      itself so the line starts exactly at the window's edge.
+    - `since` is None and `limit` is set: the most recent `limit` transactions (the default
+      "recent activity" view).
+    - both None: the user's entire transaction history, unbounded.
+    Anchored to the current wallet+bank so the last point always matches the live balance — see
+    NET_WORTH_EXCLUDED_TX_TYPES for why deposit/withdraw are skipped.
     """
     if since is not None:
         rows = await conn.fetch(
             """SELECT amount, created_at FROM transactions
                WHERE guild_id = $1 AND user_id = $2 AND tx_type NOT IN ('deposit', 'withdraw')
-                 AND created_at >= $4
-               ORDER BY created_at DESC, id DESC
-               LIMIT $3""",
-            guild_id, user_id, limit, since,
+                 AND created_at >= $3
+               ORDER BY created_at ASC, id ASC""",
+            guild_id, user_id, since,
+        )
+        anchor = (wallet + bank) - sum(r["amount"] for r in rows)
+        points = [(since, anchor)]
+        running = anchor
+        for r in rows:
+            running += r["amount"]
+            points.append((r["created_at"], running))
+        return points
+
+    if limit is None:
+        rows = await conn.fetch(
+            """SELECT amount, created_at FROM transactions
+               WHERE guild_id = $1 AND user_id = $2 AND tx_type NOT IN ('deposit', 'withdraw')
+               ORDER BY created_at ASC, id ASC""",
+            guild_id, user_id,
         )
     else:
         rows = await conn.fetch(
@@ -67,10 +86,11 @@ async def get_net_worth_points(conn: Conn, guild_id: int, user_id: int, wallet: 
                LIMIT $3""",
             guild_id, user_id, limit,
         )
+        rows = list(reversed(rows))
+
     if not rows:
         return [(datetime.now(timezone.utc), wallet + bank)]
 
-    rows = list(reversed(rows))
     running = (wallet + bank) - sum(r["amount"] for r in rows)
     points = []
     for r in rows:
