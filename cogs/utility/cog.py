@@ -22,7 +22,7 @@ _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 # the rest of the command doesn't care where the text comes from.
 _TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
 _TRANSLATE_TIMEOUT = 10  # seconds
-_TRANSLATE_MAX_CHARS = 1000  # GET has URL limits; also keeps replies sane
+_TRANSLATE_MAX_CHARS = 4000  # GET has URL limits; also keeps replies sane
 
 # Common language names → ISO codes. Anything not listed is passed through as-is,
 # so short codes ("en", "pt-br") and "auto" work without being in the map.
