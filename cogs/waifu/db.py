@@ -96,16 +96,31 @@ async def set_gifted(conn: Conn, guild_id: int, user_id: int):
     )
 
 
-async def set_marriage(conn: Conn, guild_id: int, user_a: int, user_b: int):
-    """Marry two users: set spouse_id on both."""
+async def record_beg(conn: Conn, guild_id: int, user_id: int):
+    """Record that this waifu was just begged from by their owner (starts the cooldown)."""
     await conn.execute(
-        "UPDATE waifus SET spouse_id = $3 WHERE guild_id = $1 AND user_id = $2",
-        guild_id, user_a, user_b,
+        "UPDATE waifus SET last_begged_at = NOW() WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_id,
+    )
+
+
+async def set_marriage(conn: Conn, guild_id: int, user_a: int, user_b: int,
+                        value_step: float) -> tuple:
+    """Marry two users: set spouse_id on both, and step each one's value up by
+    value_step — the same jump a normal buy gives. Returns (new_value_a, new_value_b)."""
+    row_a = await get_waifu(conn, guild_id, user_a)
+    row_b = await get_waifu(conn, guild_id, user_b)
+    new_value_a = int(row_a["value"] * value_step)
+    new_value_b = int(row_b["value"] * value_step)
+    await conn.execute(
+        "UPDATE waifus SET spouse_id = $3, value = $4 WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_a, user_b, new_value_a,
     )
     await conn.execute(
-        "UPDATE waifus SET spouse_id = $3 WHERE guild_id = $1 AND user_id = $2",
-        guild_id, user_b, user_a,
+        "UPDATE waifus SET spouse_id = $3, value = $4 WHERE guild_id = $1 AND user_id = $2",
+        guild_id, user_b, user_a, new_value_b,
     )
+    return new_value_a, new_value_b
 
 
 async def dissolve_marriage(conn: Conn, guild_id: int, user_a: int, user_b: int):

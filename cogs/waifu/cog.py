@@ -1,3 +1,5 @@
+import secrets
+
 import discord
 from datetime import datetime, timezone, timedelta
 from discord.ext import commands, tasks
@@ -5,12 +7,13 @@ from discord.ext import commands, tasks
 from config import (
     WAIFU_BASE_VALUE, WAIFU_VALUE_MULTIPLIER, WAIFU_DECAY_RATE,
     WAIFU_RESALE_RATE, WAIFU_GIFT_RATE, WAIFU_GIFT_MIN,
-    MARRIAGE_FEE, ENGAGEMENT_DAYS,
+    MARRIAGE_FEE, ENGAGEMENT_DAYS, MARRIAGE_VALUE_STEP,
+    WAIFU_BEG_COOLDOWN_HOURS, WAIFU_BEG_TIERS,
 )
 from cogs.economy.db import ensure_wallet, lock_wallet, update_wallet, add_transaction
 from cogs.waifu.db import (
     ensure_waifu, get_waifu, get_harem,
-    set_waifu_owner, engage_if_mutual, set_gifted,
+    set_waifu_owner, engage_if_mutual, set_gifted, record_beg,
     set_marriage, dissolve_marriage,
     decay_waifu_values, remove_member_waifus,
 )
@@ -83,6 +86,18 @@ class Waifu(commands.Cog):
             return format_name(user, guild)
         except Exception:
             return f"User {user_id}"
+
+    @staticmethod
+    def _pick_beg_tier(tiers):
+        """Weighted-random pick using secrets, not the random module."""
+        total_weight = sum(t[0] for t in tiers)
+        roll = secrets.randbelow(total_weight)
+        cumulative = 0
+        for tier in tiers:
+            cumulative += tier[0]
+            if roll < cumulative:
+                return tier
+        return tiers[-1]
 
     def _engagement_status(self, row_a, row_b) -> str:
         """Given two waifu rows, return relationship status string."""
@@ -287,6 +302,53 @@ class Waifu(commands.Cog):
 
     @commands.command()
     @require_not_locked()
+    async def beg(self, ctx: commands.Context, member: discord.Member):
+        """Beg a waifu you own for money. Once per waifu per day, with a small
+        chance at a payout worth a big chunk of their value.
+        Usage: .beg <@waifu>"""
+        cur = self.bot.get_currency(ctx.guild.id)
+        if member == ctx.author:
+            await ctx.send("You can't beg yourself.")
+            return
+
+        async with self.pool.acquire() as conn:
+            row = await get_waifu(conn, ctx.guild.id, member.id)
+            if not row or row["owner_id"] != ctx.author.id:
+                await ctx.send(f"You don't own **{format_name(member)}**.")
+                return
+
+            if row["last_begged_at"] is not None:
+                next_beg = row["last_begged_at"] + timedelta(hours=WAIFU_BEG_COOLDOWN_HOURS)
+                if datetime.now(timezone.utc) < next_beg:
+                    await ctx.send(
+                        f"You already begged **{format_name(member)}** today. "
+                        f"Try again <t:{int(next_beg.timestamp())}:R>."
+                    )
+                    return
+
+            _, min_pct, max_pct = self._pick_beg_tier(WAIFU_BEG_TIERS)
+            if max_pct > 0:
+                pct = min_pct + (max_pct - min_pct) * (secrets.randbelow(1_000_000) / 1_000_000)
+                payout = int(row["value"] * pct)
+            else:
+                payout = 0
+
+            await record_beg(conn, ctx.guild.id, member.id)
+            if payout > 0:
+                await ensure_wallet(conn, ctx.guild.id, ctx.author.id)
+                await update_wallet(conn, ctx.guild.id, ctx.author.id, payout)
+                await add_transaction(conn, ctx.guild.id, ctx.author.id, payout, "waifu_beg",
+                                      f"Begged {member.id}")
+
+        if payout > 0:
+            await ctx.send(
+                f"🥺 **{format_name(member)}** took pity on you and gave you {cur.emoji} **{payout:,}**!"
+            )
+        else:
+            await ctx.send(f"🥺 You begged **{format_name(member)}**... and got nothing.")
+
+    @commands.command()
+    @require_not_locked()
     async def propose(self, ctx: commands.Context, member: discord.Member):
         """Propose marriage to your engaged partner. Requires 7 days of mutual ownership.
         Usage: .propose <@member>"""
@@ -354,6 +416,7 @@ class Waifu(commands.Cog):
     @commands.command()
     async def accept(self, ctx: commands.Context):
         """Accept a pending marriage proposal directed at you."""
+        cur = self.bot.get_currency(ctx.guild.id)
         proposal_key = None
         for (gid, proposer_id), (target_id, expires_at) in list(self._proposals.items()):
             if gid == ctx.guild.id and target_id == ctx.author.id:
@@ -382,13 +445,23 @@ class Waifu(commands.Cog):
                 await update_wallet(conn, ctx.guild.id, proposer_id_found, -MARRIAGE_FEE)
                 await add_transaction(conn, ctx.guild.id, proposer_id_found, -MARRIAGE_FEE,
                                       "marriage_fee", f"Marriage proposal to {ctx.author.id}")
-                await set_marriage(conn, ctx.guild.id, proposer_id_found, ctx.author.id)
+                new_proposer_value, new_author_value = await set_marriage(
+                    conn, ctx.guild.id, proposer_id_found, ctx.author.id, MARRIAGE_VALUE_STEP
+                )
 
         proposer = ctx.guild.get_member(proposer_id_found) or await self.bot.fetch_user(proposer_id_found)
         embed = discord.Embed(
             title="💒 Married!",
             description=f"Congratulations! {proposer.mention} and {ctx.author.mention} are now **married**! 🎉",
             color=discord.Color.from_rgb(255, 105, 180),
+        )
+        embed.add_field(
+            name="Value increased",
+            value=(
+                f"{format_name(proposer)}: {cur.emoji} {new_proposer_value:,}\n"
+                f"{format_name(ctx.author)}: {cur.emoji} {new_author_value:,}"
+            ),
+            inline=False,
         )
         embed.set_footer(text="They are now safe from being bought by others.")
         await ctx.send(embed=embed)

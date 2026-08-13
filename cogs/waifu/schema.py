@@ -8,6 +8,7 @@ SCHEMA = """
         last_gifted_at TIMESTAMPTZ,
         spouse_id      BIGINT,
         engaged_since  TIMESTAMPTZ,
+        last_begged_at TIMESTAMPTZ,
         PRIMARY KEY (guild_id, user_id)
     );
 """
@@ -16,6 +17,9 @@ MIGRATIONS = [
     # Tracks the last time an owner gifted money to this waifu; gifting daily
     # pauses value decay (see decay_waifu_values).
     "ALTER TABLE waifus ADD COLUMN IF NOT EXISTS last_gifted_at TIMESTAMPTZ",
+    # Tracks the last time an owner begged this specific waifu (see .beg — cooldown
+    # is per owned waifu, not global to the owner).
+    "ALTER TABLE waifus ADD COLUMN IF NOT EXISTS last_begged_at TIMESTAMPTZ",
     # Backfill: engagement was never set on the gift path, so pairs that came to
     # mutually own each other via .waifugift stayed un-engaged. Mark any such
     # (non-married) mutual-ownership pair as engaged. Idempotent — only touches

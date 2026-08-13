@@ -118,6 +118,19 @@ WAIFU_GIFT_RATE = 0.05         # daily gift to your waifu needed to pause decay 
 WAIFU_GIFT_MIN = 500           # ... but never less than this much
 MARRIAGE_FEE = 10_000          # Flowers to propose
 ENGAGEMENT_DAYS = 7            # days of mutual ownership before proposing
+MARRIAGE_VALUE_STEP = WAIFU_VALUE_MULTIPLIER  # marrying steps both spouses' value up by one normal buy-step
+
+# .beg: owner can beg a waifu they own once a day for a cut of that waifu's value.
+# Tiers are (weight, min_pct_of_value, max_pct_of_value); one is picked by weighted
+# random draw (see cogs/dailywheel's _pick_prize for the same pattern).
+WAIFU_BEG_COOLDOWN_HOURS = 24
+WAIFU_BEG_TIERS = [
+    (35, 0.0,   0.0),    # nothing
+    (35, 0.005, 0.02),   # small
+    (20, 0.02,  0.05),   # medium
+    (7,  0.05,  0.15),   # good
+    (3,  0.25,  0.50),   # jackpot
+]
 REMINDER_MAX_DAYS = 10         # max reminder duration
 
 # Lichess integration
