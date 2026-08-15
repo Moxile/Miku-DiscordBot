@@ -33,11 +33,15 @@ def parse_amount(value: str, wallet_balance: int | None = None) -> int:
     if s == "all":
         if wallet_balance is None:
             raise AmountError("'all' is not allowed here.")
+        if wallet_balance <= 0:
+            raise AmountError("Amount must be positive.")
         return int(wallet_balance)
 
     if s == "half":
         if wallet_balance is None:
             raise AmountError("'half' is not allowed here.")
+        if wallet_balance <= 0:
+            raise AmountError("Amount must be positive.")
         return max(1, int(wallet_balance // 2))
 
     s = s.replace("_", "").replace(",", "")
