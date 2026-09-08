@@ -6,7 +6,7 @@ Miku Menu (ui.py)."""
 import discord
 
 from cogs.economy.db import ensure_wallet, update_wallet, add_transaction
-from cogs.shop.db import add_to_inventory, grant_temp_role
+from cogs.shop.db import add_to_inventory, delete_member_temp_role, grant_temp_role
 
 
 async def purchase(bot, guild: discord.Guild, member: discord.Member, item) -> tuple[bool, str]:
@@ -40,6 +40,21 @@ async def purchase(bot, guild: discord.Guild, member: discord.Member, item) -> t
             return True, (f"You bought **{item['name']}** — you have {role.mention} until "
                           f"<t:{int(expires.timestamp())}:R>.")
         return True, f"You bought **{item['name']}** and received the {role.mention} role!"
+
+    if item["item_type"] == "role_remove" and item["role_given"]:
+        role = guild.get_role(item["role_given"])
+        if not role:
+            return False, "The role for this item no longer exists."
+        if role not in member.roles:
+            return False, "You don't have this role!"
+        try:
+            await member.remove_roles(role, reason="Shop purchase")
+        except discord.Forbidden:
+            return False, "I couldn't remove that role — check my permissions and role position."
+        await update_wallet(pool, guild.id, member.id, -item["price"])
+        await add_transaction(pool, guild.id, member.id, -item["price"], "shop_buy", f"Bought {item['name']}")
+        await delete_member_temp_role(pool, guild.id, member.id, role.id)
+        return True, f"You bought **{item['name']}** and had the {role.mention} role removed!"
 
     await update_wallet(pool, guild.id, member.id, -item["price"])
     await add_transaction(pool, guild.id, member.id, -item["price"], "shop_buy", f"Bought {item['name']}")

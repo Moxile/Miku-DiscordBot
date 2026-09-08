@@ -60,9 +60,11 @@ class DailyWheel(commands.Cog):
 
         if prize["kind"] == "currency":
             cur = self.bot.get_currency(ctx.guild.id)
-            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, prize["amount"])
-            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, prize["amount"], "dailywheel_win")
-            await send_resilient(lambda: ctx.send(f"🎡 You win **{prize['amount']:,}**{cur.emoji}!\n{prize['text']}"))
+            amount = prize["amount"]
+            await update_wallet(self.pool, ctx.guild.id, ctx.author.id, amount)
+            await add_transaction(self.pool, ctx.guild.id, ctx.author.id, amount, "dailywheel_win")
+            result = f"You win **{amount:,}**" if amount > 0 else f"You lose **{abs(amount):,}**"
+            await send_resilient(lambda: ctx.send(f"🎡 {result}{cur.emoji}!\n{prize['text']}"))
         elif prize["kind"] == "role":
             role = ctx.guild.get_role(prize["role_id"])
             if role is None:
@@ -97,7 +99,7 @@ class DailyWheel(commands.Cog):
                 await ctx.send("Usage: `.wheeladd <weight> currency <amount> <message>`")
                 return
             try:
-                amount = parse_amount(parts[0])
+                amount = parse_amount(parts[0], allow_negative=True)
             except AmountError as e:
                 await ctx.send(str(e))
                 return

@@ -12,7 +12,12 @@ class AmountError(UserError, ValueError):
     """Raised when a money amount can't be parsed."""
 
 
-def parse_amount(value: str, wallet_balance: int | None = None) -> int:
+def parse_amount(
+    value: str,
+    wallet_balance: int | None = None,
+    *,
+    allow_negative: bool = False,
+) -> int:
     """Parse a money amount.
 
     Accepts:
@@ -22,7 +27,8 @@ def parse_amount(value: str, wallet_balance: int | None = None) -> int:
       - "all" or "half" (case-insensitive), if wallet_balance is provided
 
     Returns an int. Raises AmountError if the input can't be parsed or is
-    non-positive.
+    non-positive. When ``allow_negative`` is true, negative amounts are accepted
+    but zero is still rejected.
     """
     if value is None:
         raise AmountError("No amount given.")
@@ -59,6 +65,8 @@ def parse_amount(value: str, wallet_balance: int | None = None) -> int:
         )
 
     result = int(number * multiplier)
-    if result <= 0:
+    if result == 0 and allow_negative:
+        raise AmountError("Amount must be non-zero.")
+    if result <= 0 and not allow_negative:
         raise AmountError("Amount must be positive.")
     return result

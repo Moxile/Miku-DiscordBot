@@ -20,7 +20,7 @@ PER_PAGE = 6
 
 
 def _is_role_item(item) -> bool:
-    return item["item_type"] == "role" and bool(item["role_given"])
+    return item["item_type"] in ("role", "role_remove") and bool(item["role_given"])
 
 
 class ShopPage(Page):
@@ -45,10 +45,12 @@ class ShopPage(Page):
         for item in items[self.page * PER_PAGE:(self.page + 1) * PER_PAGE]:
             if _is_role_item(item):
                 role = self.guild.get_role(item["role_given"])
-                bits = ["🎭"]
+                action = "Removes" if item["item_type"] == "role_remove" else "Grants"
+                bits = ["🎭", action]
                 if role:
                     bits.append(role.mention)
-                bits.append(f"⏳ {humanize_duration(item['role_duration'])}" if item["role_duration"] else "Permanent")
+                if item["item_type"] == "role":
+                    bits.append(f"⏳ {humanize_duration(item['role_duration'])}" if item["role_duration"] else "Permanent")
                 extra = " · ".join(bits) + "\n"
             else:
                 extra = ""

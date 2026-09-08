@@ -22,20 +22,22 @@ SHOP_LOG_PER_PAGE = 10
 
 
 def _is_role_item(item) -> bool:
-    return item["item_type"] == "role" and bool(item["role_given"])
+    return item["item_type"] in ("role", "role_remove") and bool(item["role_given"])
 
 
 def _item_text(guild: discord.Guild, item) -> str:
     """Markdown body for one item's card (the left side of a Section)."""
     if _is_role_item(item):
         role = guild.get_role(item["role_given"])
-        bits = [f"🎭 **{item['name']}**"]
+        action = "Removes" if item["item_type"] == "role_remove" else "Grants"
+        bits = [f"🎭 **{item['name']}**", action]
         if role:
             bits.append(role.mention)
-        bits.append(
-            f"⏳ {humanize_duration(item['role_duration'])}"
-            if item["role_duration"] else "Permanent"
-        )
+        if item["item_type"] == "role":
+            bits.append(
+                f"⏳ {humanize_duration(item['role_duration'])}"
+                if item["role_duration"] else "Permanent"
+            )
         head = " · ".join(bits)
     else:
         head = f"📦 **{item['name']}**"
@@ -333,6 +335,28 @@ class Shop(commands.Cog):
         try:
             item = await create_item(self.pool, ctx.guild.id, name, price, item_type="role", role_given=role.id)
             await ctx.send(f"**{item['name']}** (grants {role.mention}) added to the shop for {price}{cur.emoji}.")
+        except Exception:
+            await ctx.send("An item with that name already exists.")
+
+    @commands.command(aliases=["removerole"])
+    @commands.is_owner()
+    async def addremoverole(self, ctx, price: str, role: discord.Role, *, name: str):
+        """Add a paid role-removal item. Usage: .addremoverole <price> @role <name>"""
+        try:
+            price = parse_amount(price)
+        except AmountError as e:
+            await ctx.send(str(e))
+            return
+        cur = self.bot.get_currency(ctx.guild.id)
+        try:
+            item = await create_item(
+                self.pool, ctx.guild.id, name, price,
+                item_type="role_remove", role_given=role.id,
+            )
+            await ctx.send(
+                f"**{item['name']}** (removes {role.mention}) added to the shop "
+                f"for {price}{cur.emoji}."
+            )
         except Exception:
             await ctx.send("An item with that name already exists.")
 

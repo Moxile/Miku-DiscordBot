@@ -95,6 +95,14 @@ async def delete_temp_role(conn: Conn, grant_id: int):
     await conn.execute("DELETE FROM temporary_roles WHERE id = $1", grant_id)
 
 
+async def delete_member_temp_role(conn: Conn, guild_id: int, user_id: int, role_id: int):
+    """Stop tracking a temporary role that has been removed early."""
+    await conn.execute(
+        "DELETE FROM temporary_roles WHERE guild_id = $1 AND user_id = $2 AND role_id = $3",
+        guild_id, user_id, role_id,
+    )
+
+
 async def remove_member_data(conn: Conn, guild_id: int, user_id: int):
     """Delete a member's inventory and temp-role grants when they leave/are removed from the guild."""
     await conn.execute(
