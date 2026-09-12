@@ -1279,6 +1279,9 @@ class Gambling(commands.Cog):
             "guild_id": guild.id,
             "channel_id": channel.id,
             "opener_id": opener_id,
+            # Commit the result when the betting window opens so the value shown
+            # in the terminal is the exact value later used for settlement.
+            "result": secrets.randbelow(37),
             "bets": {},
             "message": None,
             "spun": False,
@@ -1290,6 +1293,12 @@ class Gambling(commands.Cog):
         message = await channel.send(embed=embed, file=file)
         game["message"] = message
         game["timer"] = asyncio.create_task(self._roulette_timer(key))
+        result = game["result"]
+        color = "green" if result == 0 else ("red" if result in self.ROULETTE_RED else "black")
+        sys.stdout.write(
+            f"[roulette] guild {guild.id} channel {channel.id}: next pick = {result} ({color})\n"
+        )
+        sys.stdout.flush()
         return game
 
     def build_roulette_embed(self, game, guild):
@@ -1344,7 +1353,7 @@ class Gambling(commands.Cog):
         guild = self.bot.get_guild(game["guild_id"])
         cur = self.bot.get_currency(game["guild_id"])
 
-        result = secrets.randbelow(37)
+        result = game["result"]
         color = "green" if result == 0 else ("red" if result in self.ROULETTE_RED else "black")
 
         embed = discord.Embed(
