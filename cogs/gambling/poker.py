@@ -429,7 +429,7 @@ class PokerTable:
             self.pending = {p.user_id for p in self.actionable()}
             self.acted_since_raise = set()
             self.actor_id = self.next_player(big.user_id, self.pending).user_id if self.pending else None
-            await self.refresh()
+            await self.refresh(publish=True)
             if self.actor_id is None:
                 await self._advance_street()
             else:
@@ -535,7 +535,7 @@ class PokerTable:
             return None
 
         self.actor_id = self.next_player(player.user_id, self.pending).user_id
-        await self.refresh()
+        await self.refresh(publish=True)
         self._start_turn_timer()
         return None
 
@@ -563,7 +563,7 @@ class PokerTable:
             await self._showdown()
             return
         self.actor_id = self.next_player(self.dealer_id, self.pending).user_id
-        await self.refresh()
+        await self.refresh(publish=True)
         self._start_turn_timer()
 
     async def _settle_uncontested(self):
@@ -627,7 +627,7 @@ class PokerTable:
         self.actor_id = None
         self.version += 1
         self.deadline = time.time() + POKER_LOBBY_TIMEOUT
-        await self.refresh()
+        await self.refresh(publish=True)
         self._start_lobby_timer()
 
     async def cash_out(self, user_id: int, version: int) -> tuple[int, str | None]:
@@ -660,7 +660,7 @@ class PokerTable:
         self._cancel_timer()
         await self.refresh()
 
-    async def refresh(self):
+    async def refresh(self, *, publish: bool = False):
         if self.message is None:
             return
         view = None
@@ -668,8 +668,25 @@ class PokerTable:
             view = PokerLobbyView(self)
         elif self.phase == "betting":
             view = PokerActionView(self)
+        embed = self.build_embed()
+        if publish:
+            previous = self.message
+            try:
+                self.message = await self.channel.send(embed=embed, view=view)
+            except discord.HTTPException:
+                # Keep the current controls usable if Discord rejects the new post.
+                try:
+                    await previous.edit(embed=embed, view=view)
+                except discord.HTTPException:
+                    pass
+                return
+            try:
+                await previous.edit(view=None)
+            except discord.HTTPException:
+                pass
+            return
         try:
-            await self.message.edit(embed=self.build_embed(), view=view)
+            await self.message.edit(embed=embed, view=view)
         except discord.HTTPException:
             pass
 
