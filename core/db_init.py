@@ -28,6 +28,7 @@ from cogs.lichess import schema as lichess_schema
 from cogs.bot_reactions import schema as bot_reactions_schema
 from cogs.missions import schema as missions_schema
 from cogs.leaderboard import schema as leaderboard_schema
+from cogs.gambling import schema as gambling_schema
 
 
 # Order matters: economy + market must run before features that reference balances/companies.
@@ -52,6 +53,7 @@ _FEATURE_MODULES = [
     bot_reactions_schema,
     missions_schema,
     leaderboard_schema,
+    gambling_schema,
 ]
 
 

@@ -49,6 +49,7 @@ class GamblingPage(Page):
             self.button("✋ Rock-Paper-Scissors", self._rps, style=discord.ButtonStyle.primary, row=1),
             self.button("🃏 Higher-Lower", self._highlow, style=discord.ButtonStyle.primary, row=1),
             self.button("🎡 Roulette", self._roulette, style=discord.ButtonStyle.primary, row=2),
+            self.button("♠️ Poker", self._poker, style=discord.ButtonStyle.primary, row=2),
         ]
         return embed, items
 
@@ -72,6 +73,10 @@ class GamblingPage(Page):
     async def _roulette(self, interaction: discord.Interaction):
         """Launch traditional roulette (outside menu)."""
         await self.hub.refresh(interaction, notice="ℹ️ Use `.roulette <option> <bet>` in the gambling channel to play.")
+
+    async def _poker(self, interaction: discord.Interaction):
+        """Launch multiplayer poker (outside menu)."""
+        await self.hub.refresh(interaction, notice="ℹ️ Use `.poker <buy-in>` in the gambling channel to play.")
 
 
 class BetflipChoicePage(Page):

@@ -12,6 +12,7 @@ GAMBLING_TX_TYPES = [
     "betflip",
     "roulette_win", "roulette_loss",
     "russian_roulette_win", "russian_roulette_loss",
+    "poker_win", "poker_loss", "poker_push",
 ]
 
 # deposit/withdraw only shuffle money between wallet and bank — net worth is unchanged,

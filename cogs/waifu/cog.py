@@ -8,7 +8,7 @@ from config import (
     WAIFU_BASE_VALUE, WAIFU_VALUE_MULTIPLIER, WAIFU_DECAY_RATE,
     WAIFU_RESALE_RATE, WAIFU_GIFT_RATE, WAIFU_GIFT_MIN,
     MARRIAGE_FEE, ENGAGEMENT_DAYS, MARRIAGE_VALUE_STEP,
-    WAIFU_BEG_COOLDOWN_HOURS, WAIFU_BEG_TIERS,
+    WAIFU_BEG_COOLDOWN_HOURS, WAIFU_BEG_TIERS, WAIFU_MARRIED_BEG_TIERS,
 )
 from cogs.economy.db import ensure_wallet, lock_wallet, update_wallet, add_transaction
 from cogs.waifu.db import (
@@ -17,6 +17,7 @@ from cogs.waifu.db import (
     set_marriage, dissolve_marriage,
     decay_waifu_values, remove_member_waifus,
 )
+from cogs.waifu.service import purchase_cost
 from core.checks import require_not_locked
 from core.money import parse_amount, AmountError
 from core.names import format_name
@@ -113,7 +114,7 @@ class Waifu(commands.Cog):
     @commands.command(aliases=["wbuy"])
     @require_not_locked()
     async def waifubuy(self, ctx: commands.Context, member: discord.Member, amount: str = None):
-        """Buy a user as your waifu. Pay at least their current value.
+        """Buy a user as your waifu. Engaged targets add a 40% tax to your offer.
         Usage: .waifubuy <@user> [amount]"""
         cur = self.bot.get_currency(ctx.guild.id)
         if member == ctx.author:
@@ -140,32 +141,35 @@ class Waifu(commands.Cog):
                     return
 
                 current_value = target_row["value"]
-                pay = amount if amount is not None else current_value
+                base_price = amount if amount is not None else current_value
 
-                if pay < current_value:
+                if base_price < current_value:
                     await ctx.send(
                         f"**{format_name(member)}** is worth {cur.emoji} **{current_value:,}**. "
                         f"You must pay at least that much."
                     )
                     return
-                if buyer_bal["wallet"] < pay:
+                total_cost, tax = purchase_cost(
+                    base_price, target_row["engaged_since"] is not None
+                )
+                if buyer_bal["wallet"] < total_cost:
                     await ctx.send(
                         f"You don't have enough in your wallet. "
-                        f"Need {cur.emoji} **{pay:,}**, have {cur.emoji} **{buyer_bal['wallet']:,}**."
+                        f"Need {cur.emoji} **{total_cost:,}**, have {cur.emoji} **{buyer_bal['wallet']:,}**."
                     )
                     return
 
                 prev_owner = target_row["owner_id"]
-                new_value = int(max(pay, current_value) * WAIFU_VALUE_MULTIPLIER)
-                await update_wallet(conn, ctx.guild.id, ctx.author.id, -pay)
-                await add_transaction(conn, ctx.guild.id, ctx.author.id, -pay, "waifu_buy",
-                                      f"Bought {member.id} as waifu")
+                new_value = int(max(base_price, current_value) * WAIFU_VALUE_MULTIPLIER)
+                await update_wallet(conn, ctx.guild.id, ctx.author.id, -total_cost)
+                await add_transaction(conn, ctx.guild.id, ctx.author.id, -total_cost, "waifu_buy",
+                                      f"Bought {member.id} as waifu (base {base_price}, tax {tax})")
 
                 # The previous owner is paid out a share of the sale; the rest is a
                 # money sink. With no previous owner the whole payment is sunk.
                 payout = 0
                 if prev_owner and prev_owner != ctx.author.id:
-                    payout = int(pay * WAIFU_RESALE_RATE)
+                    payout = int(base_price * WAIFU_RESALE_RATE)
                     await ensure_wallet(conn, ctx.guild.id, prev_owner)
                     await update_wallet(conn, ctx.guild.id, prev_owner, payout)
                     await add_transaction(conn, ctx.guild.id, prev_owner, payout, "waifu_sale",
@@ -179,7 +183,13 @@ class Waifu(commands.Cog):
             color=discord.Color.from_rgb(255, 105, 180),
         )
         embed.add_field(name="New Waifu", value=member.mention, inline=True)
-        embed.add_field(name="Paid", value=f"{cur.emoji} {pay:,}", inline=True)
+        embed.add_field(name="Paid", value=f"{cur.emoji} {total_cost:,}", inline=True)
+        if tax:
+            embed.add_field(
+                name="Engagement tax",
+                value=f"{cur.emoji} {tax:,} (does not increase value)",
+                inline=True,
+            )
         embed.add_field(name="New Value", value=f"{cur.emoji} {new_value:,}", inline=True)
         if payout:
             prev_name = await self._get_display_name(ctx.guild, prev_owner)
@@ -316,6 +326,7 @@ class Waifu(commands.Cog):
             if not row or row["owner_id"] != ctx.author.id:
                 await ctx.send(f"You don't own **{format_name(member)}**.")
                 return
+            owner_row = await get_waifu(conn, ctx.guild.id, ctx.author.id)
 
             if row["last_begged_at"] is not None:
                 next_beg = row["last_begged_at"] + timedelta(hours=WAIFU_BEG_COOLDOWN_HOURS)
@@ -326,7 +337,9 @@ class Waifu(commands.Cog):
                     )
                     return
 
-            _, min_pct, max_pct = self._pick_beg_tier(WAIFU_BEG_TIERS)
+            owner_is_married = owner_row is not None and owner_row["spouse_id"] is not None
+            tiers = WAIFU_MARRIED_BEG_TIERS if owner_is_married else WAIFU_BEG_TIERS
+            _, min_pct, max_pct = self._pick_beg_tier(tiers)
             if max_pct > 0:
                 pct = min_pct + (max_pct - min_pct) * (secrets.randbelow(1_000_000) / 1_000_000)
                 payout = int(row["value"] * pct)
@@ -350,7 +363,7 @@ class Waifu(commands.Cog):
     @commands.command()
     @require_not_locked()
     async def propose(self, ctx: commands.Context, member: discord.Member):
-        """Propose marriage to your engaged partner. Requires 7 days of mutual ownership.
+        """Propose marriage to your engaged partner after the configured engagement period.
         Usage: .propose <@member>"""
         cur = self.bot.get_currency(ctx.guild.id)
         if member == ctx.author:

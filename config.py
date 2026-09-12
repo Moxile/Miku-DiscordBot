@@ -111,13 +111,14 @@ OPTION_REFRESH_MINUTES     = 5      # cadence of the expiry-settlement backgroun
 
 # Waifu system
 WAIFU_BASE_VALUE = 5000
-WAIFU_VALUE_MULTIPLIER = 1.5   # value after buy = max(paid, current) * 1.5
+WAIFU_VALUE_MULTIPLIER = 1.5   # value after buy = max(base offer, current) * 1.5
 WAIFU_DECAY_RATE = 0.10        # lose 10% of excess per day
 WAIFU_RESALE_RATE = 0.80       # fraction of a buy the previous owner receives (rest is a sink)
+WAIFU_ENGAGED_TAX_RATE = Decimal("0.40")  # extra cost; does not affect value/payouts
 WAIFU_GIFT_RATE = 0.05         # daily gift to your waifu needed to pause decay = 5% of their value
 WAIFU_GIFT_MIN = 500           # ... but never less than this much
-MARRIAGE_FEE = 10_000          # Flowers to propose
-ENGAGEMENT_DAYS = 7            # days of mutual ownership before proposing
+MARRIAGE_FEE = 20_000          # Flowers to propose
+ENGAGEMENT_DAYS = 3            # days of mutual ownership before proposing
 MARRIAGE_VALUE_STEP = WAIFU_VALUE_MULTIPLIER  # marrying steps both spouses' value up by one normal buy-step
 
 # .beg: owner can beg a waifu they own once a day for a cut of that waifu's value.
@@ -130,6 +131,15 @@ WAIFU_BEG_TIERS = [
     (20, 0.02,  0.05),   # medium
     (7,  0.05,  0.15),   # good
     (3,  0.25,  0.50),   # jackpot
+]
+# Marriage shifts probability away from no/small payouts and toward the better
+# tiers. Payout sizes still use the waifu's actual (untaxed) value.
+WAIFU_MARRIED_BEG_TIERS = [
+    (25, 0.0,   0.0),    # nothing
+    (30, 0.005, 0.02),   # small
+    (25, 0.02,  0.05),   # medium
+    (15, 0.05,  0.15),   # good
+    (5,  0.25,  0.50),   # jackpot
 ]
 REMINDER_MAX_DAYS = 10         # max reminder duration
 

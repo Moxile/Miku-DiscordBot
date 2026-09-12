@@ -9,18 +9,20 @@ import discord
 from discord.ext import commands
 
 from cogs.economy.db import ensure_wallet, update_wallet, update_bank, add_transaction
-from core.checks import require_channel, invalidate, UserLocked, user_is_locked
+from core.checks import require_channel, invalidate, UserLocked, user_is_locked, has_permissions_or_owner
 from core.money import parse_amount, AmountError
 from core.names import format_name
 from core.resilience import send_resilient, refund_and_release
 from config import PREFIX
-from . import cards, coins, wheel, board
+from . import cards, coins, wheel, board, poker as poker_game
 
 
 BLACKJACK_TIMEOUT = 120
 BLACKJACK_SHOE_DECKS = 6  # number of 52-card decks in each guild's shared shoe
+SHOE_RESET_CARDS = 75  # replace a shoe between games once this many cards remain
 
 HIGHERLOWER_TIMEOUT = 120
+HIGHERLOWER_SHOE_DECKS = 6
 HL_HOUSE_EDGE = 0.92  # fair-odds payout is scaled by this to give the house an advantage
 
 COINFLIP_HOUSE_EDGE = 0.95  # fair (1:1) winnings are scaled by this — a 5% house edge
@@ -584,13 +586,22 @@ class Gambling(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.games = {}
-        # One shared blackjack shoe per guild, keyed by guild_id. It carries over between
-        # games and across players and is only reshuffled once it runs out (see _draw_card).
-        self.shoes = {}
+        # Blackjack and higher-lower each have an independent per-guild shoe.
+        self.blackjack_shoes = {}
+        self.higherlower_shoes = {}
         # guild_id -> max bet, or None if unset/no limit
         self._max_bet_cache: dict[int, int | None] = {}
-        # guild_id -> terminal row index for the live "next card" display (see _print_next_card)
-        self._shoe_rows: dict[int, int] = {}
+        # (game type, guild_id) -> terminal row index for the live next-card display.
+        self._shoe_rows: dict[tuple[str, int], int] = {}
+        self.poker_manager = poker_game.PokerManager(self)
+
+    async def cog_load(self):
+        recovered = await self.poker_manager.recover_escrow()
+        if recovered:
+            print(f"[poker] refunded {recovered} stale escrow balance(s) after startup")
+
+    def cog_unload(self):
+        self.poker_manager.shutdown()
 
     @property
     def pool(self):
@@ -624,6 +635,51 @@ class Gambling(commands.Cog):
         if wallet["wallet"] < amount:
             return False, f"You don't have enough {cur.name} to place this bet."
         return True, None
+
+    @commands.command()
+    @require_channel("gambling_channel")
+    async def poker(self, ctx, amount: str = None):
+        """Create or join a Texas Hold'em table with a wallet-funded chip buy-in."""
+        settings = await self.poker_manager.settings_for(ctx.guild.id)
+        cur = self.bot.get_currency(ctx.guild.id)
+        if amount is None:
+            table = self.poker_manager.tables.get((ctx.guild.id, ctx.channel.id))
+            if table:
+                await ctx.send(embed=table.build_embed())
+            else:
+                await ctx.send(
+                    f"Use `{PREFIX}poker <amount>` to create or join a table. "
+                    f"Minimum buy-in: **{settings['buyin']:,}**{cur.emoji}; "
+                    f"fee: **{settings['fee']:,}**{cur.emoji} per hand."
+                )
+            return
+
+        wallet = await ensure_wallet(self.pool, ctx.guild.id, ctx.author.id)
+        try:
+            buyin = parse_amount(amount, wallet_balance=wallet["wallet"])
+        except AmountError as exc:
+            await ctx.send(str(exc))
+            return
+        table, error = await self.poker_manager.join(ctx.channel, ctx.author.id, buyin)
+        if error:
+            await ctx.send(error)
+            return
+        if table.message is None:
+            try:
+                await table.send_initial()
+            except discord.HTTPException:
+                await table._close_and_cash_all()
+                try:
+                    await ctx.channel.send(
+                        "Discord could not create the poker table, so all buy-ins were refunded."
+                    )
+                except discord.HTTPException:
+                    pass
+        else:
+            await ctx.send(
+                f"{ctx.author.mention} joined the poker table with **{buyin:,}** chips.",
+                delete_after=10,
+            )
 
     @commands.command(aliases=["cf"])
     @require_channel("gambling_channel")
@@ -847,10 +903,13 @@ class Gambling(commands.Cog):
     def new_blackjack_game(self, key, guild_id, bet):
         """Create a fresh game dict and deal the opening hand. The caller must
         already have deducted the bet from the player's wallet."""
-        shoe = self.shoes.get(guild_id)
-        if not shoe:
+        shoe = self.blackjack_shoes.get(guild_id)
+        if shoe is None:
             shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
-            self.shoes[guild_id] = shoe
+            self.blackjack_shoes[guild_id] = shoe
+        elif len(shoe) <= SHOE_RESET_CARDS:
+            shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
+            self.blackjack_shoes[guild_id] = shoe
 
         self.games[key] = {
             "game": "blackjack",
@@ -882,27 +941,33 @@ class Gambling(commands.Cog):
         return True, None
 
     def _draw_card(self, game):
-        """Draw the top card of the shoe, shuffling in a fresh deck when it runs out."""
+        """Draw the top card of the game's shoe, with an empty-shoe safety refill."""
         deck = game["deck"]
         if not deck:
-            deck.extend(self.create_deck(BLACKJACK_SHOE_DECKS))
+            deck_count = (
+                BLACKJACK_SHOE_DECKS
+                if game["game"] == "blackjack"
+                else HIGHERLOWER_SHOE_DECKS
+            )
+            deck.extend(self.create_deck(deck_count))
         card = deck.pop()
-        self._print_next_card(game["guild_id"], deck)
+        self._print_next_card(game["game"], game["guild_id"], deck)
         return card
 
-    def _print_next_card(self, guild_id, deck):
-        """Live-update a per-guild terminal row showing the next card at the top of its shoe."""
+    def _print_next_card(self, game_type, guild_id, deck):
+        """Live-update a per-game, per-guild terminal row with the next card."""
         top = deck[-1] if deck else None
         card_str = f"{top[0]}{top[1]}" if top else "(empty — will reshuffle)"
-        line = f"[shoe] guild {guild_id}: next card = {card_str}"
+        line = f"[shoe:{game_type}] guild {guild_id}: next card = {card_str}"
+        row_key = (game_type, guild_id)
 
-        if guild_id not in self._shoe_rows:
-            self._shoe_rows[guild_id] = len(self._shoe_rows)
+        if row_key not in self._shoe_rows:
+            self._shoe_rows[row_key] = len(self._shoe_rows)
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
             return
 
-        row = self._shoe_rows[guild_id]
+        row = self._shoe_rows[row_key]
         rows_up = len(self._shoe_rows) - row
         # Move cursor up to the guild's row, clear it, print, then return to the bottom.
         sys.stdout.write(f"\x1b[{rows_up}A\r\x1b[2K{line}\x1b[{rows_up}B\r")
@@ -1062,10 +1127,13 @@ class Gambling(commands.Cog):
 
     def new_higherlower_game(self, key, guild_id, bet):
         """Create a fresh higher-lower game dict and draw the opening card."""
-        shoe = self.shoes.get(guild_id)
-        if not shoe:
-            shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
-            self.shoes[guild_id] = shoe
+        shoe = self.higherlower_shoes.get(guild_id)
+        if shoe is None:
+            shoe = self.create_deck(HIGHERLOWER_SHOE_DECKS)
+            self.higherlower_shoes[guild_id] = shoe
+        elif len(shoe) <= SHOE_RESET_CARDS:
+            shoe = self.create_deck(HIGHERLOWER_SHOE_DECKS)
+            self.higherlower_shoes[guild_id] = shoe
 
         game = {
             "game": "higherlower",
@@ -1495,6 +1563,68 @@ class Gambling(commands.Cog):
         await channel.send(embed=embed)
 
     # ── Admin ──
+
+    @commands.command()
+    async def pokersettings(self, ctx):
+        """Show this server's poker buy-in, fee, and blind configuration."""
+        settings = await self.poker_manager.settings_for(ctx.guild.id)
+        cur = self.bot.get_currency(ctx.guild.id)
+        embed = discord.Embed(title="Poker Settings", color=discord.Color.dark_green())
+        embed.description = (
+            f"Minimum buy-in: **{settings['buyin']:,}**{cur.emoji}\n"
+            f"Fee per hand: **{settings['fee']:,}**{cur.emoji}\n"
+            f"Small blind: **{settings['smallblind']:,}** chips\n"
+            f"Big blind: **{settings['bigblind']:,}** chips\n"
+            f"Players: **2–{poker_game.POKER_MAX_PLAYERS}**"
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command()
+    @has_permissions_or_owner(manage_guild=True)
+    async def pokerset(self, ctx, setting: str = None, amount: int = None):
+        """Set a poker option: buyin, fee, smallblind, or bigblind."""
+        aliases = {"sb": "smallblind", "small": "smallblind", "bb": "bigblind", "big": "bigblind"}
+        setting = aliases.get((setting or "").lower(), (setting or "").lower())
+        if setting not in poker_game.SETTING_KEYS or amount is None:
+            await ctx.send(f"Usage: `{PREFIX}pokerset <buyin|fee|smallblind|bigblind> <amount>`")
+            return
+        if amount < 0 or (setting != "fee" and amount == 0):
+            await ctx.send("The fee may be zero; all other poker settings must be positive.")
+            return
+        if amount > poker_game.POKER_MAX_AMOUNT:
+            await ctx.send(f"Poker settings cannot exceed {poker_game.POKER_MAX_AMOUNT:,}.")
+            return
+
+        values = await self.poker_manager.settings_for(ctx.guild.id)
+        values[setting] = amount
+        if values["smallblind"] > values["bigblind"]:
+            await ctx.send("The small blind cannot be greater than the big blind.")
+            return
+        if values["buyin"] < values["bigblind"] * 10:
+            await ctx.send("The minimum buy-in must be at least 10 times the big blind.")
+            return
+
+        key = poker_game.SETTING_KEYS[setting]
+        await self.pool.execute(
+            """INSERT INTO guild_settings (guild_id, key, value) VALUES ($1, $2, $3)
+               ON CONFLICT (guild_id, key) DO UPDATE SET value = EXCLUDED.value""",
+            ctx.guild.id, key, str(amount),
+        )
+        cur = self.bot.get_currency(ctx.guild.id)
+        await ctx.send(
+            f"Poker **{setting}** set to **{amount:,}**{cur.emoji}. "
+            "The change applies to newly created tables."
+        )
+
+    @commands.command()
+    @has_permissions_or_owner(manage_guild=True)
+    async def pokerreset(self, ctx):
+        """Restore this server's poker settings to their defaults."""
+        await self.pool.execute(
+            "DELETE FROM guild_settings WHERE guild_id = $1 AND key = ANY($2)",
+            ctx.guild.id, list(poker_game.SETTING_KEYS.values()),
+        )
+        await ctx.send("Poker settings reset to the defaults (new tables only).")
 
     @commands.command()
     @commands.is_owner()

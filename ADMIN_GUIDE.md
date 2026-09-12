@@ -21,6 +21,7 @@ How to set up and run Miku **inside your Discord server** once the bot has been 
    - [Role Salaries](#role-salaries)
    - [Missions](#missions)
    - [Predictions](#predictions)
+   - [Poker](#poker)
    - [Moderation](#moderation)
    - [Reaction Roles](#reaction-roles)
    - [Bot Reactions (auto-replies)](#bot-reactions)
@@ -261,6 +262,22 @@ Example: `.addmission 50000 Operation Aurora | Fund a new base.` &nbsp; **Player
 
 ---
 
+### Poker
+
+Poker tables use server-configurable minimum buy-ins, per-hand wallet fees, and blinds. These commands require **Manage Server**; changes apply to newly created tables.
+
+| Action | Command |
+|--------|---------|
+| Show settings | `.pokersettings` |
+| Set minimum buy-in | `.pokerset buyin <amount>` |
+| Set fee per hand | `.pokerset fee <amount>` |
+| Set small / big blind | `.pokerset smallblind <amount>` / `.pokerset bigblind <amount>` |
+| Restore defaults | `.pokerreset` |
+
+Defaults are a 1,000 minimum buy-in, a 100 wallet fee per hand, and 50/100 blinds. The minimum buy-in must remain at least ten big blinds.
+
+---
+
 ### Moderation
 
 Standard Discord moderation. Each needs the matching Discord permission (and the bot needs it too).
@@ -352,6 +369,7 @@ Auto-assigns rating roles when members link their Lichess account. Setup needs *
 | `.setpredictorrole @role` | run again with a different role (no clear) |
 | `.ownerrole create/set` | `.ownerrole clear` |
 | `.disable <feature>` | `.enable <feature>` |
+| `.pokerset …` | `.pokerreset` |
 | `.ban` | `.unban <user_id>` |
 | `.mute` | `.unmute @member` |
 | `.rr add` | `.rr remove` / `.rr clear` |
@@ -371,7 +389,7 @@ Type `.help` for the interactive menu, `.help <category>` for a group, or `.help
 **🛒 Shop** — `.shop`, `.buy <name>`, `.inventory` (`inv`)
 **🎯 Missions** — `.missions`, `.fund <name> <amount>`
 **🤝 Offers (peer bets)** — `.offer …`, `.take <id> <stake>`, `.offers`, `.offerinfo <id>`, `.closeoffer <id> win|lose`, `.canceloffer <id>`
-**🎲 Gambling** — `.coinflip` (`cf`), `.betflip` (`bf`), `.blackjack` (`bj`), `.roulette`, `.russian_roulette` (`rr`)
+**🎲 Gambling** — `.coinflip` (`cf`), `.betflip` (`bf`), `.blackjack` (`bj`), `.roulette`, `.russian_roulette` (`rr`), `.poker <buy-in>`, `.pokersettings`
 **♟️ Chess games** — `.gte <link> <award> [duration]` (Guess the Elo), `.wolfrandom` (`wr`)
 **🔤 Acro** — `.acro [bet]`
 **📈 Market** — `.exchange` (`m`,`stocks`,`ex`), `.portfolio` (`p`,`port`), `.companyinfo` (`ci`), `.orderbook` (`ob`), `.marketbuy` (`mb`), `.marketsell` (`ms`), `.buyorder` (`bo`), `.sellorder` (`so`), `.cancelorder` (`co`), `.giftstocks` (`gs`), `.dividendhistory` (`dh`)

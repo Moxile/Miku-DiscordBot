@@ -20,8 +20,8 @@ class WaifuAmountModal(HubModal):
         super().__init__(hub, title="Waifu Purchase")
         self.handler = handler
         self.amount = discord.ui.TextInput(
-            label="Amount to pay",
-            placeholder="(optional) or leave blank for minimum",
+            label="Base offer (tax added separately)",
+            placeholder="Leave blank for the minimum base offer",
             max_length=12,
             required=False,
         )
@@ -184,11 +184,18 @@ class WaifuBuyConfirmPage(Page):
             raise UserError("This user is married and cannot be bought.")
 
         cur = self.currency
+        total_cost, tax = service.purchase_cost(
+            target_waifu["value"], target_waifu["engaged_since"] is not None
+        )
         embed = discord.Embed(
             title=f"💕 Buy {format_name(target_member, self.guild)}",
             color=discord.Color.from_rgb(255, 105, 180),
         )
-        embed.description = f"Buying costs at least {cur.emoji} **{target_waifu['value']:,}** (their current value)."
+        embed.description = f"Buying costs at least {cur.emoji} **{total_cost:,}**."
+        if tax:
+            embed.description += (
+                f" This includes a {cur.emoji} **{tax:,}** engagement tax, which does not increase their value."
+            )
 
         items = [
             self.button("Pay Minimum", self._pay_minimum, emoji="🏷️", row=0),
@@ -198,6 +205,8 @@ class WaifuBuyConfirmPage(Page):
 
     def _buy_notice(self, result) -> str:
         msg = f"💕 Bought **{format_name(self.guild.get_member(result.target_id), self.guild)}** for {self.currency.emoji} {result.paid:,}!"
+        if result.tax:
+            msg += f" (Includes {self.currency.emoji} {result.tax:,} engagement tax.)"
         if result.payout:
             prev = self.guild.get_member(result.prev_owner_id)
             prev_name = format_name(prev, self.guild) if prev else "the previous owner"
