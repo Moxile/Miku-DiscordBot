@@ -19,10 +19,10 @@ from . import cards, coins, wheel, board, poker as poker_game
 
 BLACKJACK_TIMEOUT = 120
 BLACKJACK_SHOE_DECKS = 6  # number of 52-card decks in each guild's shared shoe
-SHOE_RESET_CARDS = 75  # replace a shoe between games once this many cards remain
 
 HIGHERLOWER_TIMEOUT = 120
 HIGHERLOWER_SHOE_DECKS = 6
+HIGHERLOWER_RESET_CARDS = 50  # reshuffle between games at 50 or fewer cards
 HL_HOUSE_EDGE = 0.92  # fair-odds payout is scaled by this to give the house an advantage
 
 COINFLIP_HOUSE_EDGE = 0.95  # fair (1:1) winnings are scaled by this — a 5% house edge
@@ -907,9 +907,6 @@ class Gambling(commands.Cog):
         if shoe is None:
             shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
             self.blackjack_shoes[guild_id] = shoe
-        elif len(shoe) <= SHOE_RESET_CARDS:
-            shoe = self.create_deck(BLACKJACK_SHOE_DECKS)
-            self.blackjack_shoes[guild_id] = shoe
 
         self.games[key] = {
             "game": "blackjack",
@@ -1131,7 +1128,7 @@ class Gambling(commands.Cog):
         if shoe is None:
             shoe = self.create_deck(HIGHERLOWER_SHOE_DECKS)
             self.higherlower_shoes[guild_id] = shoe
-        elif len(shoe) <= SHOE_RESET_CARDS:
+        elif len(shoe) <= HIGHERLOWER_RESET_CARDS:
             shoe = self.create_deck(HIGHERLOWER_SHOE_DECKS)
             self.higherlower_shoes[guild_id] = shoe
 
