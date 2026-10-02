@@ -124,7 +124,6 @@ MARRIAGE_VALUE_STEP = WAIFU_VALUE_MULTIPLIER  # marrying steps both spouses' val
 # .beg: owner can beg a waifu they own once a day for a cut of that waifu's value.
 # Tiers are (weight, min_pct_of_value, max_pct_of_value); one is picked by weighted
 # random draw (see cogs/dailywheel's _pick_prize for the same pattern).
-WAIFU_BEG_COOLDOWN_HOURS = 24
 WAIFU_BEG_TIERS = [
     (35, 0.0,   0.0),    # nothing
     (35, 0.005, 0.02),   # small

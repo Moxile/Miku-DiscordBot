@@ -8,7 +8,7 @@ from config import (
     WAIFU_BASE_VALUE, WAIFU_VALUE_MULTIPLIER, WAIFU_DECAY_RATE,
     WAIFU_RESALE_RATE, WAIFU_GIFT_RATE, WAIFU_GIFT_MIN,
     MARRIAGE_FEE, ENGAGEMENT_DAYS, MARRIAGE_VALUE_STEP,
-    WAIFU_BEG_COOLDOWN_HOURS, WAIFU_BEG_TIERS, WAIFU_MARRIED_BEG_TIERS,
+    WAIFU_BEG_TIERS, WAIFU_MARRIED_BEG_TIERS,
 )
 from cogs.economy.db import ensure_wallet, lock_wallet, update_wallet, add_transaction
 from cogs.waifu.db import (
@@ -328,9 +328,13 @@ class Waifu(commands.Cog):
                 return
             owner_row = await get_waifu(conn, ctx.guild.id, ctx.author.id)
 
+            now = datetime.now(timezone.utc)
             if row["last_begged_at"] is not None:
-                next_beg = row["last_begged_at"] + timedelta(hours=WAIFU_BEG_COOLDOWN_HOURS)
-                if datetime.now(timezone.utc) < next_beg:
+                last_beg_date = row["last_begged_at"].astimezone(timezone.utc).date()
+                if last_beg_date >= now.date():
+                    next_beg = (now + timedelta(days=1)).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
                     await ctx.send(
                         f"You already begged **{format_name(member)}** today. "
                         f"Try again <t:{int(next_beg.timestamp())}:R>."

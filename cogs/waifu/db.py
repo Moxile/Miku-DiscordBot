@@ -97,7 +97,7 @@ async def set_gifted(conn: Conn, guild_id: int, user_id: int):
 
 
 async def record_beg(conn: Conn, guild_id: int, user_id: int):
-    """Record that this waifu was just begged from by their owner (starts the cooldown)."""
+    """Record that this waifu was begged from during the current UTC day."""
     await conn.execute(
         "UPDATE waifus SET last_begged_at = NOW() WHERE guild_id = $1 AND user_id = $2",
         guild_id, user_id,
