@@ -8,7 +8,8 @@ from config import (
     WAIFU_BASE_VALUE, WAIFU_VALUE_MULTIPLIER, WAIFU_DECAY_RATE,
     WAIFU_RESALE_RATE, WAIFU_GIFT_RATE, WAIFU_GIFT_MIN,
     MARRIAGE_FEE, ENGAGEMENT_DAYS, MARRIAGE_VALUE_STEP,
-    WAIFU_BEG_TIERS, WAIFU_MARRIED_BEG_TIERS,
+    WAIFU_BEG_TIERS, WAIFU_MARRIED_BEG_TIERS, WAIFU_BEG_VIP_IDS,
+    WAIFU_VIP_BEG_TIERS, WAIFU_MARRIED_VIP_BEG_TIERS,
 )
 from cogs.economy.db import ensure_wallet, lock_wallet, update_wallet, add_transaction
 from cogs.waifu.db import (
@@ -342,7 +343,12 @@ class Waifu(commands.Cog):
                     return
 
             owner_is_married = owner_row is not None and owner_row["spouse_id"] is not None
-            tiers = WAIFU_MARRIED_BEG_TIERS if owner_is_married else WAIFU_BEG_TIERS
+            owner_is_vip = ctx.author.id in WAIFU_BEG_VIP_IDS
+            if owner_is_vip:
+                tiers = (WAIFU_MARRIED_VIP_BEG_TIERS if owner_is_married
+                         else WAIFU_VIP_BEG_TIERS)
+            else:
+                tiers = WAIFU_MARRIED_BEG_TIERS if owner_is_married else WAIFU_BEG_TIERS
             _, min_pct, max_pct = self._pick_beg_tier(tiers)
             if max_pct > 0:
                 pct = min_pct + (max_pct - min_pct) * (secrets.randbelow(1_000_000) / 1_000_000)

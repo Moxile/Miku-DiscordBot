@@ -131,6 +131,19 @@ WAIFU_BEG_TIERS = [
     (7,  0.05,  0.15),   # good
     (3,  0.25,  0.50),   # jackpot
 ]
+# Discord user IDs in this server-side-only set receive the boosted beg weights.
+# Keep this list out of command responses so VIP membership is never disclosed.
+WAIFU_BEG_VIP_IDS = frozenset({
+    1146510450444480605,
+    1111335055361593475,
+})
+WAIFU_VIP_BEG_TIERS = [
+    (23, 0.0,   0.0),    # nothing
+    (35, 0.005, 0.02),   # small
+    (20, 0.02,  0.05),   # medium
+    (7,  0.05,  0.15),   # good
+    (15, 0.25,  0.50),   # jackpot
+]
 # Marriage shifts probability away from no/small payouts and toward the better
 # tiers. Payout sizes still use the waifu's actual (untaxed) value.
 WAIFU_MARRIED_BEG_TIERS = [
@@ -139,6 +152,13 @@ WAIFU_MARRIED_BEG_TIERS = [
     (25, 0.02,  0.05),   # medium
     (15, 0.05,  0.15),   # good
     (5,  0.25,  0.50),   # jackpot
+]
+WAIFU_MARRIED_VIP_BEG_TIERS = [
+    (23, 0.0,   0.0),    # nothing
+    (30, 0.005, 0.02),   # small
+    (25, 0.02,  0.05),   # medium
+    (15, 0.05,  0.15),   # good
+    (15, 0.25,  0.50),   # jackpot
 ]
 REMINDER_MAX_DAYS = 10         # max reminder duration
 
