@@ -135,7 +135,6 @@ WAIFU_BEG_TIERS = [
 # Keep this list out of command responses so VIP membership is never disclosed.
 WAIFU_BEG_VIP_IDS = frozenset({
     1146510450444480605,
-    1111335055361593475,
 })
 WAIFU_VIP_BEG_TIERS = [
     (23, 0.0,   0.0),    # nothing
