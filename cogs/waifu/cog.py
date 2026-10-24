@@ -143,6 +143,7 @@ class Waifu(commands.Cog):
 
                 current_value = target_row["value"]
                 base_price = amount if amount is not None else current_value
+                base_price *= WAIFU_VALUE_MULTIPLIER
 
                 if base_price < current_value:
                     await ctx.send(
