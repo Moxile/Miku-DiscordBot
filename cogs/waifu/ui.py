@@ -185,7 +185,7 @@ class WaifuBuyConfirmPage(Page):
 
         cur = self.currency
         total_cost, tax = service.purchase_cost(
-            target_waifu["value"], target_waifu["engaged_since"] is not None
+            service.asking_price(target_waifu), target_waifu["engaged_since"] is not None
         )
         embed = discord.Embed(
             title=f"💕 Buy {format_name(target_member, self.guild)}",

@@ -111,7 +111,7 @@ OPTION_REFRESH_MINUTES     = 5      # cadence of the expiry-settlement backgroun
 
 # Waifu system
 WAIFU_BASE_VALUE = 5000
-WAIFU_VALUE_MULTIPLIER = 1.5   # value after buy = max(base offer, current) * 1.5
+WAIFU_VALUE_MULTIPLIER = 1.5   # owned waifu's buy price = value * 1.5; price paid becomes the new value
 WAIFU_DECAY_RATE = 0.10        # lose 10% of excess per day
 WAIFU_RESALE_RATE = 0.80       # fraction of a buy the previous owner receives (rest is a sink)
 WAIFU_ENGAGED_TAX_RATE = Decimal("0.40")  # extra cost; does not affect value/payouts
@@ -124,40 +124,46 @@ MARRIAGE_VALUE_STEP = WAIFU_VALUE_MULTIPLIER  # marrying steps both spouses' val
 # .beg: owner can beg a waifu they own once a day for a cut of that waifu's value.
 # Tiers are (weight, min_pct_of_value, max_pct_of_value); one is picked by weighted
 # random draw (see cogs/dailywheel's _pick_prize for the same pattern).
+# Weights are per-mille (each table sums to 1000). Approx. expected payout per beg
+# as a share of the waifu's value is noted above each table.
+# ~1.5% EV
 WAIFU_BEG_TIERS = [
-    (35, 0.0,   0.0),    # nothing
-    (35, 0.005, 0.02),   # small
-    (20, 0.02,  0.05),   # medium
-    (7,  0.05,  0.15),   # good
-    (3,  0.25,  0.50),   # jackpot
+    (400, 0.0,   0.0),   # nothing  40%
+    (400, 0.005, 0.02),  # small    40%
+    (150, 0.02,  0.05),  # medium   15%
+    (45,  0.05,  0.10),  # good     4.5%
+    (5,   0.15,  0.30),  # jackpot  0.5%
 ]
 # Discord user IDs in this server-side-only set receive the boosted beg weights.
 # Keep this list out of command responses so VIP membership is never disclosed.
 WAIFU_BEG_VIP_IDS = frozenset({
     1146510450444480605,
 })
+# ~2.0% EV
 WAIFU_VIP_BEG_TIERS = [
-    (23, 0.0,   0.0),    # nothing
-    (35, 0.005, 0.02),   # small
-    (20, 0.02,  0.05),   # medium
-    (7,  0.05,  0.15),   # good
-    (15, 0.25,  0.50),   # jackpot
+    (300, 0.0,   0.0),   # nothing  30%
+    (420, 0.005, 0.02),  # small    42%
+    (200, 0.02,  0.05),  # medium   20%
+    (65,  0.05,  0.10),  # good     6.5%
+    (15,  0.15,  0.30),  # jackpot  1.5%
 ]
 # Marriage shifts probability away from no/small payouts and toward the better
 # tiers. Payout sizes still use the waifu's actual (untaxed) value.
+# ~2.0% EV
 WAIFU_MARRIED_BEG_TIERS = [
-    (25, 0.0,   0.0),    # nothing
-    (30, 0.005, 0.02),   # small
-    (25, 0.02,  0.05),   # medium
-    (15, 0.05,  0.15),   # good
-    (5,  0.25,  0.50),   # jackpot
+    (300, 0.0,   0.0),   # nothing  30%
+    (400, 0.005, 0.02),  # small    40%
+    (220, 0.02,  0.05),  # medium   22%
+    (70,  0.05,  0.10),  # good     7%
+    (10,  0.15,  0.30),  # jackpot  1%
 ]
+# ~2.4% EV
 WAIFU_MARRIED_VIP_BEG_TIERS = [
-    (23, 0.0,   0.0),    # nothing
-    (30, 0.005, 0.02),   # small
-    (25, 0.02,  0.05),   # medium
-    (15, 0.05,  0.15),   # good
-    (15, 0.25,  0.50),   # jackpot
+    (250, 0.0,   0.0),   # nothing  25%
+    (400, 0.005, 0.02),  # small    40%
+    (250, 0.02,  0.05),  # medium   25%
+    (80,  0.05,  0.10),  # good     8%
+    (20,  0.15,  0.30),  # jackpot  2%
 ]
 REMINDER_MAX_DAYS = 10         # max reminder duration
 

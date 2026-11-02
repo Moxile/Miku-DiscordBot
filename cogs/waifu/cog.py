@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 from discord.ext import commands, tasks
 
 from config import (
-    WAIFU_BASE_VALUE, WAIFU_VALUE_MULTIPLIER, WAIFU_DECAY_RATE,
+    WAIFU_BASE_VALUE, WAIFU_DECAY_RATE,
     WAIFU_RESALE_RATE, WAIFU_GIFT_RATE, WAIFU_GIFT_MIN,
     MARRIAGE_FEE, ENGAGEMENT_DAYS, MARRIAGE_VALUE_STEP,
     WAIFU_BEG_TIERS, WAIFU_MARRIED_BEG_TIERS, WAIFU_BEG_VIP_IDS,
@@ -18,7 +18,7 @@ from cogs.waifu.db import (
     set_marriage, dissolve_marriage,
     decay_waifu_values, remove_member_waifus,
 )
-from cogs.waifu.service import purchase_cost
+from cogs.waifu.service import asking_price, purchase_cost
 from core.checks import require_not_locked
 from core.money import parse_amount, AmountError
 from core.names import format_name
@@ -141,14 +141,12 @@ class Waifu(commands.Cog):
                     await ctx.send(f"**{format_name(member)}** is married and cannot be bought.")
                     return
 
-                current_value = target_row["value"]
-                base_price = amount if amount is not None else current_value
-                base_price *= WAIFU_VALUE_MULTIPLIER
+                min_price = asking_price(target_row)
+                base_price = amount if amount is not None else min_price
 
-                if base_price < current_value:
+                if base_price < min_price:
                     await ctx.send(
-                        f"**{format_name(member)}** is worth {cur.emoji} **{current_value:,}**. "
-                        f"You must pay at least that much."
+                        f"**{format_name(member)}** costs at least {cur.emoji} **{min_price:,}**."
                     )
                     return
                 total_cost, tax = purchase_cost(
@@ -162,7 +160,7 @@ class Waifu(commands.Cog):
                     return
 
                 prev_owner = target_row["owner_id"]
-                new_value = int(max(base_price, current_value) * WAIFU_VALUE_MULTIPLIER)
+                new_value = base_price
                 await update_wallet(conn, ctx.guild.id, ctx.author.id, -total_cost)
                 await add_transaction(conn, ctx.guild.id, ctx.author.id, -total_cost, "waifu_buy",
                                       f"Bought {member.id} as waifu (base {base_price}, tax {tax})")

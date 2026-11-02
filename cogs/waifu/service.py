@@ -33,6 +33,15 @@ class WaifuGiftResult:
     engaged: bool
 
 
+def asking_price(row) -> int:
+    """Minimum untaxed price to buy this waifu. An unowned waifu sells for its
+    value; an owned one costs one multiplier-step more. Whatever the buyer pays
+    becomes the waifu's new value."""
+    if row["owner_id"] is None:
+        return row["value"]
+    return int(row["value"] * WAIFU_VALUE_MULTIPLIER)
+
+
 def purchase_cost(base_price: int, engaged: bool) -> tuple[int, int]:
     """Return (total cost, tax) without folding the engagement tax into value."""
     tax = int(base_price * WAIFU_ENGAGED_TAX_RATE) if engaged else 0
@@ -42,8 +51,9 @@ def purchase_cost(base_price: int, engaged: bool) -> tuple[int, int]:
 async def buy_waifu(pool, guild_id: int, buyer_id: int, target_id: int, amount: int | None) -> WaifuBuyResult:
     """Buy a user as a waifu. Raises UserError on validation failure.
 
-    If amount is None, uses the waifu's current value. Otherwise requires amount >= current value.
-    ``amount`` is the untaxed offer; an engaged target adds a 40% sink on top.
+    If amount is None, pays the asking price. Otherwise requires amount >= asking price.
+    ``amount`` is the untaxed offer and becomes the waifu's new value; an engaged
+    target adds a 40% sink on top.
     Returns WaifuBuyResult with engagement status.
     """
     async with pool.acquire() as conn:
@@ -55,17 +65,17 @@ async def buy_waifu(pool, guild_id: int, buyer_id: int, target_id: int, amount: 
             if target_row["spouse_id"] is not None:
                 raise UserError(f"This user is married and cannot be bought.")
 
-            current_value = target_row["value"]
-            base_price = amount if amount is not None else current_value
+            min_price = asking_price(target_row)
+            base_price = amount if amount is not None else min_price
 
-            if base_price < current_value:
-                raise UserError(f"This user is worth {current_value:,}. You must pay at least that much.")
+            if base_price < min_price:
+                raise UserError(f"This user costs at least {min_price:,}.")
             total_cost, tax = purchase_cost(base_price, target_row["engaged_since"] is not None)
             if buyer_bal["wallet"] < total_cost:
                 raise UserError(f"You don't have enough to pay {total_cost:,}.")
 
             prev_owner = target_row["owner_id"]
-            new_value = int(max(base_price, current_value) * WAIFU_VALUE_MULTIPLIER)
+            new_value = base_price
             await update_wallet(conn, guild_id, buyer_id, -total_cost)
             await add_transaction(conn, guild_id, buyer_id, -total_cost, "waifu_buy",
                                  f"Bought user {target_id} as waifu (base {base_price}, tax {tax})")
