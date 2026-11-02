@@ -599,40 +599,60 @@ class Economy(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def reseteconomy(self, ctx):
-        """Wipe all balances, stock relations and recreate stocks at their original IPO settings."""
+        """Wipe all player progress: balances, stocks, waifus, positions, bets, items and
+        cooldowns. Server setup (shop items, salary roles, wheel prizes, missions, enabled
+        real stocks) is kept, and stocks are recreated at their original IPO settings."""
         if not await confirm(
             ctx,
-            "⚠️ This will zero **all wallets and banks**, delete all transactions and stock relations, "
-            "and recreate every stock at 10,000 shares / original IPO price.",
+            "⚠️ This will reset **all player progress** in this server:\n"
+            "• zero all wallets and banks, delete all transactions and net-worth history\n"
+            "• recreate every stock at 10,000 shares / original IPO price\n"
+            "• delete all waifus, marriages and engagements\n"
+            "• delete all real-stock holdings, CFD and option positions\n"
+            "• delete all bets, predictions, poker stacks, inventories, mission contributions, "
+            "wheel spins, cooldowns and economy locks\n"
+            "Shop items, salary roles, wheel prizes, missions and enabled real stocks are kept.",
         ):
             return
 
+        guild_id = ctx.guild.id
         async with self.pool.acquire() as conn:
             companies = await conn.fetch(
                 "SELECT name, stock_channel_id, listed_by, base_ipo_price FROM companies WHERE guild_id = $1",
-                ctx.guild.id,
+                guild_id,
             )
             async with conn.transaction():
                 await conn.execute(
-                    "DELETE FROM transactions WHERE guild_id = $1",
-                    ctx.guild.id,
-                )
-                await conn.execute(
                     "UPDATE balances SET wallet = 0, bank = 0 WHERE guild_id = $1",
-                    ctx.guild.id,
+                    guild_id,
+                )
+                # Deleting companies cascades portfolios, orders, trade history,
+                # channel activity and revenue; bets/predictions/missions cascade
+                # their options and takes the same way.
+                for table in (
+                    "transactions", "net_worth_snapshots", "cooldowns", "wheel_spins",
+                    "companies", "company_financials",
+                    "waifus",
+                    "real_holdings", "real_trades", "cfd_positions", "option_positions",
+                    "bets", "predictions", "poker_escrow", "inventory",
+                ):
+                    await conn.execute(f"DELETE FROM {table} WHERE guild_id = $1", guild_id)
+                await conn.execute(
+                    "DELETE FROM mission_contributions WHERE guild_id = $1",
+                    guild_id,
                 )
                 await conn.execute(
-                    "DELETE FROM companies WHERE guild_id = $1",
-                    ctx.guild.id,
+                    "UPDATE missions SET funded = 0 WHERE guild_id = $1 AND status = 'active'",
+                    guild_id,
                 )
-                await conn.execute(
-                    "DELETE FROM locked_users WHERE guild_id = $1",
-                    ctx.guild.id,
+                unlocked = await conn.fetch(
+                    "DELETE FROM locked_users WHERE guild_id = $1 RETURNING user_id",
+                    guild_id,
                 )
                 for c in companies:
                     await create_company(
                         conn,
-                        guild_id=ctx.guild.id,
+                        guild_id=guild_id,
                         stock_channel_id=c["stock_channel_id"],
                         name=c["name"],
                         listed_by=c["listed_by"],
@@ -641,8 +661,15 @@ class Economy(commands.Cog):
                     )
                     await conn.execute(
                         "UPDATE companies SET revenue_multiplier = $3 WHERE guild_id = $1 AND stock_channel_id = $2",
-                        ctx.guild.id, c["stock_channel_id"], REVENUE_BASE_MULTIPLIER,
+                        guild_id, c["stock_channel_id"], REVENUE_BASE_MULTIPLIER,
                     )
+
+        for row in unlocked:
+            invalidate_lock(guild_id, row["user_id"])
+        waifu_cog = self.bot.get_cog("Waifu")
+        if waifu_cog is not None:
+            for key in [k for k in waifu_cog._proposals if k[0] == guild_id]:
+                del waifu_cog._proposals[key]
 
         embed = discord.Embed(
             title="Economy Reset",
@@ -650,7 +677,9 @@ class Economy(commands.Cog):
             description=(
                 f"All wallets, banks, and transaction history cleared.\n"
                 f"{len(companies)} stock(s) recreated at 10,000 shares / original IPO price.\n"
-                "All portfolios, orders, and trade history cleared."
+                "All portfolios, orders, and trade history cleared.\n"
+                "All waifus, real-stock holdings, CFD/option positions, bets, predictions, "
+                "poker stacks, inventories, mission contributions, wheel spins and cooldowns cleared."
             ),
         )
         await ctx.send(embed=embed)
