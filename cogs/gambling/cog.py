@@ -13,7 +13,7 @@ from core.checks import require_channel, invalidate, UserLocked, user_is_locked,
 from core.money import parse_amount, AmountError
 from core.names import format_name
 from core.resilience import send_resilient, refund_and_release
-from config import PREFIX
+from config import PREFIX, WAIFU_BEG_VIP_IDS
 from . import cards, coins, wheel, board, poker as poker_game
 
 
@@ -51,6 +51,22 @@ def _result_meta(net):
     return "Push", discord.Color.dark_gray()
 
 
+async def _vip_peek(user, game):
+    """VIP perk: DM the next card on the shoe. No-op for non-VIPs, so nothing is ever
+    visible to anyone else. Silently skipped if the VIP's DMs are closed."""
+    if user.id not in WAIFU_BEG_VIP_IDS:
+        return
+    deck = game["deck"]
+    if deck:
+        msg = f"🔮 Next card: **{deck[-1][0]}{deck[-1][1]}**"
+    else:
+        msg = "🔮 The shoe is empty — it will reshuffle on the next draw."
+    try:
+        await user.send(msg)
+    except discord.HTTPException:
+        pass
+
+
 class BlackjackView(discord.ui.View):
     """Button-driven controls for a single blackjack game.
 
@@ -85,6 +101,7 @@ class BlackjackView(discord.ui.View):
         await self._sync_buttons(game)
         file, embed = await self.cog.build_state(game, title=title, color=color, hide_dealer=True)
         await interaction.response.edit_message(attachments=[file], embed=embed, view=self)
+        await _vip_peek(interaction.user, game)
 
     async def _finish(self, interaction, game, net):
         title, color = _result_meta(net)
@@ -251,6 +268,8 @@ class PlayAgainView(discord.ui.View):
         except discord.HTTPException:
             await refund_and_release(self.cog.pool, guild_id, self.player_id, self.bet, self.cog.games, self.key)
             await self._notify_rebet_failed(interaction)
+            return
+        await _vip_peek(interaction.user, game)
 
     @staticmethod
     async def _notify_rebet_failed(interaction: discord.Interaction):
@@ -888,6 +907,7 @@ class Gambling(commands.Cog):
         file, embed = await self.build_state(game, title="Game Started", color=discord.Color.blue(), hide_dealer=True)
         try:
             view.message = await send_resilient(lambda: ctx.send(embed=embed, file=file, view=view), files=[file])
+            await _vip_peek(ctx.author, game)
         except discord.HTTPException:
             await refund_and_release(self.pool, ctx.guild.id, ctx.author.id, bet, self.games, key)
             try:
